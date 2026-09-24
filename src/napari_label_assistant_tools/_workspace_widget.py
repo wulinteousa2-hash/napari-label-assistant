@@ -25,6 +25,8 @@ SETTINGS_APP = "label-assistant"
 RECENT_WORKSPACES_KEY = "workspace/recent_manifests"
 LAST_WORKSPACE_KEY = "workspace/last_manifest"
 RECENT_LIMIT = 10
+VIEWER_WORKSPACE_PATH_ATTR = "_label_assistant_workspace_path"
+VIEWER_WORKSPACE_LAYER_IDS_ATTR = "_label_assistant_workspace_layer_ids"
 
 
 class WorkspaceManagerWidget(QWidget):
@@ -43,7 +45,24 @@ class WorkspaceManagerWidget(QWidget):
         last = str(
             self.settings.value(LAST_WORKSPACE_KEY, "", type=str) or ""
         ).strip()
-        self.workspace_path: Path | None = Path(last).expanduser() if last else None
+        self._last_workspace_path = Path(last).expanduser() if last else None
+        active_path = str(
+            getattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, "") or ""
+        ).strip()
+        active_layer_ids = set(
+            getattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, ()) or ()
+        )
+        current_layer_ids = {
+            id(layer) for layer in list(getattr(self.viewer, "layers", ()))
+        }
+        if active_path and active_layer_ids.intersection(current_layer_ids):
+            self.workspace_path: Path | None = Path(active_path).expanduser()
+            self._project_layer_ids = active_layer_ids
+        else:
+            # The most recently used path is only a file-dialog convenience.
+            # It must never make unrelated viewer contents eligible for Save.
+            self.workspace_path = None
+            self._project_layer_ids: set[int] = set()
 
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
@@ -116,6 +135,14 @@ class WorkspaceManagerWidget(QWidget):
         layout.addWidget(self.status_label)
         self.setLayout(layout)
 
+        removed = getattr(
+            getattr(getattr(self.viewer, "layers", None), "events", None),
+            "removed",
+            None,
+        )
+        if removed is not None:
+            removed.connect(self._on_layer_removed)
+
         self._refresh_current_label()
         self._refresh_recent_list()
 
@@ -136,13 +163,13 @@ class WorkspaceManagerWidget(QWidget):
         ):
             return
         self.viewer.layers.clear()
-        self.workspace_path = None
-        self.settings.remove(LAST_WORKSPACE_KEY)
+        self._disassociate_workspace()
         self._refresh_current_label()
         self._set_status("Started a new empty Label Assistant project.")
 
     def open_workspace(self) -> None:
-        initial = str(self.workspace_path.parent) if self.workspace_path else ""
+        reference = self.workspace_path or self._last_workspace_path
+        initial = str(reference.parent) if reference else ""
         chosen, _ = QFileDialog.getOpenFileName(
             self,
             "Open Label Assistant Project",
@@ -166,6 +193,15 @@ class WorkspaceManagerWidget(QWidget):
         if self.workspace_path is None:
             self.save_as()
             return
+        if self._project_layer_ids and not self._has_project_layer():
+            self._disassociate_workspace()
+            self._refresh_current_label()
+            self._set_status(
+                "The original project layers are no longer open. Choose a "
+                "new project name to avoid overwriting the previous project."
+            )
+            self.save_as()
+            return
         self._save_path(self.workspace_path)
 
     def save_as(self) -> None:
@@ -174,6 +210,7 @@ class WorkspaceManagerWidget(QWidget):
             return
         initial = str(
             self.workspace_path
+            or self._last_workspace_path
             or Path.cwd() / "project.label-assistant.json"
         )
         chosen, _ = QFileDialog.getSaveFileName(
@@ -293,8 +330,7 @@ class WorkspaceManagerWidget(QWidget):
             dialog.close()
             dialog.deleteLater()
 
-        self.workspace_path = path.expanduser()
-        self._remember(self.workspace_path)
+        self._associate_workspace(path)
         self._refresh_current_label()
         self._refresh_recent_list()
         prefix = (
@@ -322,8 +358,7 @@ class WorkspaceManagerWidget(QWidget):
             self._set_status(str(exc))
             return
         if completed_path is not None:
-            self.workspace_path = completed_path.expanduser()
-            self._remember(self.workspace_path)
+            self._associate_workspace(completed_path)
             self._refresh_current_label()
             self._refresh_recent_list()
         self._set_status(success(result))
@@ -348,6 +383,51 @@ class WorkspaceManagerWidget(QWidget):
             if not bool(getattr(controller, "closed", False))
         )
 
+    def _associate_workspace(self, path: Path) -> None:
+        self.workspace_path = path.expanduser()
+        self._project_layer_ids = {
+            id(layer) for layer in list(getattr(self.viewer, "layers", ()))
+        }
+        setattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, str(self.workspace_path))
+        setattr(
+            self.viewer,
+            VIEWER_WORKSPACE_LAYER_IDS_ATTR,
+            set(self._project_layer_ids),
+        )
+        self._remember(self.workspace_path)
+
+    def _disassociate_workspace(self) -> None:
+        self.workspace_path = None
+        self._project_layer_ids = set()
+        setattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, "")
+        setattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, set())
+
+    def _has_project_layer(self) -> bool:
+        return any(
+            id(layer) in self._project_layer_ids
+            for layer in list(getattr(self.viewer, "layers", ()))
+        )
+
+    def _on_layer_removed(self, _event=None) -> None:
+        if (
+            self.workspace_path is None
+            or not self._project_layer_ids
+            or bool(
+                getattr(
+                    self.viewer, "_label_assistant_workspace_loading", False
+                )
+            )
+            or self._has_project_layer()
+        ):
+            return
+        previous = self.workspace_path
+        self._disassociate_workspace()
+        self._refresh_current_label()
+        self._set_status(
+            f"Project layers from {previous} were removed. The current viewer "
+            "is now an unsaved project; Save will ask for a new name."
+        )
+
     def _recent_paths(self) -> list[str]:
         value = self.settings.value(RECENT_WORKSPACES_KEY, [])
         if isinstance(value, str):
@@ -356,6 +436,7 @@ class WorkspaceManagerWidget(QWidget):
 
     def _remember(self, path: Path) -> None:
         normalized = str(path.expanduser().resolve())
+        self._last_workspace_path = Path(normalized)
         recent = [item for item in self._recent_paths() if item != normalized]
         recent.insert(0, normalized)
         self.settings.setValue(RECENT_WORKSPACES_KEY, recent[:RECENT_LIMIT])

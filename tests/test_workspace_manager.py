@@ -124,6 +124,23 @@ def test_save_commits_pending_local_edits_before_serializing(tmp_path):
     assert int(layer.data[2, 3]) == 7
 
 
+def test_repeated_save_keeps_previous_manifest_backup(tmp_path):
+    pytest.importorskip("zarr")
+    layer = Labels(np.zeros((8, 8), dtype=np.uint8), "first name")
+    viewer = FakeViewer([layer])
+    path = tmp_path / "case.label-assistant.json"
+
+    save_workspace(viewer, path)
+    layer.name = "second name"
+    save_workspace(viewer, path)
+
+    backup = tmp_path / "case.label-assistant.backup.json"
+    previous = json.loads(backup.read_text(encoding="utf-8"))
+    current = json.loads(path.read_text(encoding="utf-8"))
+    assert previous["layers"][0]["name"] == "first name"
+    assert current["layers"][0]["name"] == "second name"
+
+
 def test_reads_existing_sam3_workspace_for_migration(tmp_path):
     path = tmp_path / "legacy.sam3.json"
     path.write_text(

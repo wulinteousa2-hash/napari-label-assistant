@@ -723,34 +723,51 @@ def _get_or_create_points_layer(
     anchor: str = "center",
 ) -> napari.layers.Points:
     """Create or overwrite a Points layer with feature-driven text."""
+    text = {
+        "string": f"{{{text_field}}}",
+        "size": float(text_size),
+        "color": str(text_color),
+        "anchor": str(anchor),
+    }
     if name in viewer.layers:
         layer = viewer.layers[name]
         if not isinstance(layer, napari.layers.Points):
             raise TypeError(
                 f"Layer name '{name}' exists but is not a Points layer."
             )
-        # Updating data emits a draw before the corresponding feature/text
-        # values are replaced. When the visible label count grows, that brief
-        # mismatch can make Points text index past the old feature array.
-        # Block layer events until both arrays have matching lengths.
-        with layer.events.blocker_all():
+        # A viewport change can alter the number of visible grid addresses.
+        # Keep both layer and TextManager events quiet until data, features,
+        # and encoded text all have the same length. Otherwise Vispy may draw
+        # new point indices against the previous text array for one frame.
+        layer.visible = False
+        with layer.events.blocker_all(), layer.text.events.blocker_all():
             layer.data = points
             layer.features = features
-        layer.visible = True
+            layer.text = text
+            with suppress(AttributeError):
+                layer.text.scaling = bool(text_scale_with_zoom)
     else:
-        layer = viewer.add_points(points, name=name, size=0, features=features)
-
-    layer.text = {
-        "string": f"{{{text_field}}}",
-        "size": float(text_size),
-        "color": str(text_color),
-        "anchor": str(anchor),
-    }
-    with suppress(AttributeError):
-        layer.text.scaling = bool(text_scale_with_zoom)
+        # Supplying text at construction avoids an initial frame with points
+        # present but their feature-driven text encoding not yet installed.
+        layer = viewer.add_points(
+            points,
+            name=name,
+            size=0,
+            features=features,
+            text=text,
+        )
+        with suppress(AttributeError):
+            layer.text.scaling = bool(text_scale_with_zoom)
     with suppress(AttributeError):
         layer.editable = False
+    # ``refresh`` deliberately skips slicing while a layer is hidden. Update
+    # the view indices explicitly before notifying the text renderer.
+    layer.set_view_slice()
+    # Emit one text update only after the point indices and encoded strings
+    # are consistent. The layer stays hidden until Vispy receives it.
+    layer.refresh_text()
     layer.refresh()
+    layer.visible = True
     return layer
 
 
@@ -1599,7 +1616,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
         " color: #5f3b00;"
         " border: 1px solid #f59f00;"
         " border-radius: 4px;"
-        " padding: 4px 6px;"
+        " padding: 4px;"
         " font-weight: 600;"
         "}"
     )
@@ -1813,7 +1830,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
         dynamic_edit_status.setText(message)
         dynamic_edit_status.setStyleSheet(
             f"QLabel {{ background: {background}; color: {foreground}; "
-            "border-radius: 3px; padding: 4px 6px; }}"
+            "border-radius: 3px; padding: 4px; }"
         )
 
     def _grid_layer_names(layer) -> tuple[str, str]:

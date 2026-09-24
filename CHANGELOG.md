@@ -3,6 +3,24 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-09-24
+
+### Changed
+
+- A recent project path is now used only as a file-dialog location; unrelated
+  viewer contents no longer inherit it as their active Save destination.
+- Removing every layer associated with an open project now changes the viewer
+  to an unsaved project, so the next Save requests a new filename.
+- Every manifest overwrite now preserves the immediately previous manifest as
+  a recoverable `.backup.json` file.
+
+### Fixed
+
+- Prevented adaptive grid-address redraws from briefly pairing new point
+  indices with stale text values during pan and zoom.
+- Corrected a malformed editing-status stylesheet that produced harmless Qt
+  stylesheet-parser warnings in the backend.
+
 ## [1.0.1] - 2026-09-24
 
 ### Major changes

@@ -807,6 +807,11 @@ def _as_sequence(value: Any) -> tuple[Any, ...]:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    if path.exists():
+        backup = path.with_name(f"{path.stem}.backup{path.suffix}")
+        backup_temporary = backup.with_name(f".{backup.name}.tmp")
+        shutil.copy2(path, backup_temporary)
+        os.replace(backup_temporary, backup)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(temporary, path)

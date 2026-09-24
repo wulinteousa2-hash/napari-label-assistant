@@ -50,6 +50,7 @@ def test_grid_label_points_and_text_resize_atomically(
     make_napari_viewer, qapp
 ):
     viewer = make_napari_viewer()
+    text_refresh_visibility = []
 
     for count in (2, 60, 5, 90):
         points = np.column_stack(
@@ -64,7 +65,16 @@ def test_grid_label_points_and_text_resize_atomically(
             text_size=9.0,
             text_scale_with_zoom=False,
         )
+        if not text_refresh_visibility:
+            layer.text.events.connect(
+                lambda _event: text_refresh_visibility.append(layer.visible)
+            )
         qapp.processEvents()
         assert len(layer.data) == count
         assert len(layer.features) == count
         assert len(layer._view_text) == count
+
+    # Every renderer-facing text refresh during a resize happens while the
+    # layer is hidden, so Vispy cannot draw new indices against old strings.
+    assert text_refresh_visibility
+    assert not any(text_refresh_visibility)

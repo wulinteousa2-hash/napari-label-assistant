@@ -11,17 +11,17 @@ in the same source coordinate system and uses reproducible addresses such as
 segmented regions. The annotator can return to that exact cell, correct the
 mask, and submit it for re-review.
 
-## Version 1.0.1 highlights
+## Version 1.0.2 highlights
 
-- A standalone **Project** tab saves and restores annotation projects,
-  writable masks, grid registration, and viewer state without SAM3 Assistant.
-- Layer selectors update automatically when napari layers are opened, added,
-  removed, reordered, or renamed.
-- The interface now follows the working sequence **Project → Labels → Visual
-  Compare → Mask Tools**, with separate **Annotate** and **Grid & Components**
-  views inside Labels.
-- Local tile synchronization is called **Apply edits**, clearly separating it
-  from durable project **Save**.
+- Project Save no longer reuses a recent project's filename for unrelated
+  viewer contents, and removing all project layers returns the viewer to an
+  explicit unsaved state.
+- Before replacing a project manifest, Save retains its previous version as a
+  recoverable `.backup.json` file.
+- Grid-address labels now update atomically while panning and zooming, avoiding
+  transient point/text indexing errors in napari's renderer.
+- Editing-status styles no longer produce harmless Qt parser warnings in the
+  backend.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 

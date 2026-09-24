@@ -1,7 +1,41 @@
 import numpy as np
-from qtpy.QtWidgets import QPushButton
+from qtpy.QtCore import qInstallMessageHandler
+from qtpy.QtWidgets import QLabel, QPushButton
 
 from napari_label_assistant_tools import label_assistant_widget
+
+
+def test_label_assistant_stylesheets_parse_without_qt_warnings(
+    make_napari_viewer, qapp
+):
+    messages = []
+
+    def _message_handler(_message_type, _context, message):
+        messages.append(str(message))
+
+    previous_handler = qInstallMessageHandler(_message_handler)
+    try:
+        viewer = make_napari_viewer()
+        viewer.add_labels(
+            np.zeros((32, 32), dtype=np.uint8), name="mask"
+        )
+        widget = label_assistant_widget(viewer)
+        widget.show()
+        qapp.processEvents()
+    finally:
+        qInstallMessageHandler(previous_handler)
+
+    parse_messages = [
+        message
+        for message in messages
+        if "Could not parse stylesheet" in message
+    ]
+    label_styles = [
+        (repr(label), label.text(), label.styleSheet())
+        for label in widget.findChildren(QLabel)
+        if label.styleSheet()
+    ]
+    assert not parse_messages, label_styles
 
 
 def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
