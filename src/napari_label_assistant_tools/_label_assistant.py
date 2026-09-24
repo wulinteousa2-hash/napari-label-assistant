@@ -31,10 +31,10 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     layout = QVBoxLayout(page)
     layout.addWidget(
         _intro(
-            "Edit and review 2D Labels layers at 100,000 × 100,000-pixel "
-            "scale without cropping. Use memory-controlled Paint and Erase, "
-            "connected-component measurements, Euler topology, and grid "
-            "references across the full mask."
+            "Grid-addressed labeling and QC at 100,000 × 100,000-pixel scale "
+            "without cropping. Register locations across the full mask, edit "
+            "labels in a memory-controlled local area, and trace component "
+            "measurements, Euler topology, and reviewer findings by grid address."
         )
     )
     tools = QTabWidget()

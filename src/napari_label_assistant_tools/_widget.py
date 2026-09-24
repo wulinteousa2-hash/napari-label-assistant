@@ -1339,13 +1339,13 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     layout.addLayout(source_form)
 
     form = QFormLayout()
-    assign_grid_check = QCheckBox("Add grid coordinates to results")
+    assign_grid_check = QCheckBox("Assign grid addresses to results")
     assign_grid_check.setChecked(False)
     assign_grid_check.setToolTip(
-        "Add grid row, grid column, and grid ID measurements based on each "
-        "component centroid."
+        "Register each component with the grid row, column, and cell address "
+        "containing its centroid."
     )
-    display_grid_check = QCheckBox("Show grid on canvas")
+    display_grid_check = QCheckBox("Show address grid on canvas")
     display_grid_check.setChecked(False)
     display_grid_check.setToolTip(
         "Draw grid lines and readable cell IDs on the canvas. IDs adapt to "
@@ -1427,12 +1427,12 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     edit_form.addRow("Status", dynamic_edit_status)
     layout.addWidget(edit_group)
 
-    analysis_group = QGroupBox("Components and grid review")
+    analysis_group = QGroupBox("Grid registration and component QC")
     analysis_layout = QVBoxLayout(analysis_group)
     analysis_note = QLabel(
-        "Find and measure connected regions within each nonzero label value. "
-        "Use reproducible grid cells to revisit locations, then select results "
-        "in the table or on the canvas to delete or copy them."
+        "Register full-mask locations with reproducible grid addresses. Find "
+        "connected components, trace reviewer findings to exact cells, and "
+        "select results in the table or canvas to revisit, delete, or copy them."
     )
     analysis_note.setWordWrap(True)
     analysis_layout.addWidget(analysis_note)

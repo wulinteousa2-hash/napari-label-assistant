@@ -1,29 +1,37 @@
 # napari-label-assistant
 
-**Edit, navigate, and review 2D Labels layers at 100,000 × 100,000-pixel
-scale—without cropping the source dataset.**
+**Grid-addressed labeling and quality control for 2D Labels layers at
+100,000 × 100,000-pixel scale—without cropping the source dataset.**
 
-napari-label-assistant is a memory-controlled annotation and quality-review
-plugin for napari. It preserves the full image and Labels layer in their
-original coordinate system while presenting a bounded local area for
-responsive manual editing. Users can move continuously across the dataset,
-create or correct labels, and save changes back to the original layer.
+napari-label-assistant places a reproducible 2D registration grid over the full
+mask. Every grid cell has an address such as **R12C08**, giving annotators and
+reviewers a shared reference for masking, feedback, correction, and QC
+trace-back. Component measurements remain linked to the full-resolution
+coordinate system and can be assigned to grid addresses by centroid.
+
+Memory-controlled local editing supports this registered workflow without
+creating cropped working files. Users can move across the dataset, create or
+correct labels, and save changed regions back to the original Labels layer.
 
 ## What it enables
 
+- Register every part of the mask with reproducible grid row, column, and cell
+  addresses anchored to the full source coordinate system.
+- Give reviewers a stable address for reporting a missing label, locating a
+  questionable component, revisiting a correction, and discussing QC findings.
+- Display grid addresses around the current viewport while retaining the same
+  registration across pan and zoom.
 - Create and extend labels with napari Paint, Fill, and Polygon tools.
 - Remove or reshape labels with Erase while loading only a bounded working area.
 - Save completed strokes automatically or keep changes pending until
   **Save now** is selected.
 - Detect connected components independently within each nonzero label value.
 - Sort components by label value, pixel count, Euler number, centroid, bounds,
-  or optional grid location.
+  or grid address.
 - Use Euler number to review component topology: `1` indicates no holes, `0`
   indicates one hole, and `-1` indicates two holes.
 - Locate components on the canvas, build multi-component selections, delete
   selected regions, or copy them to a compatible Labels layer.
-- Assign reproducible grid row, column, and cell references for spatial review
-  and communication across the full mask.
 - Compare image and Labels layers, reassign values, combine layers, and create
   vote-count or consensus results.
 
@@ -71,27 +79,29 @@ The results table reports component ID, source label, pixel count, Euler
 number, centroid, and bounds. Optional grid columns report the grid row,
 column, and cell containing each component centroid.
 
-### Grid-based review and spatial traceability
+### Grid registration and QC traceability
 
-The optional grid gives reviewers a reproducible address for every part of a
-full 2D mask. With the same cell height, cell width, and source coordinate
-system, a reference such as **R12C08** identifies the same location across
-review sessions and between collaborators.
+The registration grid gives reviewers a reproducible address for every part of
+a full 2D mask. With the same cell height, cell width, grid origin, and source
+coordinate system, a reference such as **R12C08** identifies the same location
+across masking, review, correction, and follow-up QC sessions—even between
+collaborators.
 
-- Enable **Add grid coordinates to results** to assign each component a grid
-  row, column, and cell from its centroid.
-- Enable **Show grid on canvas** to see cell boundaries and identifiers around
-  the current viewport.
-- Use a grid cell together with a component ID—for example, “R12C08,
-  component 431”—to identify a region that needs correction.
-- Use the cell reference alone to report an unlabeled area where a component
-  is missing and therefore cannot appear in the results table.
+- Enable **Assign grid addresses to results** to register each component by the
+  grid row, column, and cell containing its centroid.
+- Enable **Show address grid on canvas** to see cell boundaries and identifiers
+  around the current viewport.
+- Use a grid address together with a component ID—for example, “R12C08,
+  component 431”—to identify a labeled region that needs correction.
+- Use the grid address alone to register an unlabeled location where a
+  component is missing and therefore cannot appear in the results table.
 
-Grid references make review discussions traceable without creating cropped
-copies of the source. Reuse the same grid dimensions when a reference must
-remain stable. The current 1.0 grid is a spatial registration system; it does
-not store reviewer comments, assignments, completion states, or a
-change-history audit log.
+Grid addresses make reviewer findings and corrections traceable without
+creating cropped copies of the source. Reuse the same grid dimensions, origin,
+and source coordinate system when addresses must remain stable. The current
+1.0 grid is a spatial registration and reference system; it does not store
+reviewer comments, assignments, completion states, or a change-history audit
+log.
 
 ### Visual Compare
 
