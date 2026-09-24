@@ -1,0 +1,25 @@
+name: napari-label-assistant
+display_name: napari-label-assistant
+visibility: public
+
+contributions:
+  commands:
+    - id: napari-label-assistant.label_assistant
+      title: "Label Assistant"
+      python_name: napari_label_assistant_tools._label_assistant:label_assistant_widget
+
+  widgets:
+    - command: napari-label-assistant.label_assistant
+      display_name: "Label Assistant"
+
+  submenus:
+    - id: napari-label-assistant.main
+      label: "napari-label-assistant"
+
+  menus:
+    napari/plugins:
+      - submenu: napari-label-assistant.main
+        when: "True"
+    napari-label-assistant.main:
+      - command: napari-label-assistant.label_assistant
+        when: "True"
