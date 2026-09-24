@@ -1,7 +1,16 @@
 [project]
 name = "napari-label-assistant"
 version = "1.0.0"
-description = "Large-scale editing, navigation, and review for napari Labels layers"
+description = "Grid-addressed labeling and quality control for 2D masks at 100,000 × 100,000-pixel scale"
+keywords = [
+    "napari",
+    "image segmentation",
+    "labels",
+    "annotation",
+    "quality control",
+    "grid registration",
+    "large images",
+]
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "Wulin Teo"}]
