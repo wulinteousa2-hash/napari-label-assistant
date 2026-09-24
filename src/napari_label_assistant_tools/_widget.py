@@ -1367,15 +1367,15 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     form.addRow("Cell height (px)", grid_y_spin)
     form.addRow("Cell width (px)", grid_x_spin)
 
-    edit_group = QGroupBox("Large-label editing")
+    edit_group = QGroupBox("Memory-controlled editing")
     edit_form = QFormLayout(edit_group)
     editing_strategy_combo = QComboBox()
     editing_strategy_combo.addItem("Automatic (recommended)", "auto")
     editing_strategy_combo.addItem("Local-area editing", "tiled")
     editing_strategy_combo.addItem("Full-layer editing", "direct")
     editing_strategy_combo.setToolTip(
-        "Automatic uses a bounded in-memory editable area for very large 2D "
-        "Labels layers and standard napari editing for ordinary layers."
+        "Automatic uses a bounded in-memory editable area when a full editing "
+        "copy would be costly, and standard napari editing otherwise."
     )
     edit_tile_size_combo = QComboBox()
     edit_tile_size_combo.addItem(

@@ -1,23 +1,43 @@
 # napari-label-assistant
 
-Edit, navigate, and review very large napari Labels layers without cropping.
+**Edit, navigate, and review 2D Labels layers at 100,000 × 100,000-pixel
+scale—without cropping the source dataset.**
 
-napari-label-assistant is designed for label masks that range from ordinary
-images to extremely large 2D datasets. It lets you paint and erase a responsive
-local area while preserving the full-size source layer—no manual cropping,
-editing separate files, or stitching results back together.
+napari-label-assistant is a memory-controlled annotation and quality-review
+plugin for napari. It preserves the full image and Labels layer in their
+original coordinate system while presenting a bounded local area for
+responsive manual editing. Users can move continuously across the dataset,
+create or correct labels, and save changes back to the original layer.
 
-## Highlights
+## What it enables
 
-- Edit very large Labels layers through a bounded-memory local area.
-- Continue using napari's familiar Paint, Erase, Fill, and Polygon tools.
-- Save each completed stroke automatically or control saving manually.
-- Analyze connected components independently within every nonzero label value.
-- Sort results, locate components on the canvas, and select one or many regions.
-- Delete selected components or copy them between compatible Labels layers.
-- Add optional grid row, column, and cell identifiers from component centroids.
-- Review an image/Labels pair without losing the active editing layer.
-- Relabel, merge, compose, and calculate agreement across Labels layers.
+- Create and extend labels with napari Paint, Fill, and Polygon tools.
+- Remove or reshape labels with Erase while loading only a bounded working area.
+- Save completed strokes automatically or keep changes pending until
+  **Save now** is selected.
+- Detect connected components independently within each nonzero label value.
+- Sort components by label value, pixel count, Euler number, centroid, bounds,
+  or optional grid location.
+- Use Euler number to review component topology: `1` indicates no holes, `0`
+  indicates one hole, and `-1` indicates two holes.
+- Locate components on the canvas, build multi-component selections, delete
+  selected regions, or copy them to a compatible Labels layer.
+- Assign reproducible grid row, column, and cell references for spatial review
+  and communication across the full mask.
+- Compare image and Labels layers, reassign values, combine layers, and create
+  vote-count or consensus results.
+
+## 100,000 × 100,000-pixel workflows
+
+A 100,000 × 100,000 label mask contains 10 billion pixels. Local-area editing
+avoids creating another full-size editable copy: only a camera-centered region
+is loaded for interaction, and only changed pixels are written back.
+
+At this scale, the source should use an efficiently sliceable, preferably
+chunked or on-disk array such as Zarr. Actual responsiveness depends on array
+storage, chunk geometry, data type, disk performance, available memory, and
+hardware. The numeric scale describes the intended workflow, not an
+unconditional hardware-independent limit.
 
 ## Interface
 
@@ -27,8 +47,8 @@ The dock widget follows three common tasks:
 
 Choose one Labels layer, edit it, and inspect its connected components.
 
-**Large-label editing** appears first because it controls how napari accesses
-the selected layer:
+**Memory-controlled editing** appears first because it controls how napari
+accesses the selected layer:
 
 - **Automatic (recommended)** uses standard full-layer editing for ordinary
   arrays and local-area editing when the layer is large relative to available
@@ -54,7 +74,7 @@ column, and cell containing each component centroid.
 ### Grid-based review and spatial traceability
 
 The optional grid gives reviewers a reproducible address for every part of a
-large 2D mask. With the same cell height, cell width, and source coordinate
+full 2D mask. With the same cell height, cell width, and source coordinate
 system, a reference such as **R12C08** identifies the same location across
 review sessions and between collaborators.
 
@@ -70,9 +90,9 @@ review sessions and between collaborators.
 Grid references make review discussions traceable without creating cropped
 copies of the source. Reuse the same grid dimensions when a reference must
 remain stable. The current 1.0 grid is a spatial registration system; it does
-not store reviewer comments, assignments, completion states, or a change-history
+not store reviewer comments, assignments, completion states, or a
+change-history audit log.
 
-audit log.
 ### Visual Compare
 
 Compare an image with a Labels layer while keeping the Labels layer active for
@@ -89,7 +109,7 @@ Perform label-level operations across one or more compatible layers:
 - create a per-pixel vote-count map;
 - create a consensus map from a minimum vote threshold.
 
-## Editing very large Labels layers
+## Editing at 100,000 × 100,000-pixel scale
 
 Local-area editing keeps only a camera-centered working region editable in
 memory. Pan or zoom to another location and the working region follows
@@ -119,9 +139,9 @@ mode.
 Tile size controls the memory/performance tradeoff. A 2048 × 2048 area uses
 less memory; a 4096 × 4096 area requires fewer reloads while navigating.
 
-## Large component analysis
+## Component analysis at full-image scale
 
-Large masks are analyzed in tiles and displayed as paged results so the table
+Full-resolution masks are analyzed in tiles and displayed as paged results so the table
 does not need to create a row for every component at once. Analysis can be
 cancelled from the progress control. Component IDs and optional grid
 coordinates remain expressed in the full source-layer coordinate system.
@@ -145,7 +165,6 @@ Install the released package:
 ```bash
 python -m pip install napari-label-assistant
 ```
-
 
 When upgrading from the pre-1.0 development package, remove its old plugin
 registration before installing 1.0:

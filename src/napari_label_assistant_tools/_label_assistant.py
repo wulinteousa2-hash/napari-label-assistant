@@ -31,10 +31,10 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     layout = QVBoxLayout(page)
     layout.addWidget(
         _intro(
-            "Edit and review Labels layers—including very large masks—without "
-            "cropping. Paint and erase in a responsive local area, then find, "
-            "sort, delete, or copy connected components. Use grid references "
-            "to revisit and discuss locations across the full mask."
+            "Edit and review 2D Labels layers at 100,000 × 100,000-pixel "
+            "scale without cropping. Use memory-controlled Paint and Erase, "
+            "connected-component measurements, Euler topology, and grid "
+            "references across the full mask."
         )
     )
     tools = QTabWidget()
