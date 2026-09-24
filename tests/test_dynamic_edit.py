@@ -105,7 +105,7 @@ def test_tiled_paint_data_writes_back_and_helpers_stay_internal(
     assert len(local_updates) == 1
     assert tuple(local_updates[0].offset) == (6, 10)
     assert tuple(local_updates[0].data.shape[:2]) == (1, 1)
-    assert "Saved to source layer" in widget._dynamic_edit_status.text()
+    assert "Applied to source layer" in widget._dynamic_edit_status.text()
     assert "local preview" in widget._dynamic_edit_status.text()
 
     assert widget._auto_save_edit_check.isChecked()
@@ -120,7 +120,7 @@ def test_tiled_paint_data_writes_back_and_helpers_stay_internal(
         lambda: int(source.data[7, 13]) == 4 and not controller.dirty,
         timeout=3000,
     )
-    assert "Saved to source layer" in widget._dynamic_edit_status.text()
+    assert "Applied to source layer" in widget._dynamic_edit_status.text()
     widget._auto_save_edit_check.setChecked(True)
 
     controller.tile.mode = "paint"

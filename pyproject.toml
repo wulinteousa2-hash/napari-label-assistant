@@ -1,6 +1,6 @@
 [project]
 name = "napari-label-assistant"
-version = "1.0.0"
+version = "1.0.1"
 description = "Responsive annotation of 100,000 × 100,000-pixel images with traceable grid-based mask review"
 keywords = [
     "napari",
@@ -29,6 +29,7 @@ dependencies = [
     "qtpy",
     "scikit-image",
     "scipy",
+    "zarr>=2.18",
 ]
 
 [project.optional-dependencies]

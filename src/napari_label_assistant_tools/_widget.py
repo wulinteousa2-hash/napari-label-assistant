@@ -29,6 +29,7 @@ from qtpy.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -39,6 +40,7 @@ from ._grid_map import build_visible_grid_label_layout
 from ._dynamic_edit import (
     DEFAULT_TILE_SIZE,
     DynamicLabelsEditController,
+    INTERNAL_LAYER_ROLE_KEY,
     is_internal_layer,
 )
 from ._large_component_controller import LargeComponentController
@@ -52,6 +54,62 @@ from ._large_components import (
 
 _PANEL_MIN_WIDTH = 420
 _PANEL_MAX_WIDTH = 520
+
+
+def _auto_refresh_layer_controls(viewer, parent, refresh):
+    """Debounce layer-list changes and keep selector widgets synchronized."""
+    timer = QTimer(parent)
+    timer.setSingleShot(True)
+    timer.setInterval(50)
+    collection_emitters = []
+    observed_layers = []
+
+    def _schedule(*_args) -> None:
+        if not timer.isActive():
+            timer.start()
+
+    def _sync_name_events() -> None:
+        current_layers = list(viewer.layers)
+        for layer in list(observed_layers):
+            if not any(candidate is layer for candidate in current_layers):
+                with suppress(Exception):
+                    layer.events.name.disconnect(_schedule)
+                observed_layers.remove(layer)
+        for layer in current_layers:
+            if any(candidate is layer for candidate in observed_layers):
+                continue
+            with suppress(Exception):
+                layer.events.name.connect(_schedule)
+                observed_layers.append(layer)
+
+    def _run_refresh() -> None:
+        if bool(
+            getattr(viewer, "_label_assistant_workspace_loading", False)
+        ):
+            timer.start()
+            return
+        _sync_name_events()
+        refresh()
+
+    def _cleanup(*_args) -> None:
+        timer.stop()
+        for emitter in collection_emitters:
+            with suppress(Exception):
+                emitter.disconnect(_schedule)
+        for layer in list(observed_layers):
+            with suppress(Exception):
+                layer.events.name.disconnect(_schedule)
+        observed_layers.clear()
+
+    timer.timeout.connect(_run_refresh)
+    for event_name in ("inserted", "removed", "reordered"):
+        emitter = getattr(viewer.layers.events, event_name, None)
+        if emitter is not None:
+            emitter.connect(_schedule)
+            collection_emitters.append(emitter)
+    _sync_name_events()
+    parent.destroyed.connect(_cleanup)
+    return timer
 
 
 @dataclass
@@ -988,6 +1046,9 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
     container._layer_list = layer_list
     container._merge_value_spin = merge_value_spin
     container._apply_button = btn_apply
+    container._layer_refresh_timer = _auto_refresh_layer_controls(
+        viewer, container, _refresh_layers
+    )
 
     _refresh_layers()
     return container
@@ -1316,6 +1377,9 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     btn_blink_mask.clicked.connect(lambda: _run_safely(_blink_mask))
     btn_peek_mask.clicked.connect(lambda: _run_safely(_peek_mask))
     container.destroyed.connect(lambda *_args: _stop_animation())
+    container._layer_refresh_timer = _auto_refresh_layer_controls(
+        viewer, container, _refresh_targets
+    )
 
     _refresh_targets()
     return container
@@ -1335,8 +1399,41 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     source_form = QFormLayout()
     target_combo = QComboBox()
     target_combo.setToolTip("Labels layer to edit and analyze.")
-    source_form.addRow("Labels layer", target_combo)
+    source_row = QWidget()
+    source_row_layout = QHBoxLayout(source_row)
+    source_row_layout.setContentsMargins(0, 0, 0, 0)
+    source_row_layout.setSpacing(6)
+    source_row_layout.addWidget(target_combo, 1)
+    btn_refresh = QPushButton("Refresh layers")
+    btn_refresh.setToolTip(
+        "Synchronize all layer selectors now. Selectors also update "
+        "automatically when layers are opened, added, removed, or renamed."
+    )
+    source_row_layout.addWidget(btn_refresh)
+    source_form.addRow("Labels layer", source_row)
     layout.addLayout(source_form)
+
+    workflow_tabs = QTabWidget()
+    workflow_tabs.setDocumentMode(True)
+    annotate_page = QWidget()
+    annotate_layout = QVBoxLayout(annotate_page)
+    annotate_layout.setContentsMargins(0, 6, 0, 0)
+    qc_page = QWidget()
+    qc_layout = QVBoxLayout(qc_page)
+    qc_layout.setContentsMargins(0, 6, 0, 0)
+    workflow_tabs.addTab(annotate_page, "Annotate")
+    workflow_tabs.addTab(qc_page, "Grid & Components")
+    workflow_tabs.setTabToolTip(
+        0,
+        "Paint and erase the selected Labels layer with bounded-memory "
+        "editing when needed.",
+    )
+    workflow_tabs.setTabToolTip(
+        1,
+        "Register grid addresses, find connected components, and review or "
+        "correct selected regions.",
+    )
+    layout.addWidget(workflow_tabs, 1)
 
     form = QFormLayout()
     assign_grid_check = QCheckBox("Assign grid addresses to results")
@@ -1392,11 +1489,11 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     show_edit_boundary_check.setToolTip(
         "Outline the area currently loaded for fast Paint and Erase tools."
     )
-    auto_save_edit_check = QCheckBox("Save edits automatically")
+    auto_save_edit_check = QCheckBox("Apply edits automatically")
     auto_save_edit_check.setChecked(True)
     auto_save_edit_check.setToolTip(
         "When on, save 400 ms after a completed stroke. When off, edits "
-        "remain in the editable area until Save now is clicked."
+        "remain in the editable area until Apply edits is clicked."
     )
     dynamic_edit_status = QLabel("Select a source Labels layer.")
     dynamic_edit_status.setWordWrap(True)
@@ -1404,7 +1501,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     edit_action_layout = QHBoxLayout(edit_action_row)
     edit_action_layout.setContentsMargins(0, 0, 0, 0)
     edit_action_layout.setSpacing(6)
-    save_edit_btn = QPushButton("Save now")
+    save_edit_btn = QPushButton("Apply edits")
     undo_edit_btn = QPushButton("Undo")
     redo_edit_btn = QPushButton("Redo")
     save_edit_btn.setToolTip(
@@ -1425,7 +1522,8 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     edit_form.addRow("", auto_save_edit_check)
     edit_form.addRow(edit_action_row)
     edit_form.addRow("Status", dynamic_edit_status)
-    layout.addWidget(edit_group)
+    annotate_layout.addWidget(edit_group)
+    annotate_layout.addStretch(1)
 
     analysis_group = QGroupBox("Grid registration and component QC")
     analysis_layout = QVBoxLayout(analysis_group)
@@ -1437,18 +1535,16 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     analysis_note.setWordWrap(True)
     analysis_layout.addWidget(analysis_note)
     analysis_layout.addLayout(form)
-    layout.addWidget(analysis_group)
+    qc_layout.addWidget(analysis_group, 1)
 
     action_row = QWidget()
     action_layout = QHBoxLayout(action_row)
     action_layout.setContentsMargins(0, 0, 0, 0)
     action_layout.setSpacing(6)
-    btn_refresh = QPushButton("Refresh")
     btn_analyze = QPushButton("Find components")
     btn_delete = QPushButton("Delete selected")
     btn_copy = QPushButton("Copy selected")
     btn_copy_last = QPushButton("Copy again")
-    action_layout.addWidget(btn_refresh)
     action_layout.addWidget(btn_analyze)
     action_layout.addWidget(btn_delete)
     analysis_layout.addWidget(action_row)
@@ -1461,7 +1557,6 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     copy_action_layout.addWidget(btn_copy_last)
     analysis_layout.addWidget(copy_action_row)
 
-    btn_refresh.setToolTip("Refresh the source and destination layer lists.")
     btn_analyze.setToolTip(
         "Detect and measure connected components in the selected 2D Labels layer."
     )
@@ -1521,7 +1616,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     )
     component_table.set_grid_columns_visible(False)
     component_table.setMinimumHeight(220)
-    analysis_layout.addWidget(component_table)
+    analysis_layout.addWidget(component_table, 1)
 
     analysis_progress = QProgressBar()
     analysis_progress.setVisible(False)
@@ -1591,6 +1686,51 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
         if isinstance(layer, napari.layers.Labels) and not is_internal_layer(layer):
             return layer
         return None
+
+    def _store_grid_registration() -> None:
+        layer = _target_layer()
+        if not isinstance(layer, napari.layers.Labels) or is_internal_layer(layer):
+            return
+        metadata = dict(getattr(layer, "metadata", {}) or {})
+        metadata["label_assistant_grid"] = {
+            "cell_height": int(grid_y_spin.value()),
+            "cell_width": int(grid_x_spin.value()),
+            "assign_addresses": bool(assign_grid_check.isChecked()),
+            "show_overlay": bool(display_grid_check.isChecked()),
+        }
+        layer.metadata = metadata
+
+    def _restore_grid_registration() -> None:
+        layer = _target_layer()
+        metadata = getattr(layer, "metadata", {}) or {}
+        registration = (
+            metadata.get("label_assistant_grid", {})
+            if isinstance(metadata, dict)
+            else {}
+        )
+        controls = (
+            grid_y_spin,
+            grid_x_spin,
+            assign_grid_check,
+            display_grid_check,
+        )
+        for control in controls:
+            control.blockSignals(True)
+        try:
+            grid_y_spin.setValue(int(registration.get("cell_height", 100)))
+            grid_x_spin.setValue(int(registration.get("cell_width", 100)))
+            assign_grid_check.setChecked(
+                bool(registration.get("assign_addresses", False))
+            )
+            display_grid_check.setChecked(
+                bool(registration.get("show_overlay", False))
+            )
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+        component_table.set_grid_columns_visible(
+            assign_grid_check.isChecked()
+        )
 
     def _eligible_copy_targets(source_layer) -> list[napari.layers.Layer]:
         if source_layer is None:
@@ -1713,6 +1853,10 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             edge_width=1.0,
             opacity=0.55,
         )
+        grid_metadata = dict(getattr(grid_layer, "metadata", {}) or {})
+        grid_metadata[INTERNAL_LAYER_ROLE_KEY] = "grid_overlay"
+        grid_metadata["source_layer_name"] = layer.name
+        grid_layer.metadata = grid_metadata
         grid_layer.scale = np.asarray(layer.scale)[-2:]
         grid_layer.translate = np.asarray(layer.translate)[-2:]
 
@@ -1770,6 +1914,10 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             text_color="cyan",
             anchor="center",
         )
+        label_metadata = dict(getattr(label_layer, "metadata", {}) or {})
+        label_metadata[INTERNAL_LAYER_ROLE_KEY] = "grid_labels"
+        label_metadata["source_layer_name"] = layer.name
+        label_layer.metadata = label_metadata
         label_layer.scale = scale
         label_layer.translate = translate
         label_layer.opacity = float(label_layout.opacity)
@@ -1951,6 +2099,13 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
         status=_set_dynamic_edit_status,
         action_buttons=(save_edit_btn, undo_edit_btn, redo_edit_btn),
     )
+    edit_controllers = getattr(
+        viewer, "_label_assistant_edit_controllers", None
+    )
+    if edit_controllers is None:
+        edit_controllers = []
+        viewer._label_assistant_edit_controllers = edit_controllers
+    edit_controllers.append(dynamic_edit_controller)
     save_edit_btn.clicked.connect(dynamic_edit_controller.save_now)
     undo_edit_btn.clicked.connect(dynamic_edit_controller.undo_stroke)
     redo_edit_btn.clicked.connect(dynamic_edit_controller.redo_stroke)
@@ -2229,6 +2384,8 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             return
         if large_controller.worker is not None:
             large_controller.cancel()
+        _hide_grid_overlay()
+        _restore_grid_registration()
         _invalidate_analysis("Source layer changed. Click Analyze.")
         _sync_mouse_callback()
         _refresh_copy_targets()
@@ -2242,6 +2399,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
 
     def _on_assign_grid_toggled(checked: bool) -> None:
         component_table.set_grid_columns_visible(bool(checked))
+        _store_grid_registration()
         _reassign_grid_ids()
 
     def _on_display_grid_toggled(checked: bool) -> None:
@@ -2262,8 +2420,10 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             display_grid_check.setChecked(False)
             display_grid_check.blockSignals(False)
             _set_status(str(exc))
+        _store_grid_registration()
 
     def _on_grid_size_changed() -> None:
+        _store_grid_registration()
         if display_grid_check.isChecked():
             try:
                 _show_grid_overlay()
@@ -2275,6 +2435,10 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
 
     def _cleanup_callbacks(*_args) -> None:
         state.closed = True
+        with suppress(ValueError, AttributeError):
+            viewer._label_assistant_edit_controllers.remove(
+                dynamic_edit_controller
+            )
         dynamic_edit_controller.close()
         large_controller.close()
         if isinstance(state.fast_index, LargeComponentIndex):
@@ -2345,6 +2509,9 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
 
     _on_assign_grid_toggled(False)
     container._component_table = component_table
+    container._workflow_tabs = workflow_tabs
+    container._annotate_page = annotate_page
+    container._qc_page = qc_page
     container._selection_summary = selection_summary
     container._status_label = status
     container._analyze_button = btn_analyze
@@ -2369,9 +2536,13 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     container._auto_save_edit_check = auto_save_edit_check
     container._dynamic_edit_status = dynamic_edit_status
     container._dynamic_edit_controller = dynamic_edit_controller
+    container._refresh_layers_button = btn_refresh
     container._save_edit_button = save_edit_btn
     container._undo_edit_button = undo_edit_btn
     container._redo_edit_button = redo_edit_btn
+    container._layer_refresh_timer = _auto_refresh_layer_controls(
+        viewer, container, _refresh_and_sync
+    )
     _refresh_targets()
     dynamic_edit_controller.sync()
     return container

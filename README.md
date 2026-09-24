@@ -11,6 +11,20 @@ in the same source coordinate system and uses reproducible addresses such as
 segmented regions. The annotator can return to that exact cell, correct the
 mask, and submit it for re-review.
 
+## Version 1.0.1 highlights
+
+- A standalone **Project** tab saves and restores annotation projects,
+  writable masks, grid registration, and viewer state without SAM3 Assistant.
+- Layer selectors update automatically when napari layers are opened, added,
+  removed, reordered, or renamed.
+- The interface now follows the working sequence **Project → Labels → Visual
+  Compare → Mask Tools**, with separate **Annotate** and **Grid & Components**
+  views inside Labels.
+- Local tile synchronization is called **Apply edits**, clearly separating it
+  from durable project **Save**.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
+
 ## Two-part workflow
 
 ### 1. Full-resolution annotation
@@ -19,8 +33,8 @@ mask, and submit it for re-review.
 - Remove or reshape labels with Erase.
 - Move continuously across the image while a bounded camera-centered region is
   loaded for editing.
-- Save only changed pixels back to the original Labels layer automatically or
-  with **Save now**.
+- Apply only changed pixels back to the original Labels layer automatically or
+  with **Apply edits**.
 - Preserve the original image dimensions and coordinates without producing
   cropped working files that later need to be reassembled.
 
@@ -62,11 +76,45 @@ unconditional hardware-independent limit.
 
 ## Interface
 
-The dock widget follows three common tasks:
+The dock widget is organized into four workflow areas:
 
-### Edit & Review
+### Project
 
-Choose one Labels layer, edit it, and inspect its connected components.
+Open **Plugins → napari-label-assistant → Label Assistant**, then use the first
+**Project** tab to create, open, and save a complete project without SAM3
+Assistant.
+
+- A normal save writes a small `.label-assistant.json` manifest.
+- New in-memory Labels layers are persisted once as writable, chunked
+  OME-Zarr data beside the manifest. Later saves reuse the same store instead
+  of copying the full mask again.
+- Source images already loaded from files remain external references, keeping
+  routine saves fast. **Portable Snapshot** explicitly copies referenced local
+  images and masks into one folder for transfer.
+- Pending local-area edits are applied to the source Labels layer before the
+  project is saved.
+- Grid cell dimensions and grid display/assignment choices are restored with
+  each Labels layer.
+- Opening a project displays layer-by-layer progress in a temporary dialog;
+  the dialog closes automatically when loading succeeds or fails.
+- Temporary editable-area, editable-boundary, and grid-overlay layers are not
+  stored; the plugin recreates them when needed.
+
+Existing `.sam3.json` projects created by SAM3 Assistant can be opened for
+migration. Use **Save As** to continue with the standalone Label Assistant
+format.
+
+### Labels
+
+Choose one Labels layer, then switch between two task-focused tabs:
+
+- **Annotate** contains the memory-controlled Paint and Erase workflow.
+- **Grid & Components** contains grid registration, component actions, canvas
+  selection, and an expandable results table for large result sets.
+
+Layer selectors update automatically when layers are opened, added, removed,
+or renamed. **Refresh layers** remains beside the shared Labels-layer selector
+as an always-visible fallback; it is no longer buried among component actions.
 
 **Memory-controlled editing** appears first because it controls how napari
 accesses the selected layer:
@@ -122,9 +170,9 @@ Compare an image with a Labels layer while keeping the Labels layer active for
 editing. The view controls can show either layer, show both, dim the labels, or
 temporarily pulse, blink, and peek between them.
 
-### Combine Layers
+### Mask Tools
 
-Perform label-level operations across one or more compatible layers:
+Perform mask and label operations across one or more compatible layers:
 
 - reassign one label value;
 - merge foreground regions into one class;
@@ -147,16 +195,16 @@ label results.
 
 ### Saving
 
-With **Save edits automatically** enabled, saving is stroke-aware:
+With **Apply edits automatically** enabled, synchronization is stroke-aware:
 
 1. Saving never starts while the paint or erase mouse button is held.
 2. Releasing the mouse starts a 400 ms inactivity delay.
 3. Only the accumulated changed region is compared and written to the source.
 
-Disable automatic saving to keep changes in the local area until **Save now**
+Disable automatic apply to keep changes in the local area until **Apply edits**
 is clicked. A local area with unsaved manual changes remains in place during
 pan or zoom, preventing accidental loss. **Undo** and **Redo** synchronize
-immediately in automatic mode and remain pending until **Save now** in manual
+immediately in automatic mode and remain pending until **Apply edits** in manual
 mode.
 
 Tile size controls the memory/performance tradeoff. A 2048 × 2048 area uses

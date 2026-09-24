@@ -258,7 +258,7 @@ class DynamicLabelsEditController:
         ):
             self.status(
                 "Unsaved manual edits are still in the editable area. "
-                "Click Save now before changing the source or editing strategy.",
+                "Click Apply edits before changing the source or editing strategy.",
                 "busy",
             )
             return
@@ -305,12 +305,23 @@ class DynamicLabelsEditController:
                 for expected in expected_names
             )
             metadata = getattr(layer, "metadata", {}) or {}
-            same_source_helper = (
-                is_internal_layer(layer)
-                and isinstance(metadata, dict)
+            role = (
+                next(
+                    (
+                        metadata.get(key)
+                        for key in COMPATIBLE_INTERNAL_ROLE_KEYS
+                        if metadata.get(key)
+                    ),
+                    None,
+                )
+                if isinstance(metadata, dict)
+                else None
+            )
+            same_source_edit_helper = (
+                role in {EDIT_TILE_ROLE, EDIT_BOUNDARY_ROLE}
                 and metadata.get("source_layer_name") == source.name
             )
-            if legacy_name or same_source_helper:
+            if legacy_name or same_source_edit_helper:
                 with suppress(Exception):
                     self.viewer.layers.remove(layer)
 
@@ -352,7 +363,7 @@ class DynamicLabelsEditController:
             self.request_id += 1
         if self.dirty and not self._automatic_save_enabled():
             self.status(
-                "Unsaved manual edits are still in this area. Click Save now "
+                "Unapplied manual edits are still in this area. Click Apply edits "
                 "before moving the editable area.",
                 "busy",
             )
@@ -454,7 +465,7 @@ class DynamicLabelsEditController:
             + (
                 "Paint or erase inside the outlined area; changes save automatically."
                 if self._automatic_save_enabled()
-                else "Paint or erase inside the outlined area, then click Save now."
+                else "Paint or erase inside the outlined area, then click Apply edits."
             ),
             "ready",
         )
@@ -480,11 +491,11 @@ class DynamicLabelsEditController:
             self._accumulate_dirty_bounds(offset, np.shape(event_data))
         if self._automatic_save_enabled():
             self.status(
-                "Editing… changes will be saved automatically.", "busy"
+                "Editing… changes will be applied automatically.", "busy"
             )
         else:
             self.status(
-                "Unsaved edits are in the editable area. Click Save now.",
+                "Unapplied edits are in the editable area. Click Apply edits.",
                 "busy",
             )
         if not self.stroke_active and self._automatic_save_enabled():
@@ -538,14 +549,14 @@ class DynamicLabelsEditController:
             self.commit_timer.stop()
             if self.dirty:
                 self.status(
-                    "Automatic saving is off. Click Save now to write pending "
+                    "Automatic apply is off. Click Apply edits to write pending "
                     "edits to the source.",
                     "busy",
                 )
             return
         if self.dirty and not self.stroke_active:
             self.status(
-                "Automatic saving is on. Pending edits will be saved shortly.",
+                "Automatic apply is on. Pending edits will be applied shortly.",
                 "busy",
             )
             self.commit_timer.start()
@@ -606,7 +617,7 @@ class DynamicLabelsEditController:
         if not self._automatic_save_enabled():
             self.status(
                 ("Undo" if undo else "Redo")
-                + " applied in the editable area. Click Save now to update "
+                + " applied in the editable area. Click Apply edits to update "
                 f"“{self.source.name}”.",
                 "busy",
             )
@@ -614,7 +625,7 @@ class DynamicLabelsEditController:
         if self.commit():
             action = "Undid" if undo else "Restored"
             self.status(
-                f"{action} the last stroke and saved the result to "
+                f"{action} the last stroke and applied the result to "
                 f"“{self.source.name}”.",
                 "ready",
             )
@@ -729,13 +740,13 @@ class DynamicLabelsEditController:
             if update_status:
                 if preview_updated:
                     self.status(
-                        f"Saved to source layer “{self.source.name}” and "
+                        f"Applied to source layer “{self.source.name}” and "
                         "updated its local preview.",
                         "ready",
                     )
                 else:
                     self.status(
-                        f"Saved to source layer “{self.source.name}”. Its "
+                        f"Applied to source layer “{self.source.name}”. Its "
                         "preview will update on the next view reload.",
                         "ready",
                     )

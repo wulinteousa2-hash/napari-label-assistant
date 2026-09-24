@@ -8,11 +8,17 @@ from ._widget import (
     component_operations_widget,
     quick_compare_toggle_widget,
 )
+from ._workspace_widget import WorkspaceManagerWidget
 
 
 def _intro(text: str) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
+    label.setToolTip(
+        "Annotate full-resolution 2D images at 100,000 × 100,000-pixel scale "
+        "without cropping. Use reproducible grid addresses to report, find, "
+        "correct, and re-review missing or incorrect mask regions."
+    )
     label.setStyleSheet(
         "QLabel { background-color: #e7f5ff; border: 1px solid #74c0fc; "
         "color: #12344d; border-radius: 4px; padding: 7px; }"
@@ -31,26 +37,32 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     layout = QVBoxLayout(page)
     layout.addWidget(
         _intro(
-            "Annotate 2D images at 100,000 × 100,000-pixel scale without "
-            "cropping, then review and correct the mask through traceable grid "
-            "addresses. Return to each reported cell to resolve missing, "
-            "over-labeled, or incorrectly segmented regions."
+            "Edit 100,000 × 100,000-pixel Labels layers, then review them "
+            "with traceable grid addresses."
         )
     )
     tools = QTabWidget()
-    tools.addTab(component_operations_widget(viewer), "Edit & Review")
+    tools.addTab(
+        WorkspaceManagerWidget(napari_viewer=viewer),
+        "Project",
+    )
+    tools.addTab(component_operations_widget(viewer), "Labels")
     tools.addTab(quick_compare_toggle_widget(viewer), "Visual Compare")
-    tools.addTab(label_operations_widget(viewer), "Combine Layers")
+    tools.addTab(label_operations_widget(viewer), "Mask Tools")
     tools.setTabToolTip(
         0,
-        "Paint or erase Labels layers and inspect connected components.",
+        "Create, open, save, and transfer Label Assistant projects.",
     )
     tools.setTabToolTip(
         1,
-        "Compare an image with its Labels layer while preserving edit focus.",
+        "Annotate Labels layers, then inspect components through grid-based QC.",
     )
     tools.setTabToolTip(
         2,
+        "Compare an image with its Labels layer while preserving edit focus.",
+    )
+    tools.setTabToolTip(
+        3,
         "Relabel, merge, compose, or calculate agreement across Labels layers.",
     )
     layout.addWidget(tools)
