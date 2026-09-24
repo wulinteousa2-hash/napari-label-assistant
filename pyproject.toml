@@ -1,7 +1,7 @@
 [project]
 name = "napari-label-assistant"
 version = "1.0.0"
-description = "Grid-addressed labeling and quality control for 2D masks at 100,000 × 100,000-pixel scale"
+description = "Responsive annotation of 100,000 × 100,000-pixel images with traceable grid-based mask review"
 keywords = [
     "napari",
     "image segmentation",

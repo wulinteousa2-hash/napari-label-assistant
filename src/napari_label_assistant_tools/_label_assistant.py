@@ -31,10 +31,10 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     layout = QVBoxLayout(page)
     layout.addWidget(
         _intro(
-            "Grid-addressed labeling and QC at 100,000 × 100,000-pixel scale "
-            "without cropping. Register locations across the full mask, edit "
-            "labels in a memory-controlled local area, and trace component "
-            "measurements, Euler topology, and reviewer findings by grid address."
+            "Annotate 2D images at 100,000 × 100,000-pixel scale without "
+            "cropping, then review and correct the mask through traceable grid "
+            "addresses. Return to each reported cell to resolve missing, "
+            "over-labeled, or incorrectly segmented regions."
         )
     )
     tools = QTabWidget()

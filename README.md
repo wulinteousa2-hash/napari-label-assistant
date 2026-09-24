@@ -1,30 +1,43 @@
 # napari-label-assistant
 
-**Grid-addressed labeling and quality control for 2D Labels layers at
-100,000 × 100,000-pixel scale—without cropping the source dataset.**
+**Annotate 2D images at 100,000 × 100,000-pixel scale without cropping,
+then review and correct the mask through traceable grid addresses.**
 
-napari-label-assistant places a reproducible 2D registration grid over the full
-mask. Every grid cell has an address such as **R12C08**, giving annotators and
-reviewers a shared reference for masking, feedback, correction, and QC
-trace-back. Component measurements remain linked to the full-resolution
-coordinate system and can be assigned to grid addresses by centroid.
+napari-label-assistant closes the loop between annotation and quality control.
+The annotator works on the full-resolution Labels layer through a
+memory-controlled local area designed to remain responsive. The reviewer works
+in the same source coordinate system and uses reproducible addresses such as
+**R12C08** to report missing, under-labeled, over-labeled, or incorrectly
+segmented regions. The annotator can return to that exact cell, correct the
+mask, and submit it for re-review.
 
-Memory-controlled local editing supports this registered workflow without
-creating cropped working files. Users can move across the dataset, create or
-correct labels, and save changed regions back to the original Labels layer.
+## Two-part workflow
 
-## What it enables
+### 1. Full-resolution annotation
 
-- Register every part of the mask with reproducible grid row, column, and cell
-  addresses anchored to the full source coordinate system.
-- Give reviewers a stable address for reporting a missing label, locating a
-  questionable component, revisiting a correction, and discussing QC findings.
-- Display grid addresses around the current viewport while retaining the same
-  registration across pan and zoom.
 - Create and extend labels with napari Paint, Fill, and Polygon tools.
-- Remove or reshape labels with Erase while loading only a bounded working area.
-- Save completed strokes automatically or keep changes pending until
-  **Save now** is selected.
+- Remove or reshape labels with Erase.
+- Move continuously across the image while a bounded camera-centered region is
+  loaded for editing.
+- Save only changed pixels back to the original Labels layer automatically or
+  with **Save now**.
+- Preserve the original image dimensions and coordinates without producing
+  cropped working files that later need to be reassembled.
+
+### 2. Grid-addressed review and correction
+
+- Register the full mask with reproducible grid row, column, and cell addresses.
+- Display those addresses around the current viewport while retaining the same
+  registration across pan and zoom.
+- Assign each connected component to the grid address containing its centroid.
+- Let reviewers identify a labeled component with a grid address and component
+  ID, or identify a missing label with the grid address alone.
+- Return directly to the reported cell for correction and follow-up review.
+- Keep annotation, reviewer feedback, correction, and QC discussion traceable
+  to the same full-resolution location.
+
+## Component and label analysis
+
 - Detect connected components independently within each nonzero label value.
 - Sort components by label value, pixel count, Euler number, centroid, bounds,
   or grid address.
