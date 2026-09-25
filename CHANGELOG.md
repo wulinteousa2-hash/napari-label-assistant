@@ -3,6 +3,34 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-09-25
+
+### Added
+
+- Added an optional **Optimize large images for viewing** Workspace setting.
+  On Save, oversized single-scale 2D images can be copied once into a local,
+  chunked multiscale OME-Zarr pyramid with visible tile-level progress. The
+  original file is preserved, unchecked mode retains file references, and the
+  optimized view becomes active when the workspace is reopened.
+
+- Replaced the static top header with a fixed-size layer-activity indicator
+  that reports viewport preparation, local editable-area loading, and
+  readiness without resizing the dock or requiring users to watch system CPU
+  or memory monitors. The header retains the original high-contrast light
+  background and blue border while communicating state through its icon.
+
+### Changed
+
+- Clarified the interface hierarchy as **Workspace**, **Labels**, **Compare**,
+  and **Combine**. Within Labels, **Local Editing** now identifies the
+  bounded-memory paint workflow, while **Review & QC** identifies full-layer,
+  grid-addressed component inspection and curation.
+
+### Fixed
+
+- Preserved the active paint label value across pan- or zoom-driven editable
+  area reloads and when returning from local-area to full-layer editing.
+
 ## [1.0.2] - 2026-09-24
 
 ### Changed

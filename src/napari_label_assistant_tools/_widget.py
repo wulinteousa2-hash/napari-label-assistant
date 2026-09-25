@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QHeaderView,
     QGroupBox,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from qtpy.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QTableWidget,
@@ -54,6 +56,116 @@ from ._large_components import (
 
 _PANEL_MIN_WIDTH = 420
 _PANEL_MAX_WIDTH = 520
+
+
+class _LayerActivityIndicator(QFrame):
+    """Compact, non-modal feedback for layer and editable-area readiness."""
+
+    _BUSY_FRAMES = ("◐", "◓", "◑", "◒")
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("layerActivityIndicator")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAutoFillBackground(True)
+        self.setFixedHeight(46)
+        self.state = "idle"
+        self._frame = 0
+        self._full_message = "Ready"
+        self._context_tooltip = ""
+        self.icon = QLabel("●")
+        self.icon.setObjectName("layerActivityIcon")
+        self.icon.setAlignment(Qt.AlignCenter)
+        self.icon.setFixedWidth(18)
+        self.message = QLabel("Ready")
+        self.message.setWordWrap(False)
+        self.message.setMinimumWidth(0)
+        self.message.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 3, 6, 3)
+        row.setSpacing(4)
+        row.addWidget(self.icon)
+        row.addWidget(self.message, 1)
+        self._animation = QTimer(self)
+        self._animation.setInterval(140)
+        self._animation.timeout.connect(self._advance_busy_frame)
+        self.set_state("idle", "Ready")
+
+    def set_context_tooltip(self, text: str) -> None:
+        self._context_tooltip = str(text).strip()
+        self._apply_tooltip(self.toolTip())
+
+    def set_state(
+        self, state: str, message: str, *, details: str | None = None
+    ) -> None:
+        normalized = (
+            state
+            if state in {"idle", "busy", "ready", "warning", "error"}
+            else "idle"
+        )
+        self.state = normalized
+        icons = {
+            "idle": "●",
+            "busy": self._BUSY_FRAMES[0],
+            "ready": "✓",
+            "warning": "⚠",
+            "error": "✕",
+        }
+        accents = {
+            "idle": "#868e96",
+            "busy": "#228be6",
+            "ready": "#2f9e44",
+            "warning": "#e67700",
+            "error": "#e03131",
+        }
+        accent = accents[normalized]
+        self._animation.stop()
+        self._frame = 0
+        self.icon.setText(icons[normalized])
+        self._full_message = str(message)
+        self._render_message()
+        tooltip = str(details or message)
+        self._apply_tooltip(tooltip)
+        self.setStyleSheet(
+            "QFrame#layerActivityIndicator {"
+            " background-color: #e7f5ff; color: #12344d;"
+            " border: 1px solid #74c0fc; border-radius: 4px; }"
+            "QFrame#layerActivityIndicator QLabel {"
+            " color: #12344d; background-color: transparent; border: none; }"
+            "QFrame#layerActivityIndicator QLabel#layerActivityIcon {"
+            f" color: {accent}; font-weight: 700; }}"
+        )
+        if normalized == "busy":
+            self._animation.start()
+
+    def _apply_tooltip(self, details: str) -> None:
+        parts = [str(details).strip()]
+        if self._context_tooltip:
+            parts.append(self._context_tooltip)
+        tooltip = "\n\n".join(part for part in parts if part)
+        self.setToolTip(tooltip)
+        self.icon.setToolTip(tooltip)
+        self.message.setToolTip(tooltip)
+
+    def _render_message(self) -> None:
+        width = max(1, self.message.width() - 2)
+        visible = self.message.fontMetrics().elidedText(
+            self._full_message, Qt.ElideRight, width
+        )
+        self.message.setText(visible)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._render_message()
+
+    def _advance_busy_frame(self) -> None:
+        if self.state != "busy":
+            self._animation.stop()
+            return
+        self._frame = (self._frame + 1) % len(self._BUSY_FRAMES)
+        self.icon.setText(self._BUSY_FRAMES[self._frame])
 
 
 def _auto_refresh_layer_controls(viewer, parent, refresh):
@@ -1402,7 +1514,9 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     return container
 
 
-def component_operations_widget(viewer=None, **kwargs) -> QWidget:
+def component_operations_widget(
+    viewer=None, *, activity_indicator=None, **kwargs
+) -> QWidget:
     if viewer is None:
         viewer = napari.current_viewer()
         if viewer is None:
@@ -1429,6 +1543,13 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     source_row_layout.addWidget(btn_refresh)
     source_form.addRow("Labels layer", source_row)
     layout.addLayout(source_form)
+    layer_activity = activity_indicator
+    if layer_activity is None:
+        layer_activity = _LayerActivityIndicator(container)
+        layer_activity.set_context_tooltip(
+            "Shows when the selected layer view or local editable area is ready."
+        )
+        layout.addWidget(layer_activity)
 
     workflow_tabs = QTabWidget()
     workflow_tabs.setDocumentMode(True)
@@ -1438,17 +1559,17 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     qc_page = QWidget()
     qc_layout = QVBoxLayout(qc_page)
     qc_layout.setContentsMargins(0, 6, 0, 0)
-    workflow_tabs.addTab(annotate_page, "Annotate")
-    workflow_tabs.addTab(qc_page, "Grid & Components")
+    workflow_tabs.addTab(annotate_page, "Local Editing")
+    workflow_tabs.addTab(qc_page, "Review & QC")
     workflow_tabs.setTabToolTip(
         0,
-        "Paint and erase the selected Labels layer with bounded-memory "
-        "editing when needed.",
+        "Paint and erase through a bounded-memory local area when needed; "
+        "changes apply to the selected source Labels layer.",
     )
     workflow_tabs.setTabToolTip(
         1,
-        "Register grid addresses, find connected components, and review or "
-        "correct selected regions.",
+        "Inspect the full source Labels layer: register grid addresses, find "
+        "components, and locate, delete, or copy selected regions.",
     )
     layout.addWidget(workflow_tabs, 1)
 
@@ -1542,7 +1663,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     annotate_layout.addWidget(edit_group)
     annotate_layout.addStretch(1)
 
-    analysis_group = QGroupBox("Grid registration and component QC")
+    analysis_group = QGroupBox("Grid-addressed component review")
     analysis_layout = QVBoxLayout(analysis_group)
     analysis_note = QLabel(
         "Register full-mask locations with reproducible grid addresses. Find "
@@ -1675,11 +1796,15 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
         displayed_grid_layer_names=None,
         large_records=[],
         large_ids=[],
+        activity_layer=None,
+        activity_generation=0,
         closed=False,
     )
     grid_label_timer = QTimer(container)
     grid_label_timer.setSingleShot(True)
     grid_label_timer.setInterval(150)
+    activity_poll_timer = QTimer(container)
+    activity_poll_timer.setInterval(100)
 
     def _eligible_layers():
         layers = [
@@ -1832,6 +1957,36 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             f"QLabel {{ background: {background}; color: {foreground}; "
             "border-radius: 3px; padding: 4px; }"
         )
+        if state_name == "busy" and message.startswith(
+            "Loading editable area"
+        ):
+            layer_activity.set_state(
+                "busy", "Preparing edit area…", details=message
+            )
+        elif state_name == "ready" and message.startswith("Ready:"):
+            activity_poll_timer.stop()
+            bounds = getattr(dynamic_edit_controller, "bounds", None)
+            size = (
+                f"{bounds.shape[1]} × {bounds.shape[0]}"
+                if bounds is not None
+                else "local"
+            )
+            layer_activity.set_state(
+                "ready", f"Edit area ready · {size}", details=message
+            )
+        elif state_name == "ready" and (
+            "direct editing" in message.lower()
+            or "full-layer editing" in message.lower()
+        ):
+            activity_poll_timer.stop()
+            layer_activity.set_state(
+                "ready", "Ready · Full-layer editing", details=message
+            )
+        elif state_name == "error" and "editable area" in message.lower():
+            activity_poll_timer.stop()
+            layer_activity.set_state(
+                "error", "Edit area unavailable", details=message
+            )
 
     def _grid_layer_names(layer) -> tuple[str, str]:
         return (
@@ -2399,6 +2554,19 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             target_combo.blockSignals(False)
             _set_status("Wait for the current tile edit before changing Labels layers.")
             return
+        selected_layer = _target_layer()
+        if selected_layer is not None:
+            state.activity_layer = selected_layer
+            state.activity_generation += 1
+            layer_activity.set_state(
+                "busy",
+                f"Preparing · {selected_layer.name}",
+                details=(
+                    f"Preparing the selected layer “{selected_layer.name}” "
+                    "for viewing or editing."
+                ),
+            )
+            activity_poll_timer.start()
         if large_controller.worker is not None:
             large_controller.cancel()
         _hide_grid_overlay()
@@ -2413,6 +2581,55 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
                 _refresh_grid_labels()
             except Exception as exc:
                 _set_status(str(exc))
+
+    def _finish_view_activity(layer, generation: int) -> None:
+        if (
+            state.closed
+            or generation != state.activity_generation
+            or layer is not state.activity_layer
+        ):
+            return
+        if (
+            isinstance(layer, napari.layers.Labels)
+            and layer is _editable_target_layer()
+            and dynamic_edit_controller.loading
+        ):
+            return
+        layer_activity.set_state(
+            "ready",
+            f"View ready · {layer.name}",
+            details=f"The current viewport for “{layer.name}” is ready.",
+        )
+
+    def _poll_view_activity() -> None:
+        layer = state.activity_layer
+        if layer is None or not any(
+            candidate is layer for candidate in viewer.layers
+        ):
+            activity_poll_timer.stop()
+            layer_activity.set_state("idle", "Ready")
+            return
+        if not bool(getattr(layer, "loaded", True)):
+            return
+        activity_poll_timer.stop()
+        generation = state.activity_generation
+        QTimer.singleShot(
+            0, lambda: _finish_view_activity(layer, generation)
+        )
+
+    def _on_active_layer_changed(_event=None) -> None:
+        layer = getattr(viewer.layers.selection, "active", None)
+        if layer is None or is_internal_layer(layer):
+            return
+        state.activity_layer = layer
+        state.activity_generation += 1
+        kind = "Labels" if isinstance(layer, napari.layers.Labels) else "view"
+        layer_activity.set_state(
+            "busy",
+            f"Preparing {kind} · {layer.name}",
+            details=f"Preparing the current viewport for “{layer.name}”…",
+        )
+        activity_poll_timer.start()
 
     def _on_assign_grid_toggled(checked: bool) -> None:
         component_table.set_grid_columns_visible(bool(checked))
@@ -2462,6 +2679,11 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
             state.fast_index.close()
             state.fast_index = None
         grid_label_timer.stop()
+        activity_poll_timer.stop()
+        with suppress(Exception):
+            viewer.layers.selection.events.active.disconnect(
+                _on_active_layer_changed
+            )
         with suppress(Exception):
             viewer.camera.events.zoom.disconnect(_schedule_grid_label_update)
         with suppress(Exception):
@@ -2501,6 +2723,8 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     component_table.itemSelectionChanged.connect(_on_table_selection_changed)
     page_spin.valueChanged.connect(lambda _value: _render_component_page())
     target_combo.currentIndexChanged.connect(lambda _idx: _on_target_changed())
+    activity_poll_timer.timeout.connect(_poll_view_activity)
+    viewer.layers.selection.events.active.connect(_on_active_layer_changed)
     editing_strategy_combo.currentIndexChanged.connect(
         lambda _idx: dynamic_edit_controller.sync(force=True)
     )
@@ -2552,6 +2776,7 @@ def component_operations_widget(viewer=None, **kwargs) -> QWidget:
     container._show_edit_boundary_check = show_edit_boundary_check
     container._auto_save_edit_check = auto_save_edit_check
     container._dynamic_edit_status = dynamic_edit_status
+    container._layer_activity_indicator = layer_activity
     container._dynamic_edit_controller = dynamic_edit_controller
     container._refresh_layers_button = btn_refresh
     container._save_edit_button = save_edit_btn

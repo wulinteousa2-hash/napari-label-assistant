@@ -11,6 +11,8 @@ import numpy as np
 
 from .._dynamic_edit import is_internal_layer
 
+LARGE_IMAGE_AXIS_THRESHOLD = 32768
+PYRAMID_SMALLEST_LEVEL = 2048
 WORKSPACE_FORMAT = "napari-label-assistant-workspace"
 WORKSPACE_VERSION = 1
 LEGACY_SAM3_FORMAT = "napari-sam3-workspace"
@@ -31,6 +33,8 @@ def save_workspace(
     destination: str | Path,
     *,
     xy_chunk: int = DEFAULT_XY_CHUNK,
+    optimize_large_images: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Save a lightweight manifest and persist new Labels layers once.
 
@@ -57,6 +61,8 @@ def save_workspace(
                 manifest_path=path,
                 data_root=data_root,
                 layer_index=index,
+                optimize_large_images=bool(optimize_large_images),
+                progress=progress,
                 xy_chunk=int(xy_chunk),
             )
         except Exception as exc:
@@ -113,6 +119,12 @@ def save_workspace(
     return {
         "path": str(path),
         "saved_layers": len(records),
+        "optimized_images": sum(
+            1
+            for record in records
+            if (record.get("storage") or {}).get("multiscale")
+            and record.get("layer_type") == "Image"
+        ),
         "skipped_layers": skipped,
         "data_root": str(data_root),
     }
@@ -350,6 +362,8 @@ def _serialize_layer(
     layer: Any,
     *,
     manifest_path: Path,
+    optimize_large_images: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
     data_root: Path,
     layer_index: int,
     xy_chunk: int,
@@ -386,6 +400,35 @@ def _serialize_layer(
 
     if layer_type == "Image":
         reference = _zarr_reference(layer)
+        if (
+            (reference is None or not reference.get("multiscale"))
+            and optimize_large_images
+            and _needs_image_pyramid(layer)
+        ):
+            data_root.mkdir(parents=True, exist_ok=True)
+            target = _new_image_path(
+                data_root,
+                layer_index,
+                str(getattr(layer, "name", "image")),
+            )
+            levels = _persist_image_pyramid_to_zarr(
+                layer.data,
+                target,
+                xy_chunk=xy_chunk,
+                scale=tuple(
+                    float(value)
+                    for value in _as_sequence(getattr(layer, "scale", ()))
+                ),
+                rgb=bool(getattr(layer, "rgb", False)),
+                progress=progress,
+            )
+            reference = {
+                "path": target,
+                "array_path": "",
+                "multiscale": True,
+                "datasets": [f"s{level}" for level in range(len(levels))],
+            }
+            _remember_layer_storage(layer, reference)
         if reference is not None:
             record["storage"] = {
                 "kind": "zarr",
@@ -393,12 +436,18 @@ def _serialize_layer(
                 "array_path": str(reference.get("array_path") or ""),
                 "mode": "r",
             }
+            if reference.get("multiscale"):
+                record["storage"]["multiscale"] = True
+                record["storage"]["datasets"] = list(
+                    reference.get("datasets") or []
+                )
             record.update(_image_state(layer))
             return record
         source_path, reader_plugin = _layer_file_source(layer)
         if source_path is None:
             raise WorkspaceError(
-                "Fileless Image layers are not copied during normal Save; export the image or use Portable Snapshot."
+                "Fileless Image layers are not copied during normal Save; "
+                "export the image or use Portable Snapshot."
             )
         record["storage"] = {
             "kind": "file",
@@ -454,6 +503,34 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
         array_path = str(storage.get("array_path") or "").strip().strip("/")
         target = store_path / array_path if array_path else store_path
         mode = "r+" if layer_type == "Labels" else "r"
+        if layer_type == "Image" and storage.get("multiscale"):
+            datasets = [
+                str(value).strip().strip("/")
+                for value in storage.get("datasets") or []
+                if str(value).strip()
+            ]
+            if not datasets:
+                raise WorkspaceError("Multiscale image storage has no datasets.")
+            levels = [
+                zarr.open_array(str(target / dataset), mode="r")
+                for dataset in datasets
+            ]
+            layer = viewer.add_image(
+                levels,
+                name=name,
+                rgb=bool(record.get("rgb", False)),
+                multiscale=True,
+            )
+            _remember_layer_storage(
+                layer,
+                {
+                    "path": store_path,
+                    "array_path": array_path,
+                    "multiscale": True,
+                    "datasets": datasets,
+                },
+            )
+            return layer
         data = zarr.open_array(str(target), mode=mode)
         if layer_type == "Labels":
             layer = viewer.add_labels(data, name=name)
@@ -462,7 +539,9 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
             )
             return layer
         if layer_type == "Image":
-            return viewer.add_image(data, name=name, rgb=bool(record.get("rgb", False)))
+            return viewer.add_image(
+                data, name=name, rgb=bool(record.get("rgb", False))
+            )
 
     if kind == "file":
         source = _resolve_path(storage.get("path"), manifest_path.parent)
@@ -498,6 +577,250 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
             name=name,
         )
     return None
+
+
+def _needs_image_pyramid(layer: Any) -> bool:
+    data = getattr(layer, "data", None)
+    if isinstance(data, (list, tuple)):
+        return False
+    shape = tuple(int(value) for value in getattr(data, "shape", ()))
+    rgb = bool(getattr(layer, "rgb", False))
+    if (rgb and len(shape) != 3) or (not rgb and len(shape) != 2):
+        return False
+    spatial_shape = shape[:2] if rgb else shape[-2:]
+    return max(spatial_shape, default=0) > LARGE_IMAGE_AXIS_THRESHOLD
+
+
+def _pyramid_level_shapes(
+    shape: tuple[int, ...], *, rgb: bool
+) -> list[tuple[int, ...]]:
+    shapes = [shape]
+    while (
+        max(
+            shapes[-1][:2] if rgb else shapes[-1][-2:],
+            default=0,
+        )
+        > PYRAMID_SMALLEST_LEVEL
+    ):
+        previous = shapes[-1]
+        if rgb:
+            shapes.append(
+                ((previous[0] + 1) // 2, (previous[1] + 1) // 2, previous[2])
+            )
+        else:
+            shapes.append(((previous[0] + 1) // 2, (previous[1] + 1) // 2))
+    return shapes
+
+
+def _image_chunks(
+    shape: tuple[int, ...], *, xy_chunk: int, rgb: bool
+) -> tuple[int, ...]:
+    chunk = max(1, int(xy_chunk))
+    if rgb:
+        return (min(shape[0], chunk), min(shape[1], chunk), shape[2])
+    return (min(shape[-2], chunk), min(shape[-1], chunk))
+
+
+def _chunk_regions(
+    shape: tuple[int, ...], chunks: tuple[int, ...]
+):
+    grid = tuple(
+        (size + chunk - 1) // chunk
+        for size, chunk in zip(shape, chunks, strict=True)
+    )
+    for index in np.ndindex(grid):
+        yield tuple(
+            slice(i * chunk, min(size, (i + 1) * chunk))
+            for i, chunk, size in zip(index, chunks, shape, strict=True)
+        )
+
+
+def _downsample_intensity_block(
+    block: np.ndarray, *, rgb: bool, dtype: np.dtype
+) -> np.ndarray:
+    values = np.asarray(block)
+    pad = (
+        ((0, values.shape[0] % 2), (0, values.shape[1] % 2), (0, 0))
+        if rgb
+        else ((0, values.shape[0] % 2), (0, values.shape[1] % 2))
+    )
+    if any(width for pair in pad for width in pair):
+        values = np.pad(values, pad, mode="edge")
+    if rgb:
+        reduced = values.reshape(
+            values.shape[0] // 2, 2, values.shape[1] // 2, 2, values.shape[2]
+        ).mean(axis=(1, 3))
+    else:
+        reduced = values.reshape(
+            values.shape[0] // 2, 2, values.shape[1] // 2, 2
+        ).mean(axis=(1, 3))
+    if np.issubdtype(dtype, np.integer):
+        limits = np.iinfo(dtype)
+        reduced = np.clip(np.rint(reduced), limits.min, limits.max)
+    return reduced.astype(dtype, copy=False)
+
+
+def _persist_image_pyramid_to_zarr(
+    source: Any,
+    destination: Path,
+    *,
+    xy_chunk: int,
+    scale: tuple[float, ...],
+    rgb: bool,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> list[Any]:
+    try:
+        import zarr
+    except Exception as exc:
+        raise WorkspaceError("Optimizing large images requires zarr.") from exc
+
+    shape = tuple(int(value) for value in getattr(source, "shape", ()))
+    if (rgb and len(shape) != 3) or (not rgb and len(shape) != 2):
+        raise WorkspaceError(
+            "Large-image optimization currently supports 2D grayscale and RGB images."
+        )
+    if destination.exists():
+        raise FileExistsError(
+            f"Refusing to replace existing image pyramid: {destination}"
+        )
+    temporary = destination.with_name(f"{destination.name}.__tmp__")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+
+    shapes = _pyramid_level_shapes(shape, rgb=rgb)
+    chunks = [
+        _image_chunks(level_shape, xy_chunk=xy_chunk, rgb=rgb)
+        for level_shape in shapes
+    ]
+    total = sum(
+        np.prod(
+            [
+                (size + chunk - 1) // chunk
+                for size, chunk in zip(level_shape, level_chunks, strict=True)
+            ],
+            dtype=np.int64,
+        )
+        for level_shape, level_chunks in zip(shapes, chunks, strict=True)
+    )
+    total = int(total)
+    completed = 0
+    report_every = max(1, total // 200)
+    dtype = np.dtype(getattr(source, "dtype", np.uint8))
+
+    try:
+        root = zarr.open_group(str(temporary), mode="w")
+        arrays = [
+            root.create_array(
+                f"s{level}",
+                shape=level_shape,
+                chunks=level_chunks,
+                dtype=dtype,
+                fill_value=0,
+            )
+            for level, (level_shape, level_chunks) in enumerate(
+                zip(shapes, chunks, strict=True)
+            )
+        ]
+        datasets = []
+        if rgb:
+            axes = [
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+                {"name": "c", "type": "channel"},
+            ]
+            base_scale = (
+                tuple(scale)
+                if len(scale) == 3
+                else tuple(scale[-2:]) + (1.0,)
+            )
+        else:
+            axes = [
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+            ]
+            base_scale = tuple(scale[-2:]) if len(scale) >= 2 else (1.0, 1.0)
+        for level in range(len(arrays)):
+            factor = 2**level
+            level_scale = (
+                [base_scale[0] * factor, base_scale[1] * factor, base_scale[2]]
+                if rgb
+                else [base_scale[0] * factor, base_scale[1] * factor]
+            )
+            datasets.append(
+                {
+                    "path": f"s{level}",
+                    "coordinateTransformations": [
+                        {"type": "scale", "scale": level_scale}
+                    ],
+                }
+            )
+        root.attrs["ome"] = {
+            "version": "0.5",
+            "multiscales": [
+                {
+                    "name": destination.stem,
+                    "axes": axes,
+                    "datasets": datasets,
+                }
+            ],
+        }
+
+        for region in _chunk_regions(shapes[0], chunks[0]):
+            arrays[0][region] = np.asarray(source[region])
+            completed += 1
+            if progress is not None and (
+                completed == total or completed % report_every == 0
+            ):
+                progress(completed, total, "Writing full-resolution image…")
+
+        for level in range(1, len(arrays)):
+            previous = arrays[level - 1]
+            for region in _chunk_regions(shapes[level], chunks[level]):
+                if rgb:
+                    source_region = (
+                        slice(
+                            region[0].start * 2,
+                            min(previous.shape[0], region[0].stop * 2),
+                        ),
+                        slice(
+                            region[1].start * 2,
+                            min(previous.shape[1], region[1].stop * 2),
+                        ),
+                        slice(None),
+                    )
+                else:
+                    source_region = (
+                        slice(
+                            region[0].start * 2,
+                            min(previous.shape[0], region[0].stop * 2),
+                        ),
+                        slice(
+                            region[1].start * 2,
+                            min(previous.shape[1], region[1].stop * 2),
+                        ),
+                    )
+                arrays[level][region] = _downsample_intensity_block(
+                    np.asarray(previous[source_region]), rgb=rgb, dtype=dtype
+                )
+                completed += 1
+                if progress is not None and (
+                    completed == total or completed % report_every == 0
+                ):
+                    progress(
+                        completed,
+                        total,
+                        f"Building image pyramid level {level} of {len(arrays) - 1}…",
+                    )
+        temporary.replace(destination)
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+    return [
+        zarr.open_array(str(destination / f"s{level}"), mode="r")
+        for level in range(len(shapes))
+    ]
 
 
 def _persist_labels_to_zarr(
@@ -589,8 +912,10 @@ def _zarr_reference(layer: Any) -> dict[str, Any] | None:
     metadata = getattr(layer, "metadata", {}) or {}
     remembered = metadata.get(LABEL_ASSISTANT_STORAGE_METADATA_KEY) if isinstance(metadata, dict) else None
     if isinstance(remembered, dict) and remembered.get("path"):
-        path = Path(str(remembered["path"])).expanduser()
-        return {"path": path, "array_path": str(remembered.get("array_path") or "")}
+        reference = dict(remembered)
+        reference["path"] = Path(str(remembered["path"])).expanduser()
+        reference["array_path"] = str(remembered.get("array_path") or "")
+        return reference
 
     data = getattr(layer, "data", None)
     module = type(data).__module__.lower()
@@ -611,10 +936,14 @@ def _zarr_reference(layer: Any) -> dict[str, Any] | None:
 
 def _remember_layer_storage(layer: Any, reference: dict[str, Any]) -> None:
     metadata = dict(getattr(layer, "metadata", {}) or {})
-    metadata[LABEL_ASSISTANT_STORAGE_METADATA_KEY] = {
+    stored = {
         "path": str(Path(reference["path"]).expanduser()),
         "array_path": str(reference.get("array_path") or ""),
     }
+    if reference.get("multiscale"):
+        stored["multiscale"] = True
+        stored["datasets"] = list(reference.get("datasets") or [])
+    metadata[LABEL_ASSISTANT_STORAGE_METADATA_KEY] = stored
     try:
         layer.metadata = metadata
     except Exception:
@@ -746,6 +1075,20 @@ def _clear_layers(viewer: Any) -> None:
         return
     while len(layers):
         layers.remove(layers[0])
+
+
+def _new_image_path(data_root: Path, index: int, name: str) -> Path:
+    base = data_root / f"{index:03d}_{_safe_name(name)}.image.ome.zarr"
+    if not base.exists():
+        return base
+    counter = 2
+    while True:
+        candidate = data_root / (
+            f"{index:03d}_{_safe_name(name)}_{counter}.image.ome.zarr"
+        )
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 def _new_mask_path(data_root: Path, index: int, name: str) -> Path:

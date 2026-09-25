@@ -414,6 +414,13 @@ class DynamicLabelsEditController:
         self.loading = False
         self.worker = None
         previous_mode = str(getattr(self.tile, "mode", "pan_zoom"))
+        selected_label = int(
+            getattr(
+                self.tile,
+                "selected_label",
+                getattr(source, "selected_label", 1),
+            )
+        )
         origin = np.asarray(
             source.data_to_world((bounds.y0, bounds.x0)), dtype=float
         ).ravel()[-2:]
@@ -445,7 +452,8 @@ class DynamicLabelsEditController:
                 self.block_data_event = False
         with suppress(Exception):
             self.tile.opacity = source.opacity
-            self.tile.selected_label = source.selected_label
+            self.tile.selected_label = selected_label
+            source.selected_label = selected_label
             self.tile.colormap = source.colormap
             self.tile.visible = True
             if previous_mode in {"paint", "erase", "fill", "polygon"}:
@@ -836,6 +844,11 @@ class DynamicLabelsEditController:
         self.loading = False
         if commit:
             self.commit(update_status=False)
+        if self.tile is not None and _layer_is_present(
+            self.viewer, self.source
+        ):
+            with suppress(Exception):
+                self.source.selected_label = int(self.tile.selected_label)
         if self.tile is not None:
             with suppress(Exception):
                 self.tile.events.data.disconnect(self._tile_changed)

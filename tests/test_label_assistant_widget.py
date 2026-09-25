@@ -49,7 +49,28 @@ def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
     assert [
         widget._tool_tabs.tabText(index)
         for index in range(widget._tool_tabs.count())
-    ] == ["Project", "Labels", "Visual Compare", "Mask Tools"]
+    ] == ["Workspace", "Labels", "Compare", "Combine"]
+    labels = widget._tool_tabs.widget(1)
+    assert labels._layer_activity_indicator is widget._activity_header
+    assert widget._activity_header.height() == 46
+
+
+def test_activity_header_paints_high_contrast_background(
+    make_napari_viewer, qtbot
+):
+    viewer = make_napari_viewer()
+    viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="mask")
+    widget = label_assistant_widget(viewer)
+    qtbot.addWidget(widget)
+    widget.show()
+    qtbot.wait(50)
+
+    image = widget._activity_header.grab().toImage()
+    background = image.pixelColor(8, 8)
+
+    assert background.red() > 220
+    assert background.green() > 235
+    assert background.blue() > 245
 
 
 def test_components_tab_exposes_full_component_controls(make_napari_viewer):
@@ -63,7 +84,7 @@ def test_components_tab_exposes_full_component_controls(make_napari_viewer):
     assert [
         components._workflow_tabs.tabText(index)
         for index in range(components._workflow_tabs.count())
-    ] == ["Annotate", "Grid & Components"]
+    ] == ["Local Editing", "Review & QC"]
     assert components._target_combo.findText("mask") >= 0
     assert components._component_table.columnCount() == 10
     assert components._analyze_button.text() == "Find components"
@@ -87,6 +108,46 @@ def test_layer_selectors_refresh_automatically_and_keep_visible_fallback(
 
     second.name = "renamed"
     qtbot.waitUntil(lambda: labels._target_combo.findText("renamed") >= 0)
+
+
+def test_layer_activity_indicator_tracks_napari_selection(
+    make_napari_viewer, qtbot
+):
+    viewer = make_napari_viewer()
+    image = viewer.add_image(
+        np.zeros((32, 32), dtype=np.uint8), name="reference image"
+    )
+    viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="mask")
+    widget = label_assistant_widget(viewer)
+    labels = widget._tool_tabs.widget(1)
+
+    viewer.layers.selection.active = image
+
+    qtbot.waitUntil(
+        lambda: labels._layer_activity_indicator.state == "ready"
+        and "reference image"
+        in labels._layer_activity_indicator.message.text()
+    )
+
+
+def test_layer_activity_indicator_tracks_source_selector(
+    make_napari_viewer, qtbot
+):
+    viewer = make_napari_viewer()
+    viewer.add_image(
+        np.zeros((32, 32), dtype=np.uint8), name="reference image"
+    )
+    viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="mask")
+    widget = label_assistant_widget(viewer)
+    labels = widget._tool_tabs.widget(1)
+
+    labels._target_combo.setCurrentText("reference image")
+
+    qtbot.waitUntil(
+        lambda: labels._layer_activity_indicator.state == "ready"
+        and "reference image"
+        in labels._layer_activity_indicator.message.text()
+    )
 
 
 

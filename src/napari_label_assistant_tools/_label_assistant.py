@@ -1,29 +1,15 @@
 from __future__ import annotations
 
 import napari
-from qtpy.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from ._widget import (
+    _LayerActivityIndicator,
     label_operations_widget,
     component_operations_widget,
     quick_compare_toggle_widget,
 )
 from ._workspace_widget import WorkspaceManagerWidget
-
-
-def _intro(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setWordWrap(True)
-    label.setToolTip(
-        "Annotate full-resolution 2D images at 100,000 × 100,000-pixel scale "
-        "without cropping. Use reproducible grid addresses to report, find, "
-        "correct, and re-review missing or incorrect mask regions."
-    )
-    label.setStyleSheet(
-        "QLabel { background-color: #e7f5ff; border: 1px solid #74c0fc; "
-        "color: #12344d; border-radius: 4px; padding: 7px; }"
-    )
-    return label
 
 
 def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
@@ -35,27 +21,34 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.addWidget(
-        _intro(
-            "Edit 100,000 × 100,000-pixel Labels layers, then review them "
-            "with traceable grid addresses."
-        )
+    activity_header = _LayerActivityIndicator(page)
+    activity_header.set_context_tooltip(
+        "Annotate full-resolution 2D images at 100,000 × 100,000-pixel scale "
+        "without cropping. Inspect and curate connected components, then use "
+        "reproducible grid addresses to report, correct, and re-review mask "
+        "regions."
     )
+    layout.addWidget(activity_header)
     tools = QTabWidget()
     tools.addTab(
         WorkspaceManagerWidget(napari_viewer=viewer),
-        "Project",
+        "Workspace",
     )
-    tools.addTab(component_operations_widget(viewer), "Labels")
-    tools.addTab(quick_compare_toggle_widget(viewer), "Visual Compare")
-    tools.addTab(label_operations_widget(viewer), "Mask Tools")
+    tools.addTab(
+        component_operations_widget(
+            viewer, activity_indicator=activity_header
+        ),
+        "Labels",
+    )
+    tools.addTab(quick_compare_toggle_widget(viewer), "Compare")
+    tools.addTab(label_operations_widget(viewer), "Combine")
     tools.setTabToolTip(
         0,
-        "Create, open, save, and transfer Label Assistant projects.",
+        "Create, open, save, and transfer complete Label Assistant workspaces.",
     )
     tools.setTabToolTip(
         1,
-        "Annotate Labels layers, then inspect components through grid-based QC.",
+        "Edit Labels locally, then review the full layer through grid-addressed QC.",
     )
     tools.setTabToolTip(
         2,
@@ -66,5 +59,6 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
         "Relabel, merge, compose, or calculate agreement across Labels layers.",
     )
     layout.addWidget(tools)
+    page._activity_header = activity_header
     page._tool_tabs = tools
     return page

@@ -80,6 +80,9 @@ def test_tiled_paint_data_writes_back_and_helpers_stay_internal(
     controller = widget._dynamic_edit_controller
     qtbot.waitUntil(lambda: controller.tile is not None, timeout=5000)
 
+    assert widget._layer_activity_indicator.state == "ready"
+    assert "Edit area ready" in widget._layer_activity_indicator.message.text()
+
     assert stale_tile not in viewer.layers
     assert stale_boundary not in viewer.layers
     assert controller.tile.name == "mask — editable area"
@@ -178,3 +181,39 @@ def test_native_brush_stroke_persists_to_zarr_source(
 
     reopened = zarr.open_array(str(path), mode="r")
     assert int(reopened[11, 17]) == 9
+
+
+def test_selected_label_persists_across_tile_reload_and_direct_mode(
+    make_napari_viewer, qtbot
+):
+    viewer = make_napari_viewer()
+    source = viewer.add_labels(
+        np.zeros((96, 128), dtype=np.uint32), name="mask"
+    )
+    widget = component_operations_widget(viewer)
+    qtbot.addWidget(widget)
+    widget._editing_strategy_combo.setCurrentIndex(
+        widget._editing_strategy_combo.findData("tiled")
+    )
+    controller = widget._dynamic_edit_controller
+    qtbot.waitUntil(lambda: controller.tile is not None, timeout=5000)
+
+    controller.tile.selected_label = 0
+    previous_request = controller.request_id
+    controller.ensure_tile(force=True)
+    qtbot.waitUntil(
+        lambda: controller.request_id > previous_request
+        and not controller.loading,
+        timeout=5000,
+    )
+
+    assert controller.tile.selected_label == 0
+    assert source.selected_label == 0
+
+    controller.tile.selected_label = 7
+    widget._editing_strategy_combo.setCurrentIndex(
+        widget._editing_strategy_combo.findData("direct")
+    )
+
+    assert controller.tile is None
+    assert source.selected_label == 7

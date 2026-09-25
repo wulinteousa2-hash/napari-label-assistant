@@ -25,6 +25,25 @@ class Labels:
         self.source = SimpleNamespace(path=None, reader_plugin=None)
 
 
+class Image:
+    def __init__(self, data, name="image", *, rgb=False):
+        self.data = data
+        self.name = name
+        self.visible = True
+        self.opacity = 1.0
+        self.blending = "translucent"
+        self.scale = (1.0, 1.0)
+        self.translate = (0.0, 0.0)
+        self.metadata = {}
+        self.source = SimpleNamespace(
+            path="reference.tiff", reader_plugin="napari"
+        )
+        self.contrast_limits = (0.0, 255.0)
+        self.colormap = SimpleNamespace(name="gray")
+        self.gamma = 1.0
+        self.rgb = rgb
+
+
 class LayerList(list):
     def __init__(self, values=()):
         super().__init__(values)
@@ -46,6 +65,12 @@ class FakeViewer:
 
     def add_labels(self, data, name):
         layer = Labels(data, name)
+        self.layers.append(layer)
+        return layer
+
+    def add_image(self, data, name, rgb=False, multiscale=False):
+        layer = Image(data, name, rgb=rgb)
+        layer.multiscale = multiscale
         self.layers.append(layer)
         return layer
 
@@ -159,3 +184,73 @@ def test_reads_existing_sam3_workspace_for_migration(tmp_path):
 
     assert payload["format"] == WORKSPACE_FORMAT
     assert payload["imported_from"] == "napari-sam3-workspace-v1"
+
+
+def test_large_image_can_be_saved_and_restored_as_multiscale_zarr(
+    tmp_path, monkeypatch
+):
+    zarr = pytest.importorskip("zarr")
+    from napari_label_assistant_tools.workspace import service
+
+    monkeypatch.setattr(service, "LARGE_IMAGE_AXIS_THRESHOLD", 4)
+    monkeypatch.setattr(service, "PYRAMID_SMALLEST_LEVEL", 2)
+    source = np.arange(63, dtype=np.uint8).reshape(7, 9)
+    layer = Image(source.copy(), "reference")
+    viewer = FakeViewer([layer])
+    path = tmp_path / "case.label-assistant.json"
+    progress = []
+
+    result = save_workspace(
+        viewer,
+        path,
+        xy_chunk=4,
+        optimize_large_images=True,
+        progress=lambda completed, total, message: progress.append(
+            (completed, total, message)
+        ),
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    storage = payload["layers"][0]["storage"]
+
+    assert result["optimized_images"] == 1
+    assert storage["kind"] == "zarr"
+    assert storage["multiscale"] is True
+    assert storage["datasets"] == ["s0", "s1", "s2", "s3"]
+    assert progress
+    pyramid_root = tmp_path / storage["path"]
+    stored_s0 = zarr.open_array(str(pyramid_root / "s0"), mode="r")
+    assert np.array_equal(np.asarray(stored_s0), source)
+
+    restored_viewer = FakeViewer()
+    load_workspace(restored_viewer, path)
+    restored = restored_viewer.layers[0]
+
+    assert restored.multiscale is True
+    assert [tuple(level.shape) for level in restored.data] == [
+        (7, 9),
+        (4, 5),
+        (2, 3),
+        (1, 2),
+    ]
+    assert type(restored.data[0]).__module__.startswith("zarr")
+
+
+def test_large_image_optimization_off_keeps_file_reference(
+    tmp_path, monkeypatch
+):
+    from napari_label_assistant_tools.workspace import service
+
+    monkeypatch.setattr(service, "LARGE_IMAGE_AXIS_THRESHOLD", 4)
+    layer = Image(np.zeros((7, 9), dtype=np.uint8), "reference")
+    path = tmp_path / "case.label-assistant.json"
+
+    save_workspace(
+        FakeViewer([layer]), path, optimize_large_images=False
+    )
+    storage = json.loads(path.read_text(encoding="utf-8"))["layers"][0][
+        "storage"
+    ]
+
+    assert storage["kind"] == "file"
+    assert storage["path"].endswith("reference.tiff")
+    assert not (tmp_path / "case_label_assistant_data").exists()

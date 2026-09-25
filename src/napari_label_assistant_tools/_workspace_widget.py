@@ -7,6 +7,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QSettings, Qt
 from qtpy.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,6 +25,7 @@ SETTINGS_ORG = "napari-label-assistant"
 SETTINGS_APP = "label-assistant"
 RECENT_WORKSPACES_KEY = "workspace/recent_manifests"
 LAST_WORKSPACE_KEY = "workspace/last_manifest"
+OPTIMIZE_LARGE_IMAGES_KEY = "workspace/optimize_large_images"
 RECENT_LIMIT = 10
 VIEWER_WORKSPACE_PATH_ATTR = "_label_assistant_workspace_path"
 VIEWER_WORKSPACE_LAYER_IDS_ATTR = "_label_assistant_workspace_layer_ids"
@@ -67,10 +69,35 @@ class WorkspaceManagerWidget(QWidget):
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
         self.status_label = QLabel(
-            "Normal Save writes a small manifest only. Writable masks remain "
-            "in their OME-Zarr stores."
+            "Save writes a small manifest. Writable masks remain in OME-Zarr; "
+            "images stay linked unless optimization is enabled."
         )
         self.status_label.setWordWrap(True)
+        self.optimize_images_check = QCheckBox(
+            "Optimize large images for viewing"
+        )
+        self.optimize_images_check.setChecked(
+            bool(
+                self.settings.value(
+                    OPTIMIZE_LARGE_IMAGES_KEY, False, type=bool
+                )
+            )
+        )
+        self.optimize_images_check.setToolTip(
+            "On Save, convert single-scale images larger than 32,768 pixels "
+            "on either axis into a local multiscale OME-Zarr pyramid. "
+            "The original image file is not changed."
+        )
+        self.optimize_images_note = QLabel(
+            "Creates a local multiscale OME-Zarr copy for smooth zooming after "
+            "reopening; original files stay unchanged. Off keeps links only."
+        )
+        self.optimize_images_note.setWordWrap(True)
+        self.optimize_images_check.toggled.connect(
+            lambda checked: self.settings.setValue(
+                OPTIMIZE_LARGE_IMAGES_KEY, bool(checked)
+            )
+        )
         self.recent_list = QListWidget()
         self.recent_list.setMinimumHeight(120)
         self.recent_list.itemDoubleClicked.connect(
@@ -85,22 +112,22 @@ class WorkspaceManagerWidget(QWidget):
         snapshot_button = QPushButton("Portable Snapshot")
 
         new_button.setToolTip(
-            "Clear the viewer and start an unsaved Label Assistant project."
+            "Clear the viewer and start an unsaved Label Assistant workspace."
         )
         open_button.setToolTip(
             "Load a Label Assistant manifest and open referenced masks "
             "lazily in writable mode."
         )
         save_button.setToolTip(
-            "Save only the manifest; new in-memory Labels are persisted "
-            "once as OME-Zarr."
+            "Save the manifest and persist new Labels data. If large-image "
+            "optimization is enabled, create reusable multiscale image copies."
         )
         save_as_button.setToolTip(
             "Write another manifest that references the same durable data "
             "stores."
         )
         recent_button.setToolTip(
-            "Open the project selected in the Recent list."
+            "Open the workspace selected in the Recent list."
         )
         snapshot_button.setToolTip(
             "Explicitly copy the manifest and all referenced local data "
@@ -126,10 +153,12 @@ class WorkspaceManagerWidget(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.addWidget(QLabel("Manage annotation project"))
+        layout.addWidget(QLabel("Manage annotation workspace"))
         layout.addWidget(self.current_label)
         layout.addLayout(first_row)
-        layout.addWidget(QLabel("Recent projects"))
+        layout.addWidget(self.optimize_images_check)
+        layout.addWidget(self.optimize_images_note)
+        layout.addWidget(QLabel("Recent workspaces"))
         layout.addWidget(self.recent_list)
         layout.addLayout(second_row)
         layout.addWidget(self.status_label)
@@ -182,7 +211,7 @@ class WorkspaceManagerWidget(QWidget):
     def open_selected_recent(self) -> None:
         item = self.recent_list.currentItem()
         if item is None:
-            self._set_status("Select a recent project first.")
+            self._set_status("Select a recent workspace first.")
             return
         self._load_path(Path(item.text()))
 
@@ -263,14 +292,62 @@ class WorkspaceManagerWidget(QWidget):
         )
 
     def _save_path(self, path: Path) -> None:
-        self._run(
-            lambda: save_workspace(self.viewer, path),
-            success=lambda result: (
-                f"Saved {result['saved_layers']} layer(s) to {result['path']}. "
-                f"Skipped {len(result['skipped_layers'])} layer(s)."
-            ),
-            completed_path=path,
-        )
+        optimize = self.optimize_images_check.isChecked()
+        dialog = None
+        if optimize:
+            dialog = QProgressDialog(self)
+            dialog.setWindowTitle("Optimizing and Saving Workspace")
+            dialog.setWindowModality(Qt.WindowModal)
+            dialog.setCancelButton(None)
+            dialog.setAutoClose(False)
+            dialog.setAutoReset(False)
+            dialog.setMinimumDuration(500)
+            dialog.setRange(0, 0)
+            dialog.setLabelText("Checking large images…")
+            dialog.setMinimumWidth(420)
+            dialog.show()
+            QApplication.processEvents()
+
+        def _progress(completed: int, total: int, message: str) -> None:
+            if dialog is None:
+                return
+            maximum = max(1, int(total))
+            dialog.setRange(0, maximum)
+            dialog.setValue(min(int(completed), maximum))
+            dialog.setLabelText(
+                f"{message}\n{min(int(completed), maximum):,} of "
+                f"{maximum:,} tiles"
+            )
+            self._set_status(message)
+            QApplication.processEvents()
+
+        def _success(result) -> str:
+            optimized = int(result.get("optimized_images", 0))
+            detail = (
+                f" Prepared {optimized} image(s) for multiscale viewing; "
+                "reopen the workspace to use them."
+                if optimized
+                else ""
+            )
+            saved_layers = result.get("saved_layers")
+            saved_path = result.get("path")
+            return f"Saved {saved_layers} layer(s) to {saved_path}." + detail
+
+        try:
+            self._run(
+                lambda: save_workspace(
+                    self.viewer,
+                    path,
+                    optimize_large_images=optimize,
+                    progress=_progress if optimize else None,
+                ),
+                success=_success,
+                completed_path=path,
+            )
+        finally:
+            if dialog is not None:
+                dialog.close()
+                dialog.deleteLater()
 
     def _load_path(self, path: Path) -> None:
         if self.viewer is None:
@@ -448,8 +525,10 @@ class WorkspaceManagerWidget(QWidget):
             self.recent_list.addItem(path)
 
     def _refresh_current_label(self) -> None:
-        text = str(self.workspace_path) if self.workspace_path else "Unsaved project"
-        self.current_label.setText(f"Current project: {text}")
+        text = (
+            str(self.workspace_path) if self.workspace_path else "Unsaved workspace"
+        )
+        self.current_label.setText(f"Current workspace: {text}")
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(str(message))

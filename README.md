@@ -13,23 +13,23 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 1.0.2 highlights
+## Version 1.0.3 highlights
 
-- Project Save no longer reuses a recent project's filename for unrelated
-  viewer contents, and removing all project layers returns the viewer to an
-  explicit unsaved state.
-- Before replacing a project manifest, Save retains its previous version as a
-  recoverable `.backup.json` file.
-- Grid-address labels now update atomically while panning and zooming, avoiding
-  transient point/text indexing errors in napari's renderer.
-- Editing-status styles no longer produce harmless Qt parser warnings in the
-  backend.
+- Optionally convert oversized single-scale reference images into reusable,
+  chunked multiscale OME-Zarr pyramids from the Workspace tab.
+- Follow layer and editable-area preparation through a compact, fixed-size
+  activity indicator.
+- Navigate the clearer **Workspace**, **Labels**, **Compare**, and **Combine**
+  hierarchy, with **Local Editing** separated from **Review & QC**.
+- Keep the selected paint label, including background value `0`, across local
+  area reloads caused by panning and zooming.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
 ## Workflow at a glance
 
-1. **Annotate:** create, extend, erase, or reshape labels at full resolution.
+1. **Local Editing:** create, extend, erase, or reshape labels at full
+   resolution through a memory-controlled editable area when needed.
 2. **Inspect:** analyze each nonzero label value as one or more connected
    components and sort the results by size, topology, position, or grid
    address.
@@ -96,13 +96,18 @@ unconditional hardware-independent limit.
 
 The dock widget is organized into four workflow areas:
 
-### Project
+### Workspace
 
 Open **Plugins → napari-label-assistant → Label Assistant**, then use the first
-**Project** tab to create, open, and save a complete project without SAM3
-Assistant.
+**Workspace** tab to create, open, and save a complete annotation workspace
+without SAM3 Assistant.
 
 - A normal save writes a small `.label-assistant.json` manifest.
+- **Optimize large images for viewing** optionally creates a local, chunked
+  multiscale OME-Zarr pyramid for single-scale images larger than 32,768
+  pixels on either axis. The original file remains unchanged; reopen the
+  workspace after the first optimized save to use the pyramid. Leave the
+  option off to keep lightweight links to the original image files.
 - New in-memory Labels layers are persisted once as writable, chunked
   OME-Zarr data beside the manifest. Later saves reuse the same store instead
   of copying the full mask again.
@@ -131,13 +136,23 @@ format.
 
 Choose one Labels layer, then switch between two task-focused tabs:
 
-- **Annotate** contains the memory-controlled Paint and Erase workflow.
-- **Grid & Components** contains grid registration, component actions, canvas
-  selection, and an expandable results table for large result sets.
+- **Local Editing** contains the memory-controlled Paint and Erase workflow.
+  It edits a bounded local view and applies changes to the selected source
+  Labels layer.
+- **Review & QC** inspects the full source Labels layer through grid
+  registration, component actions, canvas selection, and an expandable
+  results table for large result sets.
 
 Layer selectors update automatically when layers are opened, added, removed,
 or renamed. **Refresh layers** remains beside the shared Labels-layer selector
 as an always-visible fallback; it is no longer buried among component actions.
+
+The fixed top header is a compact activity indicator that confirms when napari
+is preparing a layer view and when the local editable area is ready. It uses
+short states such as **Preparing view**, **View ready**, and **Edit area ready ·
+4096 × 4096**. Long layer names are shortened visually without changing the
+dock or table geometry; the full status and product description remain in the
+header tooltip.
 
 **Memory-controlled editing** appears first because it controls how napari
 accesses the selected layer:
@@ -192,13 +207,13 @@ and source coordinate system when addresses must remain stable. The current
 reviewer comments, assignments, completion states, or a change-history audit
 log.
 
-### Visual Compare
+### Compare
 
 Compare an image with a Labels layer while keeping the Labels layer active for
 editing. The view controls can show either layer, show both, dim the labels, or
 temporarily pulse, blink, and peek between them.
 
-### Mask Tools
+### Combine
 
 Perform mask and label operations across one or more compatible layers:
 
