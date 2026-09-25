@@ -1,15 +1,17 @@
 # napari-label-assistant
 
-**Annotate 2D images at 100,000 × 100,000-pixel scale without cropping,
-then review and correct the mask through traceable grid addresses.**
+**Performance-aware 2D mask annotation, connected-component curation, and
+traceable spatial review—from ordinary images to datasets approaching
+100,000 × 100,000 pixels.**
 
-napari-label-assistant closes the loop between annotation and quality control.
-The annotator works on the full-resolution Labels layer through a
-memory-controlled local area designed to remain responsive. The reviewer works
-in the same source coordinate system and uses reproducible addresses such as
-**R12C08** to report missing, under-labeled, over-labeled, or incorrectly
-segmented regions. The annotator can return to that exact cell, correct the
-mask, and submit it for re-review.
+napari-label-assistant connects the complete mask-development workflow:
+annotate at full resolution, inspect connected components, collect accepted
+regions into a curated Labels layer, review the result by reproducible grid
+address, correct reported locations, and resume the project later.
+
+The plugin is model-agnostic. Candidate masks can come from manual annotation,
+SAM3, or another segmentation workflow. The final curated layer can then be
+used for training, measurement, quantification, or export.
 
 ## Version 1.0.2 highlights
 
@@ -25,42 +27,58 @@ mask, and submit it for re-review.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
-## Two-part workflow
+## Workflow at a glance
 
-### 1. Full-resolution annotation
+1. **Annotate:** create, extend, erase, or reshape labels at full resolution.
+2. **Inspect:** analyze each nonzero label value as one or more connected
+   components and sort the results by size, topology, position, or grid
+   address.
+3. **Curate:** remove artifacts and copy accepted components from candidate
+   masks into a curated destination Labels layer.
+4. **Review:** register findings with grid addresses such as **R12C08**, so an
+   independent reviewer and annotator can refer to the same location.
+5. **Correct and resume:** return to a reported cell, update the source mask,
+   save the project, and continue later with the same layer and viewer state.
 
-- Create and extend labels with napari Paint, Fill, and Polygon tools.
-- Remove or reshape labels with Erase.
-- Move continuously across the image while a bounded camera-centered region is
-  loaded for editing.
-- Apply only changed pixels back to the original Labels layer automatically or
-  with **Apply edits**.
-- Preserve the original image dimensions and coordinates without producing
-  cropped working files that later need to be reassembled.
+## Connected-component inquiry and curation
 
-### 2. Grid-addressed review and correction
-
-- Register the full mask with reproducible grid row, column, and cell addresses.
-- Display those addresses around the current viewport while retaining the same
-  registration across pan and zoom.
-- Assign each connected component to the grid address containing its centroid.
-- Let reviewers identify a labeled component with a grid address and component
-  ID, or identify a missing label with the grid address alone.
-- Return directly to the reported cell for correction and follow-up review.
-- Keep annotation, reviewer feedback, correction, and QC discussion traceable
-  to the same full-resolution location.
-
-## Component and label analysis
+The component table turns a segmentation mask into an inspectable set of
+regions. It is designed to remain usable when the mask contains many
+components and the full image is too large for naive in-memory analysis.
 
 - Detect connected components independently within each nonzero label value.
-- Sort components by label value, pixel count, Euler number, centroid, bounds,
-  or grid address.
-- Use Euler number to review component topology: `1` indicates no holes, `0`
-  indicates one hole, and `-1` indicates two holes.
-- Locate components on the canvas, build multi-component selections, delete
-  selected regions, or copy them to a compatible Labels layer.
-- Compare image and Labels layers, reassign values, combine layers, and create
-  vote-count or consensus results.
+- Sort by label value, pixel count, Euler number, centroid, bounds, or grid
+  address.
+- Double-click a table row to locate its component on the canvas.
+- Click a labeled region on the canvas to select its table row; optionally add
+  successive clicks to a multi-component selection.
+- Delete noise and other unwanted regions individually or in batches.
+- Copy accepted components individually or in batches to a compatible curated
+  destination Labels layer.
+
+Euler number provides a compact 2D topology check: `1` indicates a solid
+component with no holes, `0` indicates one hole, and `-1` indicates two holes.
+Combined with area sorting, this helps distinguish small artifacts, solid
+blobs, ring-like structures, and components that merit closer inspection.
+
+Component IDs identify results within the current analysis. Editing the mask
+and running the analysis again may change those IDs. Grid addresses provide
+the reproducible spatial reference used across review sessions.
+
+### Candidate and curated Labels layers
+
+A practical workflow uses two roles rather than requiring every segmentation
+result to be edited in place:
+
+- **Candidate layers** contain model predictions, partial masks, or regions
+  awaiting review.
+- **Curated destination layers** collect accepted annotations for downstream
+  training, measurement, quantification, or export.
+
+Candidate regions produced by SAM3 are one example, but the same workflow
+works with any compatible napari Labels layer. Users can inspect candidates
+visually, select them from the table or canvas, and copy only accepted regions
+into the curated layer.
 
 ## 100,000 × 100,000-pixel workflows
 
@@ -93,6 +111,11 @@ Assistant.
   images and masks into one folder for transfer.
 - Pending local-area edits are applied to the source Labels layer before the
   project is saved.
+- The JSON file is a lightweight project manifest rather than a container for
+  the full image. Large mask pixels remain in writable OME-Zarr storage.
+- A recent project is not treated as the active Save destination for unrelated
+  viewer contents. Before a manifest is overwritten, its previous version is
+  retained as a `.backup.json` file.
 - Grid cell dimensions and grid display/assignment choices are restored with
   each Labels layer.
 - Opening a project displays layer-by-layer progress in a temporary dialog;
@@ -147,6 +170,11 @@ a full 2D mask. With the same cell height, cell width, grid origin, and source
 coordinate system, a reference such as **R12C08** identifies the same location
 across masking, review, correction, and follow-up QC sessions—even between
 collaborators.
+
+Grid-cell size is user-defined, with a default of 100 × 100 pixels. The grid
+serves both as an annotation map and as a shared review vocabulary:
+screenshots, review notes, and correction requests can carry the same address
+without creating or exchanging cropped coordinate systems.
 
 - Enable **Assign grid addresses to results** to register each component by the
   grid row, column, and cell containing its centroid.
