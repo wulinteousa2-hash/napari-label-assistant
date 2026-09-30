@@ -1682,18 +1682,30 @@ def component_operations_widget(
     btn_analyze = QPushButton("Find components")
     btn_delete = QPushButton("Delete selected")
     btn_copy = QPushButton("Copy selected")
-    btn_copy_last = QPushButton("Copy again")
     action_layout.addWidget(btn_analyze)
     action_layout.addWidget(btn_delete)
+    action_layout.addWidget(btn_copy)
     analysis_layout.addWidget(action_row)
 
-    copy_action_row = QWidget()
-    copy_action_layout = QHBoxLayout(copy_action_row)
-    copy_action_layout.setContentsMargins(0, 0, 0, 0)
-    copy_action_layout.setSpacing(6)
-    copy_action_layout.addWidget(btn_copy)
-    copy_action_layout.addWidget(btn_copy_last)
-    analysis_layout.addWidget(copy_action_row)
+    cleanup_row = QWidget()
+    cleanup_layout = QHBoxLayout(cleanup_row)
+    cleanup_layout.setContentsMargins(0, 0, 0, 0)
+    cleanup_layout.addWidget(QLabel("Remove below"))
+    small_component_size_spin = QSpinBox()
+    small_component_size_spin.setRange(1, 2147483647)
+    small_component_size_spin.setValue(2)
+    small_component_size_spin.setSuffix(" pixels")
+    small_component_size_spin.setToolTip(
+        "Strict area threshold: below 2 pixels removes only one-pixel components."
+    )
+    cleanup_layout.addWidget(small_component_size_spin)
+    btn_remove_small = QPushButton("Remove small components")
+    btn_remove_small.setToolTip(
+        "After Find components, delete every component below the threshold "
+        "from the source mask and results, across all pages."
+    )
+    cleanup_layout.addWidget(btn_remove_small)
+    analysis_layout.addWidget(cleanup_row)
 
     btn_analyze.setToolTip(
         "Detect and measure connected components in the selected 2D Labels layer."
@@ -1705,9 +1717,6 @@ def component_operations_widget(
         "Copy the selected components and their label values to the chosen "
         "destination layer."
     )
-    btn_copy_last.setToolTip(
-        "Repeat the previous successful copy using the same destination layer."
-    )
 
     copy_target_combo = QComboBox()
     copy_target_combo.setToolTip(
@@ -1715,6 +1724,13 @@ def component_operations_widget(
         "same 2D shape as the source layer."
     )
     form.addRow("Copy destination", copy_target_combo)
+    manual_copy_target_check = QCheckBox("Choose destination manually")
+    manual_copy_target_check.setToolTip(
+        "Choose a Labels layer or type a new name. Copy selected creates a "
+        "destination matching the source's 2D shape when needed. An existing "
+        "layer with a different shape is preserved."
+    )
+    form.addRow("", manual_copy_target_check)
 
     click_select_check = QCheckBox("Select components from canvas")
     click_select_check.setToolTip(
@@ -1874,11 +1890,13 @@ def component_operations_widget(
             assign_grid_check.isChecked()
         )
 
-    def _eligible_copy_targets(source_layer) -> list[napari.layers.Layer]:
+    def _eligible_copy_targets(
+        source_layer, *, manual=False
+    ) -> list[napari.layers.Layer]:
         if source_layer is None:
             return []
         source_shape = _supported_2d_mask_shape(getattr(source_layer, "data", None))
-        if source_shape is None:
+        if source_shape is None and not manual:
             return []
         targets: list[napari.layers.Layer] = []
         for layer in viewer.layers:
@@ -1888,27 +1906,46 @@ def component_operations_widget(
                 continue
             if layer is source_layer:
                 continue
-            if _supported_2d_mask_shape(getattr(layer, "data", None)) != source_shape:
+            if (
+                not manual
+                and _supported_2d_mask_shape(getattr(layer, "data", None))
+                != source_shape
+            ):
                 continue
             targets.append(layer)
         return targets
 
     def _refresh_copy_targets() -> None:
-        current_copy = getattr(
-            copy_target_combo.currentData(),
-            "name",
-            copy_target_combo.currentText() or state.last_copy_target_name,
+        current_copy = (
+            copy_target_combo.currentText()
+            if manual_copy_target_check.isChecked()
+            else getattr(
+                copy_target_combo.currentData(),
+                "name",
+                copy_target_combo.currentText() or state.last_copy_target_name,
+            )
         )
         source_layer = _target_layer()
         copy_target_combo.blockSignals(True)
         copy_target_combo.clear()
-        for layer in _eligible_copy_targets(source_layer):
+        for layer in _eligible_copy_targets(
+            source_layer, manual=manual_copy_target_check.isChecked()
+        ):
             copy_target_combo.addItem(layer.name, layer)
         if current_copy:
             idx = copy_target_combo.findText(current_copy)
             if idx >= 0:
                 copy_target_combo.setCurrentIndex(idx)
+            elif manual_copy_target_check.isChecked():
+                copy_target_combo.setEditText(current_copy)
         copy_target_combo.blockSignals(False)
+
+    def _set_manual_copy_target(enabled: bool) -> None:
+        copy_target_combo.setEditable(enabled)
+        copy_target_combo.setInsertPolicy(QComboBox.NoInsert)
+        _refresh_copy_targets()
+
+    manual_copy_target_check.toggled.connect(_set_manual_copy_target)
 
     def _refresh_targets() -> None:
         current = target_combo.currentText()
@@ -1924,6 +1961,11 @@ def component_operations_widget(
         _refresh_copy_targets()
 
     def _copy_target_layer():
+        if manual_copy_target_check.isChecked():
+            name = copy_target_combo.currentText().strip()
+            with suppress(KeyError):
+                return viewer.layers[name]
+            return None
         layer = copy_target_combo.currentData()
         if isinstance(layer, napari.layers.Labels):
             with suppress(ValueError):
@@ -2325,9 +2367,11 @@ def component_operations_widget(
                 f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name}."
             )
 
-    def _delete_selected() -> None:
+    def _delete_selected(component_ids=None) -> None:
         layer = _target_layer()
-        ids = _selected_component_ids()
+        ids = _selected_component_ids() if component_ids is None else component_ids
+        if large_controller.busy:
+            raise ValueError("Wait for the current large-label operation to finish.")
         if layer is None or not ids:
             raise ValueError("Select component rows to delete.")
         if state.analyzed_layer_name != layer.name or state.fast_index is None:
@@ -2364,8 +2408,27 @@ def component_operations_widget(
         component_table.set_records(state.fast_index.active_records())
         _update_selection_summary()
         _set_status(
-            f"Deleted {len(ids)} selected component(s) from {layer.name}."
+            f"Deleted {len(ids)} component(s), {changed:,} pixels from {layer.name}."
         )
+
+    def _remove_small_components() -> None:
+        layer = _target_layer()
+        if layer is None or not isinstance(layer, napari.layers.Labels):
+            raise ValueError("Choose a source Labels layer to clean.")
+        if large_controller.busy:
+            raise ValueError("Wait for the current large-label operation to finish.")
+        if state.fast_index is None or state.analyzed_layer_name != layer.name:
+            raise ValueError("Click Find components before removing small components.")
+        threshold = small_component_size_spin.value()
+        ids = [
+            record.component_id
+            for record in state.fast_index.active_records()
+            if record.area < threshold
+        ]
+        if not ids:
+            _set_status(f"No components below {threshold} pixels in {layer.name}.")
+            return
+        _delete_selected(ids)
 
     def _copy_selected_to_layer(target_layer) -> None:
         source_layer = _target_layer()
@@ -2376,8 +2439,47 @@ def component_operations_widget(
             raise ValueError(
                 "Component table is stale. Click Analyze before copying."
             )
+        if target_layer is source_layer:
+            raise ValueError("Choose a destination Labels layer different from the source.")
+        source_shape = _supported_2d_mask_shape(source_layer.data)
+        if large_controller.busy:
+            raise ValueError("Wait for the current large-label operation to finish.")
+        if manual_copy_target_check.isChecked() and (
+            target_layer is None
+            or (
+                isinstance(target_layer, napari.layers.Labels)
+                and _supported_2d_mask_shape(target_layer.data) != source_shape
+            )
+        ):
+            name = copy_target_combo.currentText().strip()
+            if not name:
+                raise ValueError("Enter a name for the destination Labels layer.")
+            if source_shape is None:
+                raise ValueError("Copying requires a 2D source Labels layer.")
+            if target_layer is not None:
+                name = f"{target_layer.name} (source shape)"
+            source_data = source_layer.data
+            while isinstance(source_data, (list, tuple)):
+                source_data = source_data[0]
+            axes = [i for i, size in enumerate(source_data.shape) if size != 1]
+            target_layer = viewer.add_labels(
+                np.zeros(source_shape, dtype=source_data.dtype),
+                name=name,
+                scale=tuple(source_layer.scale[i] for i in axes),
+                translate=tuple(source_layer.translate[i] for i in axes),
+            )
+            _refresh_targets()
+            copy_target_combo.setCurrentText(target_layer.name)
+            viewer.layers.selection.active = source_layer
         if target_layer is None or not isinstance(target_layer, napari.layers.Labels):
             raise ValueError("Choose a valid destination labels layer.")
+        target_shape = _supported_2d_mask_shape(target_layer.data)
+        if source_shape is None or target_shape != source_shape:
+            raise ValueError(
+                f"Copy destination {target_layer.name!r} must have the same 2D "
+                f"shape as {source_layer.name!r}: source={source_shape}, "
+                f"destination={target_shape}."
+            )
         if isinstance(state.fast_index, LargeComponentIndex):
             index = state.fast_index
 
@@ -2413,16 +2515,6 @@ def component_operations_widget(
             f"to {target_layer.name}. Source layer remains active."
         )
         _refresh_targets()
-
-    def _copy_selected_to_last_target() -> None:
-        if not state.last_copy_target_name:
-            raise ValueError("No previous copy target yet. Choose a target layer first.")
-        with suppress(KeyError):
-            layer = viewer.layers[state.last_copy_target_name]
-            if isinstance(layer, napari.layers.Labels):
-                _copy_selected_to_layer(layer)
-                return
-        raise ValueError("Last copy target is no longer available. Choose a target layer again.")
 
     def _show_component_context_menu(position) -> None:
         ids = _selected_component_ids()
@@ -2715,11 +2807,8 @@ def component_operations_widget(
     btn_copy.clicked.connect(
         lambda: _run_safely(lambda: _copy_selected_to_layer(_copy_target_layer()))
     )
-    btn_copy_last.clicked.connect(lambda: _run_safely(_copy_selected_to_last_target))
+    btn_remove_small.clicked.connect(lambda: _run_safely(_remove_small_components))
     btn_copy.setToolTip("Copy all currently selected rows to the chosen target layer.")
-    btn_copy_last.setToolTip(
-        "Repeat the last successful copy destination without changing layer focus."
-    )
     component_table.itemSelectionChanged.connect(_on_table_selection_changed)
     page_spin.valueChanged.connect(lambda _value: _render_component_page())
     target_combo.currentIndexChanged.connect(lambda _idx: _on_target_changed())
@@ -2766,10 +2855,13 @@ def component_operations_widget(
     container._page_spin = page_spin
     container._analysis_progress = analysis_progress
     container._copy_target_combo = copy_target_combo
+    container._manual_copy_target_check = manual_copy_target_check
     container._click_select_check = click_select_check
     container._append_click_select_check = append_click_select_check
     container._copy_button = btn_copy
     container._delete_button = btn_delete
+    container._remove_small_button = btn_remove_small
+    container._small_component_size_spin = small_component_size_spin
     container._cancel_analysis_button = btn_cancel_analysis
     container._editing_strategy_combo = editing_strategy_combo
     container._edit_tile_size_combo = edit_tile_size_combo

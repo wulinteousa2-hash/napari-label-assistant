@@ -3,6 +3,55 @@ from qtpy.QtCore import qInstallMessageHandler
 from qtpy.QtWidgets import QLabel, QPushButton
 
 from napari_label_assistant_tools import label_assistant_widget
+from napari_label_assistant_tools._widget import component_operations_widget
+
+
+def test_copy_destination_refresh_and_manual_selection(make_napari_viewer):
+    viewer = make_napari_viewer()
+    mask = np.zeros((12, 12), dtype=np.uint8)
+    mask[2:5, 2:5] = 1
+    source = viewer.add_labels(mask, name="source", scale=(2, 3), translate=(4, 5))
+    widget = component_operations_widget(viewer)
+    curated = viewer.add_labels(np.zeros_like(mask), name="Curated")
+    widget._refresh_layers_button.click()
+    assert widget._copy_target_combo.findText("Curated") >= 0
+
+    other = viewer.add_labels(np.zeros((8, 8), dtype=np.uint8), name="other")
+    widget._refresh_layers_button.click()
+    assert widget._copy_target_combo.findText("other") == -1
+    widget._manual_copy_target_check.setChecked(True)
+    assert widget._copy_target_combo.findText("other") >= 0
+    widget._copy_target_combo.setEditText("other")
+    widget._refresh_layers_button.click()
+    assert widget._copy_target_combo.currentText() == "other"
+
+    widget._analyze_button.click()
+    widget._component_table.select_component_id(1)
+    widget._copy_button.click()
+    matching = viewer.layers["other (source shape)"]
+    assert np.array_equal(matching.data, mask)
+    assert np.array_equal(matching.scale, source.scale)
+    assert np.array_equal(matching.translate, source.translate)
+    assert widget._copy_target_combo.currentText() == matching.name
+    assert viewer.layers.selection.active is source
+    assert not np.any(other.data)
+
+    widget._copy_target_combo.setEditText("missing")
+    widget._refresh_layers_button.click()
+    assert widget._copy_target_combo.currentText() == "missing"
+    widget._copy_button.click()
+    assert np.array_equal(viewer.layers["missing"].data, mask)
+
+    layer_count = len(viewer.layers)
+    widget._copy_button.click()
+    assert len(viewer.layers) == layer_count
+
+    widget._copy_target_combo.setEditText("Curated")
+    widget._copy_button.click()
+    assert np.array_equal(curated.data, mask)
+    widget._manual_copy_target_check.setChecked(False)
+    assert not widget._copy_target_combo.isEditable()
+    assert widget._copy_target_combo.findText("other") == -1
 
 
 def test_label_assistant_stylesheets_parse_without_qt_warnings(

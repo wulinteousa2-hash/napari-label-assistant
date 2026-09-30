@@ -3,6 +3,28 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-30
+
+### Added
+
+- Added manual copy-destination selection and automatic creation of a Labels
+  layer matching the source's 2D shape. Incompatible existing destinations are
+  preserved while a matching destination is created and selected.
+- Added **Remove small components** with an adjustable area threshold (default:
+  below 2 pixels) to clean the source mask and results across all pages.
+
+### Changed
+
+- Grouped **Find components**, **Delete selected**, and **Copy selected** together
+  and removed the redundant **Copy again** button.
+
+### Fixed
+
+- Large-image analysis cancellation no longer raises a main-thread traceback.
+  Controls and layer editability are restored, and analysis can be restarted.
+- Analysis failures are reported through the status message without reraising
+  worker exceptions in the Qt event loop.
+
 ## [1.0.3] - 2026-09-25
 
 ### Added

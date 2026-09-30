@@ -6,8 +6,8 @@ from threading import Event
 from typing import Callable
 
 import numpy as np
-from napari.qt.threading import create_worker
 from qtpy.QtCore import QTimer
+from superqt.utils import create_worker
 
 from ._large_components import (
     LargeAnalysisCancelled,
@@ -66,13 +66,15 @@ class LargeComponentController:
             source,
             cancel_event=self.cancel_event,
             _start_thread=False,
+            # Register at creation so superqt does not also install its
+            # default main-thread exception re-raiser.
+            _connect={"errored": self._on_error},
         )
         self.worker = worker
         worker.yielded.connect(self._on_progress)
         worker.returned.connect(
             lambda index: self._on_returned(layer_name, index)
         )
-        worker.errored.connect(self._on_error)
         worker.finished.connect(self._on_finished)
         if layer is not None and hasattr(layer, "editable"):
             was_editable = bool(layer.editable)
@@ -94,6 +96,8 @@ class LargeComponentController:
     def _on_returned(self, layer_name: str, index: LargeComponentIndex) -> None:
         if self.closed or (self.cancel_event and self.cancel_event.is_set()):
             index.close()
+            if not self.closed:
+                self.status("Large-mask analysis canceled; no mask data was changed.")
             return
         self.on_ready(layer_name, index)
 

@@ -147,6 +147,21 @@ Layer selectors update automatically when layers are opened, added, removed,
 or renamed. **Refresh layers** remains beside the shared Labels-layer selector
 as an always-visible fallback; it is no longer buried among component actions.
 
+Review & QC's **Copy destination** lists other Labels layers with the same 2D
+shape as the selected source. Enable **Choose destination manually** to list
+all other Labels layers or type a new layer name. **Copy selected** automatically
+creates a destination with the source's 2D shape, label data type, scale, and
+translation when the name is new. If the chosen Labels layer has a different
+shape, it creates and selects a new layer named **<destination> (source shape)**,
+preserving the existing layer. Subsequent copies use the new destination.
+The source cannot be its own destination.
+
+To clean isolated specks, run **Find components**, set **Remove below** (default:
+**2 pixels**), and click **Remove small components**. This sets every connected
+component with an area strictly below the threshold to background (0), and
+removes it from the results across all pages. Components exactly at the threshold
+are kept; no row selection or sorting is needed.
+
 The fixed top header is a compact activity indicator that confirms when napari
 is preparing a layer view and when the local editable area is ready. It uses
 short states such as **Preparing view**, **View ready**, and **Edit area ready ·
