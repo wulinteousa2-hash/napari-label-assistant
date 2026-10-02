@@ -166,3 +166,29 @@ def test_partial_load_warns_about_missing_layers(make_napari_viewer, tmp_path, m
     assert len(warnings) == 1
     assert "image" in warnings[0][2]
     assert "Complete package copy" in warnings[0][2]
+
+
+def test_complete_package_with_optimization_preserves_real_multiscale_image(
+    make_napari_viewer, tmp_path, monkeypatch
+):
+    import shutil
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, "LARGE_IMAGE_AXIS_THRESHOLD", 4)
+    viewer = make_napari_viewer()
+    pixels = np.arange(64, dtype=np.uint8).reshape(8, 8)
+    image = viewer.add_image([pixels, pixels[::2, ::2]], multiscale=True, name="reference")
+    viewer.add_labels(np.ones((8, 8), dtype=np.uint8), name="Curated")
+    assert image.multiscale
+    assert not service._needs_image_pyramid(image)
+    package = tmp_path / "package"
+    service.save_workspace(viewer, package / "project.json", complete_package=True,
+                           optimize_large_images=True, xy_chunk=3)
+    moved = tmp_path / "moved"
+    shutil.move(str(package), moved)
+    restored = make_napari_viewer()
+    result = service.load_workspace(restored, moved / "project.json")
+    assert result["skipped_layers"] == []
+    assert restored.layers["reference"].multiscale
+    assert len(restored.layers["reference"].data) == 2
+    assert np.array_equal(np.asarray(restored.layers["reference"].data[0]), pixels)
+    assert np.all(np.asarray(restored.layers["Curated"].data) == 1)

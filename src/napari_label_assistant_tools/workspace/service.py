@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 import os
 import re
 import shutil
@@ -653,7 +654,9 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
 
 def _needs_image_pyramid(layer: Any) -> bool:
     data = getattr(layer, "data", None)
-    if isinstance(data, (list, tuple)):
+    if bool(getattr(layer, "multiscale", False)) or (
+        isinstance(data, Sequence) and not isinstance(data, (str, bytes, np.ndarray))
+    ):
         return False
     shape = tuple(int(value) for value in getattr(data, "shape", ()))
     rgb = bool(getattr(layer, "rgb", False))

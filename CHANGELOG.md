@@ -7,6 +7,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Complete package saves with image optimization now recognize napari
+  MultiScaleData and preserve existing pyramid levels instead of attempting
+  to index the pyramid wrapper as a single image array.
+
 - Detect incomplete or shadowed Zarr installations with the imported module
   location and actionable diagnostics before clearing existing viewer layers.
 - Distinguish dependency failures from missing workspace data in load warnings.
