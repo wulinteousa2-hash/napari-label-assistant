@@ -59,8 +59,8 @@ def test_large_image_optimization_preference_is_explicit_and_persistent(
     )
 
     assert widget.optimize_images_check.isChecked() is False
-    assert "multiscale OME-Zarr" in widget.optimize_images_note.text()
-    assert "Off keeps links" in widget.optimize_images_note.text()
+    assert "navigation" in widget.optimize_images_note.text()
+    assert "multiscale" in widget.optimize_images_check.toolTip()
 
     widget.optimize_images_check.setChecked(True)
     settings = _settings(settings_path)
@@ -138,10 +138,10 @@ def test_complete_package_setting_persists_and_reaches_save(make_napari_viewer, 
     settings_path = tmp_path / "settings.ini"
     viewer = make_napari_viewer()
     widget = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
-    assert not widget.complete_package_check.isChecked()
-    widget.complete_package_check.setChecked(True)
+    assert widget.storage_mode_combo.currentData() is False
+    widget.storage_mode_combo.setCurrentIndex(1)
     restored = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
-    assert restored.complete_package_check.isChecked()
+    assert restored.storage_mode_combo.currentData() is True
     calls = []
     def fake_save(viewer, path, **kwargs):
         calls.append(kwargs)
@@ -149,7 +149,7 @@ def test_complete_package_setting_persists_and_reaches_save(make_napari_viewer, 
     monkeypatch.setattr(module, "save_workspace", fake_save)
     restored._save_path(tmp_path / "project.json")
     assert calls[0]["complete_package"] is True
-    assert "Transfer the manifest" in restored.status_label.text()
+    assert "Keep the workspace file" in restored.status_label.text()
 
 
 def test_partial_load_warns_about_missing_layers(make_napari_viewer, tmp_path, monkeypatch):
@@ -165,7 +165,7 @@ def test_partial_load_warns_about_missing_layers(make_napari_viewer, tmp_path, m
     widget._load_with_progress(tmp_path / "project.json")
     assert len(warnings) == 1
     assert "image" in warnings[0][2]
-    assert "Complete package copy" in warnings[0][2]
+    assert "Include all data (portable)" in warnings[0][2]
 
 
 def test_complete_package_with_optimization_preserves_real_multiscale_image(
@@ -192,3 +192,50 @@ def test_complete_package_with_optimization_preserves_real_multiscale_image(
     assert len(restored.layers["reference"].data) == 2
     assert np.array_equal(np.asarray(restored.layers["reference"].data[0]), pixels)
     assert np.all(np.asarray(restored.layers["Curated"].data) == 1)
+
+
+def test_saved_state_is_independent_of_next_save_mode(make_napari_viewer, tmp_path):
+    viewer = make_napari_viewer()
+    layer = viewer.add_labels(np.ones((8, 8), dtype=np.uint8))
+    setattr(viewer, VIEWER_WORKSPACE_PATH_ATTR, str(tmp_path / "project.json"))
+    setattr(viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, {id(layer)})
+    viewer._label_assistant_workspace_storage_state = "linked"
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+    widget.storage_mode_combo.setCurrentIndex(1)
+    assert "Saved data: linked" in widget.storage_state_label.text()
+    assert "Copy all images" in widget.package_note.text()
+
+
+def test_incomplete_workspace_stays_protected_after_panel_recreation(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools import _workspace_widget as module
+    viewer = make_napari_viewer()
+    viewer.add_labels(np.ones((8, 8), dtype=np.uint8))
+    viewer._label_assistant_missing_workspace_layers = [{"name": "image", "reason": "missing"}]
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+    warnings = []
+    monkeypatch.setattr(module.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(module, "save_workspace", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Save must not run")))
+    widget._save_path(tmp_path / "project.json")
+    assert "saving protected" in widget.storage_state_label.text()
+    assert len(warnings) == 1
+    assert not (tmp_path / "project.json").exists()
+
+
+def test_recent_entries_keep_paths_and_menu_disables_unavailable_files(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools._workspace_widget import RECENT_WORKSPACES_KEY
+    existing = tmp_path / "existing.json"
+    existing.write_text("{}")
+    missing = tmp_path / "missing.json"
+    settings = _settings(tmp_path / "settings.ini")
+    settings.setValue(RECENT_WORKSPACES_KEY, [str(existing), str(missing)])
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=settings)
+    actions = widget.recent_menu.actions()
+    assert actions[0].isEnabled()
+    assert not actions[1].isEnabled()
+    assert "unavailable" in widget.recent_list.item(1).text()
+    opened = []
+    monkeypatch.setattr(widget, "_load_path", lambda path: opened.append(path))
+    actions[0].trigger()
+    widget.recent_list.setCurrentRow(0)
+    widget.open_selected_recent()
+    assert opened == [existing, existing]

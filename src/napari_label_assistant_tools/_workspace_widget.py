@@ -8,6 +8,9 @@ from qtpy.QtCore import QSettings, Qt
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QMenu,
+    QListWidgetItem,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -19,7 +22,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from .workspace import create_portable_snapshot, load_workspace, save_workspace
+from .workspace import load_workspace, save_workspace
 
 SETTINGS_ORG = "napari-label-assistant"
 SETTINGS_APP = "label-assistant"
@@ -67,15 +70,16 @@ class WorkspaceManagerWidget(QWidget):
             self.workspace_path = None
             self._project_layer_ids: set[int] = set()
 
+        self.storage_state_label = QLabel()
+        self.storage_state_label.setWordWrap(True)
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
         self.status_label = QLabel(
-            "Save writes a small manifest. Writable masks remain in OME-Zarr; "
-            "images stay linked unless optimization is enabled."
+            "Choose save options, then save your workspace."
         )
         self.status_label.setWordWrap(True)
         self.optimize_images_check = QCheckBox(
-            "Optimize large images for viewing"
+            "Optimize large images"
         )
         self.optimize_images_check.setChecked(
             bool(
@@ -85,13 +89,13 @@ class WorkspaceManagerWidget(QWidget):
             )
         )
         self.optimize_images_check.setToolTip(
-            "On Save, convert single-scale images larger than 32,768 pixels "
-            "on either axis into a local multiscale OME-Zarr pyramid. "
-            "The original image file is not changed."
+            "Create multiscale copies of large images for smoother zooming and navigation. "
+            "Applies to single-scale 2D images larger than 32,768 pixels on either axis. "
+            "Existing pyramids are preserved. Reopen the workspace to use new optimized copies. "
+            "This option can be combined with Include all data (portable)."
         )
         self.optimize_images_note = QLabel(
-            "Creates a local multiscale OME-Zarr copy for smooth zooming after "
-            "reopening; original files stay unchanged. Off keeps links only."
+            "Improve zooming and navigation for large images."
         )
         self.optimize_images_note.setWordWrap(True)
         self.optimize_images_check.toggled.connect(
@@ -99,23 +103,23 @@ class WorkspaceManagerWidget(QWidget):
                 OPTIMIZE_LARGE_IMAGES_KEY, bool(checked)
             )
         )
-        self.complete_package_check = QCheckBox("Complete package copy (images and masks)")
-        self.complete_package_check.setChecked(
-            bool(self.settings.value(COMPLETE_PACKAGE_KEY, False, type=bool))
+        self.storage_mode_combo = QComboBox()
+        self.storage_mode_combo.addItem("Link to source data", False)
+        self.storage_mode_combo.addItem("Include all data (portable)", True)
+        self.storage_mode_combo.setCurrentIndex(
+            1 if self.settings.value(COMPLETE_PACKAGE_KEY, False, type=bool) else 0
         )
-        self.complete_package_check.setToolTip(
-            "Save all image and mask pixels beside the manifest using relative paths. "
-            "Move the manifest AND its data folder together to another computer. "
-            "Copying large datasets requires time and disk space."
+        self.storage_mode_combo.setToolTip(
+            "Link to source data keeps saves lightweight and requires access to linked files. "
+            "Include all data copies loaded images and masks beside the workspace file. "
+            "Keep that file and its data folder together when sharing or archiving. "
+            "Large datasets take additional time and disk space to copy. "
+            "This choice applies to the next save."
         )
-        self.complete_package_check.toggled.connect(
-            lambda checked: self.settings.setValue(COMPLETE_PACKAGE_KEY, bool(checked))
-        )
-        self.package_note = QLabel(
-            "For another computer: enable Complete package copy, Save As into an "
-            "empty folder, then transfer that entire folder."
-        )
+        self.storage_mode_combo.currentIndexChanged.connect(self._update_storage_mode)
+        self.package_note = QLabel()
         self.package_note.setWordWrap(True)
+        self._update_storage_mode()
         self.recent_list = QListWidget()
         self.recent_list.setMinimumHeight(120)
         self.recent_list.itemDoubleClicked.connect(
@@ -127,60 +131,57 @@ class WorkspaceManagerWidget(QWidget):
         save_button = QPushButton("Save")
         save_as_button = QPushButton("Save As")
         recent_button = QPushButton("Open Recent")
-        snapshot_button = QPushButton("Portable Snapshot")
+        self.open_recent_button = recent_button
+        self.recent_menu = QMenu(recent_button)
+        recent_button.setMenu(self.recent_menu)
 
         new_button.setToolTip(
-            "Clear the viewer and start an unsaved Label Assistant workspace."
+            "Start a new workspace by removing the current layers from the viewer. "
+            "Existing files on disk are preserved."
         )
         open_button.setToolTip(
-            "Load a Label Assistant manifest and open referenced masks "
-            "lazily in writable mode."
+            "Restore layers, annotations, and viewing settings from a saved workspace. "
+            "Linked source data must be accessible unless the workspace includes copies."
         )
         save_button.setToolTip(
-            "Save the manifest and persist new Labels data. If large-image "
-            "optimization is enabled, create reusable multiscale image copies."
+            "Save the current layers, annotations, and viewing settings using the options below. "
+            "An unsaved workspace will prompt for a destination."
         )
         save_as_button.setToolTip(
-            "Save a new manifest and writable mask copies at the selected "
-            "destination. Images stay linked to their original sources."
+            "Choose a new name or location for the workspace. Saving to a new destination "
+            "creates independent mask copies. Choose Include all data (portable) "
+            "to include image data as well."
         )
         recent_button.setToolTip(
-            "Open the workspace selected in the Recent list."
-        )
-        snapshot_button.setToolTip(
-            "Explicitly copy the manifest and all referenced local data "
-            "into one folder."
+            "Choose a recently used workspace from the menu. "
+            "You can also double-click a recent workspace to open it."
         )
 
         new_button.clicked.connect(self.new_workspace)
         open_button.clicked.connect(self.open_workspace)
         save_button.clicked.connect(self.save)
         save_as_button.clicked.connect(self.save_as)
-        recent_button.clicked.connect(self.open_selected_recent)
-        snapshot_button.clicked.connect(self.create_snapshot)
 
         first_row = QHBoxLayout()
         first_row.addWidget(new_button)
         first_row.addWidget(open_button)
+        first_row.addWidget(recent_button)
         first_row.addWidget(save_button)
         first_row.addWidget(save_as_button)
 
-        second_row = QHBoxLayout()
-        second_row.addWidget(recent_button)
-        second_row.addWidget(snapshot_button)
-
         layout = QVBoxLayout()
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.addWidget(QLabel("Manage annotation workspace"))
+        layout.addWidget(QLabel("Workspace files"))
         layout.addWidget(self.current_label)
+        layout.addWidget(self.storage_state_label)
         layout.addLayout(first_row)
+        layout.addWidget(QLabel("Data storage for next save"))
+        layout.addWidget(self.storage_mode_combo)
+        layout.addWidget(self.package_note)
         layout.addWidget(self.optimize_images_check)
         layout.addWidget(self.optimize_images_note)
-        layout.addWidget(self.complete_package_check)
-        layout.addWidget(self.package_note)
         layout.addWidget(QLabel("Recent workspaces"))
         layout.addWidget(self.recent_list)
-        layout.addLayout(second_row)
         layout.addWidget(self.status_label)
         self.setLayout(layout)
 
@@ -233,7 +234,7 @@ class WorkspaceManagerWidget(QWidget):
         if item is None:
             self._set_status("Select a recent workspace first.")
             return
-        self._load_path(Path(item.text()))
+        self._load_path(Path(item.data(Qt.UserRole)))
 
     def save(self) -> None:
         if self.viewer is None:
@@ -279,43 +280,12 @@ class WorkspaceManagerWidget(QWidget):
         )
         self._save_path(path, copy_labels=copy_labels)
 
-    def create_snapshot(self) -> None:
-        if self.workspace_path is None:
-            self._set_status(
-                "Save the project before creating a portable snapshot."
-            )
-            return
-        chosen = QFileDialog.getExistingDirectory(
-            self,
-            "Select Empty Portable Snapshot Folder",
-            str(self.workspace_path.parent),
-        )
-        if not chosen:
-            return
-        destination = Path(chosen)
-        if destination.exists() and any(destination.iterdir()):
-            self._set_status("Portable snapshot folder must be empty.")
-            return
-        answer = QMessageBox.question(
-            self,
-            "Create Portable Snapshot",
-            "This explicitly copies every referenced local image and mask. "
-            "Large TIFF or OME-Zarr data may require substantial time and "
-            "disk space. Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
-            return
-        self._run(
-            lambda: create_portable_snapshot(self.workspace_path, destination),
-            success=lambda result: (
-                f"Created portable snapshot at {result['path']} with "
-                f"{result['copied_sources']} copied source(s)."
-            ),
-        )
-
     def _save_path(self, path: Path, *, copy_labels: bool = False) -> None:
+        if getattr(self.viewer, "_label_assistant_missing_workspace_layers", ()):
+            message = "This workspace has unavailable layers. Restore access to their data and reopen it before saving. The original workspace is protected."
+            self._set_status(message)
+            QMessageBox.warning(self, "Incomplete workspace", message)
+            return
         optimize = self.optimize_images_check.isChecked()
         dialog = QProgressDialog(self)
         dialog.setWindowTitle("Saving Workspace")
@@ -354,7 +324,7 @@ class WorkspaceManagerWidget(QWidget):
             saved_layers = result.get("saved_layers")
             saved_path = result.get("path")
             if result.get("complete_package"):
-                detail += " Complete package saved. Transfer the manifest and its data folder together."
+                detail += " Portable workspace saved. Keep the workspace file and data folder together."
             return f"Saved {saved_layers} layer(s) to {saved_path}." + detail
 
         try:
@@ -365,7 +335,7 @@ class WorkspaceManagerWidget(QWidget):
                     optimize_large_images=optimize,
                     progress=_progress,
                     copy_labels=copy_labels,
-                    complete_package=self.complete_package_check.isChecked(),
+                    complete_package=bool(self.storage_mode_combo.currentData()),
                 ),
                 success=_success,
                 completed_path=path,
@@ -434,6 +404,10 @@ class WorkspaceManagerWidget(QWidget):
             dialog.close()
             dialog.deleteLater()
 
+        self.viewer._label_assistant_missing_workspace_layers = list(result["skipped_layers"])
+        if result.get("storage_state"):
+            self.viewer._label_assistant_workspace_storage_state = result["storage_state"]
+            self.storage_mode_combo.setCurrentIndex(1 if result["storage_state"] == "portable" else 0)
         self._associate_workspace(path)
         self._refresh_current_label()
         self._refresh_recent_list()
@@ -444,9 +418,10 @@ class WorkspaceManagerWidget(QWidget):
         )
         self._set_status(
             prefix
-            + f"{len(result['restored_layers'])} layer(s) from "
+            + f"{len(result['restored_layers'])} of "
+            f"{len(result['restored_layers']) + len(result['skipped_layers'])} layers from "
             f"{result['path']}. "
-            f"Skipped {len(result['skipped_layers'])} layer(s)."
+            f"Unavailable: {len(result['skipped_layers'])} layer(s)."
         )
         if result["skipped_layers"]:
             details = "\n".join(f"{item['name']}: {item['reason']}" for item in result["skipped_layers"])
@@ -454,7 +429,8 @@ class WorkspaceManagerWidget(QWidget):
                 self, "Workspace layers could not be loaded",
                 "Some layers failed to load. The reasons below may indicate unavailable data "
                 "or a Python dependency problem. For unavailable source paths, create a "
-                "Complete package copy on the source computer and transfer the entire folder.\n\n" + details,
+                "workspace with Include all data (portable) selected on the source computer "
+                "and transfer the entire folder.\n\n" + details,
             )
 
     def _run(
@@ -471,6 +447,8 @@ class WorkspaceManagerWidget(QWidget):
             QMessageBox.warning(self, "Workspace operation failed", str(exc))
             return
         if completed_path is not None:
+            if result.get("storage_state"):
+                self.viewer._label_assistant_workspace_storage_state = result["storage_state"]
             self._associate_workspace(completed_path)
             self._refresh_current_label()
             self._refresh_recent_list()
@@ -511,6 +489,9 @@ class WorkspaceManagerWidget(QWidget):
 
     def _disassociate_workspace(self) -> None:
         self.workspace_path = None
+        self.viewer._label_assistant_missing_workspace_layers = []
+        self.viewer._label_assistant_missing_workspace_records = []
+        self.viewer._label_assistant_workspace_storage_state = None
         self._project_layer_ids = set()
         setattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, "")
         setattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, set())
@@ -555,16 +536,52 @@ class WorkspaceManagerWidget(QWidget):
         self.settings.setValue(RECENT_WORKSPACES_KEY, recent[:RECENT_LIMIT])
         self.settings.setValue(LAST_WORKSPACE_KEY, normalized)
 
+    def _update_storage_mode(self, *_args) -> None:
+        portable = bool(self.storage_mode_combo.currentData())
+        self.settings.setValue(COMPLETE_PACKAGE_KEY, portable)
+        self.package_note.setText(
+            "Copy all images and masks. Keep the workspace file and data folder together."
+            if portable else
+            "Keep saves lightweight. Linked source files must remain accessible."
+        )
+
     def _refresh_recent_list(self) -> None:
         self.recent_list.clear()
-        for path in self._recent_paths():
-            self.recent_list.addItem(path)
+        self.recent_menu.clear()
+        paths = self._recent_paths()
+        self.open_recent_button.setEnabled(bool(paths))
+        for value in paths:
+            path = Path(value)
+            available = path.is_file()
+            suffix = "" if available else " — unavailable"
+            item = QListWidgetItem(f"{path.name}{suffix}\n{path.parent}")
+            item.setData(Qt.UserRole, value)
+            item.setToolTip(value)
+            self.recent_list.addItem(item)
+            action = self.recent_menu.addAction(path.name + suffix)
+            action.setToolTip(value)
+            action.setStatusTip(value)
+            action.setEnabled(available)
+            action.triggered.connect(lambda _checked=False, p=path: self._load_path(p))
 
     def _refresh_current_label(self) -> None:
         text = (
             str(self.workspace_path) if self.workspace_path else "Unsaved workspace"
         )
-        self.current_label.setText(f"Current workspace: {text}")
+        self.current_label.setText(f"Current workspace: {self.workspace_path.name if self.workspace_path else text}")
+        self.current_label.setToolTip(text)
+        missing = getattr(self.viewer, "_label_assistant_missing_workspace_layers", ())
+        state = getattr(self.viewer, "_label_assistant_workspace_storage_state", None)
+        if missing:
+            self.storage_state_label.setText(f"Incomplete workspace · {len(missing)} unavailable layer(s) · saving protected")
+        elif self.workspace_path is None:
+            self.storage_state_label.setText("Not saved yet")
+        elif state == "portable":
+            self.storage_state_label.setText("Saved data: portable · keep the workspace file and data folder together")
+        elif state == "linked":
+            self.storage_state_label.setText("Saved data: linked · requires source files")
+        else:
+            self.storage_state_label.setText("Saved data: reopen the workspace to verify storage")
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(str(message))

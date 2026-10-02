@@ -393,3 +393,36 @@ def test_broken_zarr_does_not_clear_existing_viewer(tmp_path, monkeypatch):
     with pytest.raises(service.WorkspaceError, match="incomplete or shadowed"):
         load_workspace(viewer, path)
     assert viewer.layers == [existing]
+
+
+def test_partial_load_retains_missing_records_and_blocks_save(tmp_path):
+    pytest.importorskip("zarr")
+    from napari_label_assistant_tools.workspace import service
+    path = tmp_path / "project.json"
+    save_workspace(FakeViewer([Labels(np.ones((8, 8), dtype=np.uint8))]), path)
+    payload = json.loads(path.read_text())
+    missing = {"name": "missing image", "layer_type": "Image", "storage": {"kind": "file", "path": "/unavailable/image.tif"}}
+    payload["layers"].append(missing)
+    path.write_text(json.dumps(payload))
+    original = path.read_bytes()
+    viewer = FakeViewer()
+    result = load_workspace(viewer, path)
+    assert len(result["skipped_layers"]) == 1
+    assert viewer._label_assistant_missing_workspace_records == [missing]
+    for destination in (path, tmp_path / "other.json"):
+        with pytest.raises(service.WorkspaceError, match="incomplete workspace"):
+            save_workspace(viewer, destination, complete_package=True)
+    assert path.read_bytes() == original
+    assert not (tmp_path / "other.json").exists()
+
+
+def test_storage_state_reports_actual_references(tmp_path):
+    pytest.importorskip("zarr")
+    image = Image(np.ones((8, 8), dtype=np.uint8))
+    image.source.path = str(tmp_path.parent / "external.tif")
+    result = save_workspace(FakeViewer([image]), tmp_path / "linked.json")
+    assert result["storage_state"] == "linked"
+    viewer = FakeViewer([image])
+    result = save_workspace(viewer, tmp_path / "portable.json", complete_package=True)
+    assert result["storage_state"] == "portable"
+    assert viewer._label_assistant_workspace_storage_state == "portable"

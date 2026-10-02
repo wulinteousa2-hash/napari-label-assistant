@@ -56,6 +56,16 @@ def _create_zarr_array(root, name, **kwargs):
     return create(name, **kwargs)
 
 
+def _workspace_storage_state(records, manifest_path):
+    for record in records:
+        storage = record.get("storage") or {}
+        if storage.get("kind") in {"file", "zarr"}:
+            source = _resolve_path(storage.get("path"), manifest_path.parent).resolve()
+            if not source.is_relative_to(manifest_path.parent.resolve()):
+                return "linked"
+    return "portable"
+
+
 def save_workspace(
     viewer: Any,
     destination: str | Path,
@@ -76,6 +86,13 @@ def save_workspace(
     rebound to the writable Zarr array so later saves do not copy mask pixels.
     """
 
+    missing = getattr(viewer, "_label_assistant_missing_workspace_layers", ())
+    if missing:
+        names = ", ".join(str(item.get("name", "layer")) for item in missing)
+        raise WorkspaceError(
+            f"Cannot save an incomplete workspace. Unavailable layers: {names}. "
+            "Restore access to the data and reopen the workspace before saving."
+        )
     _commit_pending_local_edits(viewer)
     path = _manifest_path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +173,10 @@ def save_workspace(
     for layer, array, reference in label_bindings:
         layer.data = array
         _remember_layer_storage(layer, reference)
+    storage_state = _workspace_storage_state(records, path)
+    viewer._label_assistant_workspace_storage_state = storage_state
     return {
+        "storage_state": storage_state,
         "path": str(path),
         "saved_layers": len(records),
         "optimized_images": sum(
@@ -234,7 +254,15 @@ def load_workspace(
         _restore_viewer_state(viewer, payload)
     finally:
         viewer._label_assistant_workspace_loading = previous_loading
+    viewer._label_assistant_missing_workspace_layers = list(skipped)
+    viewer._label_assistant_missing_workspace_records = [
+        record for record in load_records
+        if str(record.get("name") or "layer") in {item["name"] for item in skipped}
+    ]
+    storage_state = _workspace_storage_state(load_records, path)
+    viewer._label_assistant_workspace_storage_state = storage_state
     return {
+        "storage_state": storage_state,
         "path": str(path),
         "restored_layers": restored,
         "skipped_layers": skipped,

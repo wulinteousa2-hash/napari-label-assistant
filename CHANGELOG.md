@@ -3,6 +3,23 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Refined Workspace labels and tooltips, including **Include all images and
+  masks** for portable saves intended for sharing, transfer, or archiving.
+- Removed the overlapping snapshot action. Grouped **New**, **Open**,
+  **Open Recent**, **Save**, and **Save As** in one file-operation row.
+  Open Recent provides a menu; recent entries show names, folders, and availability.
+- Added explicit linked and portable save modes, with storage selection above
+  image optimization and a separate indicator for the last saved workspace.
+
+### Fixed
+
+- Retained unavailable layer records after partial loading and blocked saves
+  until the workspace can be fully reopened, preventing accidental data loss.
+
 ## [2.0.2] - 2026-10-02
 
 ### Fixed
