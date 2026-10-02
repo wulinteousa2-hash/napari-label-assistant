@@ -3,7 +3,7 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [2.0.2] - 2026-10-02
 
 ### Fixed
 
