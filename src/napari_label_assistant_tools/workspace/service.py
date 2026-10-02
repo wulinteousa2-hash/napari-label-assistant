@@ -34,11 +34,13 @@ def save_workspace(
     *,
     xy_chunk: int = DEFAULT_XY_CHUNK,
     optimize_large_images: bool = False,
+    copy_labels: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Save a lightweight manifest and persist new Labels layers once.
 
-    Existing Zarr-backed layers remain external references. In-memory Labels
+    With copy_labels=True (Save As), masks are copied to the destination.
+    Otherwise existing Zarr-backed layers remain external references. In-memory Labels
     layers are written chunk-by-chunk into a sibling durable-data directory and
     rebound to the writable Zarr array so later saves do not copy mask pixels.
     """
@@ -47,6 +49,7 @@ def save_workspace(
     path = _manifest_path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     data_root = path.with_name(f"{_workspace_stem(path)}_label_assistant_data")
+    label_bindings: list[tuple[Any, Any, dict[str, Any]]] = []
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
 
@@ -62,6 +65,8 @@ def save_workspace(
                 data_root=data_root,
                 layer_index=index,
                 optimize_large_images=bool(optimize_large_images),
+                copy_labels=copy_labels,
+                label_bindings=label_bindings,
                 progress=progress,
                 xy_chunk=int(xy_chunk),
             )
@@ -116,6 +121,9 @@ def save_workspace(
         "skipped_layers": skipped,
     }
     _atomic_write_json(path, payload)
+    for layer, array, reference in label_bindings:
+        layer.data = array
+        _remember_layer_storage(layer, reference)
     return {
         "path": str(path),
         "saved_layers": len(records),
@@ -363,6 +371,8 @@ def _serialize_layer(
     *,
     manifest_path: Path,
     optimize_large_images: bool = False,
+    copy_labels: bool = False,
+    label_bindings: list | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     data_root: Path,
     layer_index: int,
@@ -373,7 +383,7 @@ def _serialize_layer(
 
     if layer_type == "Labels":
         reference = _zarr_reference(layer)
-        if reference is None:
+        if reference is None or copy_labels:
             data_root.mkdir(parents=True, exist_ok=True)
             target = _new_mask_path(data_root, layer_index, str(getattr(layer, "name", "labels")))
             array = _persist_labels_to_zarr(
@@ -381,20 +391,26 @@ def _serialize_layer(
                 target,
                 xy_chunk=xy_chunk,
                 scale=tuple(float(value) for value in _as_sequence(getattr(layer, "scale", ()))),
+                progress=progress,
             )
-            layer.data = array
             reference = {"path": target, "array_path": "s0"}
+            if label_bindings is not None:
+                label_bindings.append((layer, array, reference))
+            else:
+                layer.data = array
+                _remember_layer_storage(layer, reference)
         else:
             _ensure_writable_zarr_layer(layer, reference)
-        _remember_layer_storage(layer, reference)
+            array = layer.data
+            _remember_layer_storage(layer, reference)
         record["storage"] = {
             "kind": "zarr",
             "path": _encode_path(reference["path"], manifest_path.parent),
             "array_path": str(reference.get("array_path") or ""),
             "mode": "r+",
-            "shape": [int(value) for value in layer.data.shape],
-            "chunks": [int(value) for value in layer.data.chunks],
-            "dtype": str(layer.data.dtype),
+            "shape": [int(value) for value in array.shape],
+            "chunks": [int(value) for value in array.chunks],
+            "dtype": str(array.dtype),
         }
         return record
 
@@ -829,6 +845,7 @@ def _persist_labels_to_zarr(
     *,
     xy_chunk: int,
     scale: tuple[float, ...],
+    progress: Callable[[int, int, str], None] | None = None,
 ):
     try:
         import zarr
@@ -875,7 +892,8 @@ def _persist_labels_to_zarr(
     grid = tuple(
         (size + chunk - 1) // chunk for size, chunk in zip(shape, chunks, strict=True)
     )
-    for index in np.ndindex(grid):
+    total = int(np.prod(grid))
+    for completed, index in enumerate(np.ndindex(grid), start=1):
         region = tuple(
             slice(i * chunk, min(size, (i + 1) * chunk))
             for i, chunk, size in zip(index, chunks, shape, strict=True)
@@ -883,6 +901,8 @@ def _persist_labels_to_zarr(
         block = np.asarray(source[region])
         if block.size and np.any(block):
             array[region] = block
+        if progress is not None and (completed == total or completed % max(1, total // 200) == 0):
+            progress(completed, total, f"Writing mask: {destination.name}…")
 
     temp.replace(destination)
     return zarr.open_array(str(destination / "s0"), mode="r+")

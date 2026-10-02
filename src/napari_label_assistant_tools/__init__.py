@@ -3,4 +3,4 @@
 from ._label_assistant import label_assistant_widget
 
 __all__ = ("label_assistant_widget",)
-__version__ = "1.1.0"
+__version__ = "2.0.0"

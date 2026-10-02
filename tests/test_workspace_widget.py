@@ -105,3 +105,29 @@ def test_optimized_save_rebinds_real_napari_image_as_multiscale(
         (2, 3),
         (1, 2),
     ]
+
+
+def test_save_as_requests_local_mask_copy(make_napari_viewer, tmp_path, monkeypatch):
+    from qtpy.QtWidgets import QFileDialog
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=_settings(tmp_path / "settings.ini"))
+    destination = tmp_path / "local.json"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(destination), ""))
+    calls = []
+    monkeypatch.setattr(widget, "_save_path", lambda path, **kwargs: calls.append((path, kwargs)))
+    widget.save_as()
+    assert calls == [(destination, {"copy_labels": True})]
+
+
+def test_save_failure_is_visible_and_preserves_project(make_napari_viewer, tmp_path, monkeypatch):
+    from qtpy.QtWidgets import QMessageBox
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=_settings(tmp_path / "settings.ini"))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    def fail():
+        raise PermissionError("Shared mount is read-only")
+
+    widget._run(fail, success=lambda result: "saved", completed_path=tmp_path / "new.json")
+    assert widget.workspace_path is None
+    assert "read-only" in widget.status_label.text()
+    assert len(warnings) == 1

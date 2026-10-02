@@ -13,16 +13,14 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 1.0.3 highlights
+## Version 2.0.0 highlights
 
-- Optionally convert oversized single-scale reference images into reusable,
-  chunked multiscale OME-Zarr pyramids from the Workspace tab.
-- Follow layer and editable-area preparation through a compact, fixed-size
-  activity indicator.
-- Navigate the clearer **Workspace**, **Labels**, **Compare**, and **Combine**
-  hierarchy, with **Local Editing** separated from **Review & QC**.
-- Keep the selected paint label, including background value `0`, across local
-  area reloads caused by panning and zooming.
+- Use the dedicated **Training** tab to review paired image/mask crops, train
+  a small U-Net, continue saved models, and preview predictions.
+- Save models with training history and use spatially separate validation crops.
+- **Save As** creates writable mask copies at the chosen destination, including
+  read-only masks from shared mounts. Saves show progress and visible errors.
+- Navigate **Workspace**, **Labels**, **Training**, **Compare**, and **Combine**.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
@@ -111,6 +109,12 @@ without SAM3 Assistant.
 - New in-memory Labels layers are persisted once as writable, chunked
   OME-Zarr data beside the manifest. Later saves reuse the same store instead
   of copying the full mask again.
+- **Save As** to a new destination creates writable mask copies beside the
+  new manifest, including masks opened read-only from shared mounts. Images
+  remain linked; keep the shared mount available when reopening locally.
+  Saving to the current project path reuses its existing mask stores.
+- Saving displays progress; failures show an error dialog and keep the previous
+  active project selected.
 - Source images already loaded from files remain external references, keeping
   routine saves fast. **Portable Snapshot** explicitly copies referenced local
   images and masks into one folder for transfer.
@@ -134,7 +138,7 @@ format.
 
 ### Labels
 
-Choose one Labels layer, then switch between two task-focused tabs:
+Choose a Labels layer for editing and QC:
 
 - **Local Editing** contains the memory-controlled Paint and Erase workflow.
   It edits a bounded local view and applies changes to the selected source
@@ -187,11 +191,79 @@ tools. Click **Find components**, then:
 - enable **Select components from canvas** to select a table row by clicking
   the labeled region;
 - enable **Add each click to selection** to build a multi-component selection;
-- use **Delete selected**, **Copy selected**, or **Copy again** as needed.
+- use **Delete selected**, **Copy selected**, or **Remove small components** as needed.
 
 The results table reports component ID, source label, pixel count, Euler
 number, centroid, and bounds. Optional grid columns report the grid row,
 column, and cell containing each component centroid.
+
+### Training
+
+**Quick Train** trains a small U-Net from reviewed image/ground-truth crops
+and previews a bounded area of another image as a new Labels layer.
+
+Install the optional training dependency in the same Python environment as
+napari: `pip install 'napari-label-assistant[train]'`. PyTorch is loaded only
+when training, prediction, or model loading is requested; other tools work
+without it.
+
+1. Open **Training**, select a single-channel 2D **Training image**
+   and a same-size **Ground truth** Labels layer. Annotations must be complete:
+   all nonzero label values become one target class and all zero pixels are
+   negative examples.
+   The same panel can be opened directly from the plugin's **Quick Train** menu.
+2. Choose **Crop context**, **Training resolution**, and **Crop count**, then
+   click **Prepare & Preview Crops**. Defaults use 32 crops, 512 × 512 source
+   context, and 512 × 512 model inputs. Preparation scans the full-resolution
+   ground truth in bounded tiles to discover sparse annotations across the
+   entire image; a huge mask can take time to scan. The ground-truth layer is
+   temporarily locked for editing and preparation can be canceled.
+3. Inspect the aligned **crop images** and **crop ground truth** layers, arranged
+   in a grid of the actual normalized model inputs. Tile headers show source
+   coordinates, sampling type, and training/validation split; cyan frames mark
+   training and orange frames mark validation. Click a tile for original/model
+   foreground pixel counts, or double-click to locate its source region.
+   The read-only gallery is placed beside the source image. It is temporary,
+   excluded from source selectors and workspace saves, and replaced on successful
+   re-preparation.
+4. Check the actual positive/background counts. Half the crop slots are centered
+   near discovered annotation locations and guaranteed to retain foreground.
+   Other slots seek nearby background and ordinary background. If no completely
+   negative crop can be found after bounded attempts, a mixed-context crop is
+   retained and reported as positive; counts reflect what is actually included.
+   Training and validation use separate, non-overlapping spatial blocks across
+   the image, with annotated blocks reserved for both splits. Only one annotated
+   block is insufficient for validation: use a smaller context or a more
+   representative image. The default 32 crops give 24 training and 8 validation
+   patches. Patches within a split may overlap.
+5. Choose **Training steps** and **Compute**, then click **Quick Train**. Defaults
+   use 200 steps and automatic CUDA/CPU selection. Training uses the reviewed
+   patches without resampling. Changing source layers, source pixels, crop
+   context, resolution, or crop count invalidates the prepared dataset and
+   requires another preparation; changing steps or compute does not.
+   Automatic falls back to CPU when CUDA is unavailable or lacks memory.
+   Check validation Dice, IoU, precision, and recall. These scores describe the
+   source image, not accuracy on a new image.
+6. Select a **Prediction image**, pan to the area of interest, set the threshold,
+   and click **Predict current area**. A new experimental Labels layer covers
+   just one crop, with its position and image transforms preserved. Review the
+   prediction before using or copying it.
+7. Use **Save model…** and **Load model…** to reuse the model in later sessions.
+
+The model is a five-level U-Net with 8, 16, 32, 64, and 128 feature channels,
+GroupNorm, skip connections, and binary cross-entropy plus Dice loss. Select
+256 × 256 inputs for speed or 512 × 512 for more detail. At the default 512-pixel
+context/resolution no downsampling is needed. Larger contexts sacrifice boundary
+detail; image area averaging and foreground-preserving mask pooling retain small
+targets when reducing resolution. Inspect the gallery to assess this tradeoff.
+Small images automatically use smaller contexts to retain separate validation
+areas. This is a quick feasibility workflow, not a trained
+general-purpose model or a full-image segmentation command.
+
+Training and prediction run in background workers. **Cancel** stops after the
+current crop or training step, restores editing, and keeps the existing model.
+Huge NumPy/memmap, Zarr, and other sliceable sources are accessed by small
+regions; the full arrays are never converted to in-memory training copies.
 
 ### Grid registration and QC traceability
 
@@ -319,3 +391,32 @@ pytest
 ## License
 
 Distributed under the terms of the MIT license.
+
+### Continue training a large-image model
+
+After training or loading a saved `.pt` model, prepare and review crops, then
+click **Continue training current model** to fine-tune its existing weights.
+**Quick Train** starts a new model. Each round uses a new AdamW optimizer;
+this is weight fine-tuning rather than exact optimizer-state resumption.
+Use a lower **Learning rate**, for example `0.0001`, for cautious fine-tuning.
+The model with the best validation Dice is retained, including the starting
+model if every checkpoint scores worse. Ties retain the latest checkpoint. Cancellation preserves the current model.
+
+For scattered targets in a huge image, increase crop count and change
+**Crop sampling seed** between rounds to review different training locations.
+The spatial holdout blocks stay fixed for the same ground truth and crop context.
+Changing context, labels, or source changes the validation setup; scores from
+such rounds are not directly comparable and may include previously trained areas.
+Keep representative earlier examples in later rounds to reduce forgetting.
+Training longer on one small crop set alone does not provide wider image coverage.
+Round and total-step counts are saved with the model; save again after continuing.
+
+Each saved model also stores its completed training history inside the `.pt`
+checkpoint and exports a readable JSON file beside it: `model.pt` →
+`model.history.json`. Each round records UTC timestamps, duration, source-layer
+names, settings, learning rate, crop coordinates/counts, loss and validation
+metrics at evaluation steps, and which step's weights were retained.
+Loading and continuing a model appends to its history; saving to another path
+carries that history forward. Older checkpoints remain loadable, with no
+reconstructed history for rounds that were not recorded. Canceled rounds do
+not alter the current model or its completed-round history.

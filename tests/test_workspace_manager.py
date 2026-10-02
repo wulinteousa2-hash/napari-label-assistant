@@ -254,3 +254,44 @@ def test_large_image_optimization_off_keeps_file_reference(
     assert storage["kind"] == "file"
     assert storage["path"].endswith("reference.tiff")
     assert not (tmp_path / "case_label_assistant_data").exists()
+
+
+def test_save_as_copies_read_only_shared_masks_to_local_destination(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    shared = tmp_path / "shared" / "mask.zarr"
+    shared.parent.mkdir()
+    source = zarr.open_array(str(shared), mode="w", shape=(8, 8), dtype="uint8")
+    source[2, 3] = 7
+    layer = Labels(zarr.open_array(str(shared), mode="r"), "mask")
+    viewer = FakeViewer([layer])
+    path = tmp_path / "local" / "case.json"
+    progress = []
+
+    save_workspace(viewer, path, copy_labels=True,
+                   progress=lambda *args: progress.append(args))
+
+    assert layer.data.read_only is False
+    layer.data[2, 3] = 9
+    assert int(source[2, 3]) == 7
+    restored = FakeViewer()
+    load_workspace(restored, path)
+    assert int(restored.layers[0].data[2, 3]) == 9
+    assert progress
+    storage = json.loads(path.read_text())["layers"][0]["storage"]
+    assert not storage["path"].startswith(str(shared.parent))
+
+
+def test_failed_save_as_keeps_original_mask_binding(tmp_path, monkeypatch):
+    pytest.importorskip("zarr")
+    from napari_label_assistant_tools.workspace import service
+    layer = Labels(np.ones((8, 8), dtype=np.uint8))
+    original = layer.data
+
+    def fail(*args):
+        raise PermissionError("Destination is read-only")
+
+    monkeypatch.setattr(service, "_atomic_write_json", fail)
+    with pytest.raises(PermissionError):
+        save_workspace(FakeViewer([layer]), tmp_path / "case.json", copy_labels=True)
+    assert layer.data is original
+    assert service.LABEL_ASSISTANT_STORAGE_METADATA_KEY not in layer.metadata

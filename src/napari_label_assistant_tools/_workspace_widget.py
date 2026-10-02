@@ -123,8 +123,8 @@ class WorkspaceManagerWidget(QWidget):
             "optimization is enabled, create reusable multiscale image copies."
         )
         save_as_button.setToolTip(
-            "Write another manifest that references the same durable data "
-            "stores."
+            "Save a new manifest and writable mask copies at the selected "
+            "destination. Images stay linked to their original sources."
         )
         recent_button.setToolTip(
             "Open the workspace selected in the Recent list."
@@ -253,7 +253,11 @@ class WorkspaceManagerWidget(QWidget):
         path = Path(chosen)
         if not str(path).lower().endswith(".json"):
             path = path.with_suffix(".label-assistant.json")
-        self._save_path(path)
+        copy_labels = (
+            self.workspace_path is None
+            or path.resolve() != self.workspace_path.resolve()
+        )
+        self._save_path(path, copy_labels=copy_labels)
 
     def create_snapshot(self) -> None:
         if self.workspace_path is None:
@@ -291,22 +295,20 @@ class WorkspaceManagerWidget(QWidget):
             ),
         )
 
-    def _save_path(self, path: Path) -> None:
+    def _save_path(self, path: Path, *, copy_labels: bool = False) -> None:
         optimize = self.optimize_images_check.isChecked()
-        dialog = None
-        if optimize:
-            dialog = QProgressDialog(self)
-            dialog.setWindowTitle("Optimizing and Saving Workspace")
-            dialog.setWindowModality(Qt.WindowModal)
-            dialog.setCancelButton(None)
-            dialog.setAutoClose(False)
-            dialog.setAutoReset(False)
-            dialog.setMinimumDuration(500)
-            dialog.setRange(0, 0)
-            dialog.setLabelText("Checking large images…")
-            dialog.setMinimumWidth(420)
-            dialog.show()
-            QApplication.processEvents()
+        dialog = QProgressDialog(self)
+        dialog.setWindowTitle("Saving Workspace")
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setMinimumDuration(0)
+        dialog.setRange(0, 0)
+        dialog.setLabelText("Preparing workspace and mask data…")
+        dialog.setMinimumWidth(420)
+        dialog.show()
+        QApplication.processEvents()
 
         def _progress(completed: int, total: int, message: str) -> None:
             if dialog is None:
@@ -339,7 +341,8 @@ class WorkspaceManagerWidget(QWidget):
                     self.viewer,
                     path,
                     optimize_large_images=optimize,
-                    progress=_progress if optimize else None,
+                    progress=_progress,
+                    copy_labels=copy_labels,
                 ),
                 success=_success,
                 completed_path=path,
@@ -432,7 +435,8 @@ class WorkspaceManagerWidget(QWidget):
         try:
             result = operation()
         except Exception as exc:
-            self._set_status(str(exc))
+            self._set_status(f"Workspace operation failed: {exc}")
+            QMessageBox.warning(self, "Workspace operation failed", str(exc))
             return
         if completed_path is not None:
             self._associate_workspace(completed_path)

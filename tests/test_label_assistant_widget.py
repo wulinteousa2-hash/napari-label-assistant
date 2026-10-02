@@ -94,11 +94,13 @@ def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
 
     widget = label_assistant_widget(viewer)
 
-    assert widget._tool_tabs.count() == 4
+    assert widget._tool_tabs.count() == 5
     assert [
         widget._tool_tabs.tabText(index)
         for index in range(widget._tool_tabs.count())
-    ] == ["Workspace", "Labels", "Compare", "Combine"]
+    ] == ["Workspace", "Labels", "Training", "Compare", "Combine"]
+    from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+    assert isinstance(widget._tool_tabs.widget(2), QuickTrainWidget)
     labels = widget._tool_tabs.widget(1)
     assert labels._layer_activity_indicator is widget._activity_header
     assert widget._activity_header.height() == 46
@@ -138,6 +140,8 @@ def test_components_tab_exposes_full_component_controls(make_napari_viewer):
     assert components._component_table.columnCount() == 10
     assert components._analyze_button.text() == "Find components"
     assert components._delete_button.text() == "Delete selected"
+    components._workflow_tabs.setCurrentIndex(0)
+    assert not components._target_combo.parentWidget().isHidden()
 
 
 def test_layer_selectors_refresh_automatically_and_keep_visible_fallback(
@@ -207,7 +211,7 @@ def test_image_labels_view_changes_visibility_without_losing_labels_selection(
     image = viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name="image")
     mask = viewer.add_labels(np.zeros((16, 16), dtype=np.uint8), name="mask")
     widget = label_assistant_widget(viewer)
-    image_mask_view = widget._tool_tabs.widget(2)
+    image_mask_view = widget._tool_tabs.widget(3)
 
     buttons = {
         button.text(): button
@@ -225,7 +229,7 @@ def test_combine_labels_merges_a_single_multivalue_layer(make_napari_viewer):
     labels = np.array([[0, 2], [255, 0]], dtype=np.uint16)
     source = viewer.add_labels(labels, name="source mask")
     widget = label_assistant_widget(viewer)
-    combine_masks = widget._tool_tabs.widget(3)
+    combine_masks = widget._tool_tabs.widget(4)
 
     combine_masks._mode_combo.setCurrentText("Merge Layers As Same Class")
     for index in range(combine_masks._layer_list.count()):

@@ -10,6 +10,7 @@ from ._widget import (
     quick_compare_toggle_widget,
 )
 from ._workspace_widget import WorkspaceManagerWidget
+from ._quick_train_widget import QuickTrainWidget
 
 
 def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
@@ -40,6 +41,7 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
         ),
         "Labels",
     )
+    tools.addTab(QuickTrainWidget(viewer), "Training")
     tools.addTab(quick_compare_toggle_widget(viewer), "Compare")
     tools.addTab(label_operations_widget(viewer), "Combine")
     tools.setTabToolTip(
@@ -48,15 +50,19 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     )
     tools.setTabToolTip(
         1,
-        "Edit Labels locally, then review the full layer through grid-addressed QC.",
-    )
-    tools.setTabToolTip(
-        2,
-        "Compare an image with its Labels layer while preserving edit focus.",
+        "Edit Labels and review connected components.",
     )
     tools.setTabToolTip(
         3,
+        "Compare an image with its Labels layer while preserving edit focus.",
+    )
+    tools.setTabToolTip(
+        4,
         "Relabel, merge, compose, or calculate agreement across Labels layers.",
+    )
+    tools.setTabToolTip(
+        2,
+        "Prepare and review crops, train or continue a U-Net, and preview predictions.",
     )
     layout.addWidget(tools)
     page._activity_header = activity_header

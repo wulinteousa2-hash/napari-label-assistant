@@ -7,10 +7,15 @@ contributions:
     - id: napari-label-assistant.label_assistant
       title: "Label Assistant"
       python_name: napari_label_assistant_tools._label_assistant:label_assistant_widget
+    - id: napari-label-assistant.quick_train
+      title: "Quick Train"
+      python_name: napari_label_assistant_tools._quick_train_widget:quick_train_widget
 
   widgets:
     - command: napari-label-assistant.label_assistant
       display_name: "Label Assistant"
+    - command: napari-label-assistant.quick_train
+      display_name: "Quick Train"
 
   submenus:
     - id: napari-label-assistant.main
@@ -22,4 +27,6 @@ contributions:
         when: "True"
     napari-label-assistant.main:
       - command: napari-label-assistant.label_assistant
+        when: "True"
+      - command: napari-label-assistant.quick_train
         when: "True"

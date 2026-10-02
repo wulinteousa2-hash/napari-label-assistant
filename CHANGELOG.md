@@ -3,6 +3,41 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-10-02
+
+- Embed completed training-round history in saved Quick Train models and export it as a neighboring `.history.json` file, preserving it across loading and continuation.
+
+- Continue training current or loaded Quick Train weights on reviewed crops, with adjustable learning rate, sampling seed, saved round/step counts, and cancellation preserving the existing model.
+- Keep spatial validation blocks fixed across sampling seeds and allow up to 10,000 training steps.
+
+### Added
+
+- Added a dedicated **Training** tab alongside Workspace, Labels, Compare,
+  and Combine.
+- Added **Training → Quick Train** for optional PyTorch U-Net training from
+  complete image/ground-truth pairs, spatial validation scores, local mask
+  previews, and model save/load. Training and prediction use background workers
+  with cancellation and bounded reads of large images.
+- Added **Prepare & Preview Crops** with aligned image/mask galleries, source
+  coordinates, source navigation, and actual positive/background counts. Sparse
+  annotations are discovered with a tiled full-resolution ground-truth scan;
+  sampling uses guaranteed positives and contextual negatives in separate spatial
+  training/validation blocks. Reviewed crops are reused unchanged for training.
+- Exposed 256/512-pixel training resolution and changed the default context and
+  input to 512 pixels to preserve detail. Foreground-preserving mask pooling
+  keeps tiny targets when downsampling.
+
+### Changed
+
+- Save As to a new destination now creates independent writable mask copies;
+  source images remain linked. Ordinary Save reuses existing mask stores.
+
+### Fixed
+
+- Save As can copy read-only shared Zarr masks into local writable storage.
+- Saves show progress and visible error dialogs. Mask bindings are updated
+  only after the manifest is successfully written.
+
 ## [1.1.0] - 2026-09-30
 
 ### Added
