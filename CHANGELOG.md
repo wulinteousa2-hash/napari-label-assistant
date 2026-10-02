@@ -3,6 +3,15 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Detect incomplete or shadowed Zarr installations with the imported module
+  location and actionable diagnostics before clearing existing viewer layers.
+- Distinguish dependency failures from missing workspace data in load warnings.
+- Support the Zarr 2 array-creation API as well as Zarr 3.
+
 ## [2.0.1] - 2026-10-02
 
 ### Added

@@ -361,3 +361,35 @@ def test_complete_package_and_optimization_work_together(tmp_path, monkeypatch):
     restored = FakeViewer()
     assert load_workspace(restored, path)['skipped_layers'] == []
     assert restored.layers[0].multiscale is True
+
+
+def test_broken_zarr_reports_dependency_location(monkeypatch):
+    import sys
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setitem(sys.modules, "zarr", SimpleNamespace(__file__="/bad/zarr.py"))
+    with pytest.raises(service.WorkspaceError, match="incomplete or shadowed") as error:
+        service._require_zarr()
+    assert "/bad/zarr.py" in str(error.value)
+    assert "not evidence of missing package data" in str(error.value)
+
+
+def test_zarr_two_creation_api_is_supported():
+    from napari_label_assistant_tools.workspace import service
+    calls = []
+    root = SimpleNamespace(create_dataset=lambda *args, **kwargs: calls.append((args, kwargs)))
+    service._create_zarr_array(root, "s0", shape=(2, 3), dtype="uint8")
+    assert calls == [(("s0",), {"shape": (2, 3), "dtype": "uint8"})]
+
+
+def test_broken_zarr_does_not_clear_existing_viewer(tmp_path, monkeypatch):
+    import sys
+    from napari_label_assistant_tools.workspace import service
+    path = tmp_path / "project.json"
+    path.write_text(json.dumps({"format": WORKSPACE_FORMAT, "version": 1,
+        "layers": [{"layer_type": "Labels", "name": "mask", "storage": {"kind": "zarr", "path": "mask.zarr"}}]}))
+    existing = Labels(np.ones((8, 8), dtype=np.uint8))
+    viewer = FakeViewer([existing])
+    monkeypatch.setitem(sys.modules, "zarr", SimpleNamespace(__file__="/bad/zarr.py"))
+    with pytest.raises(service.WorkspaceError, match="incomplete or shadowed"):
+        load_workspace(viewer, path)
+    assert viewer.layers == [existing]

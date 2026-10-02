@@ -29,6 +29,32 @@ class WorkspaceError(RuntimeError):
     """Raised when a Label Assistant project cannot be saved or restored safely."""
 
 
+def _require_zarr():
+    """Reject incomplete or shadowed installations before touching workspace data."""
+    try:
+        import zarr
+    except Exception as exc:
+        raise WorkspaceError(
+            "Workspace data requires a working Zarr installation in the napari Python environment."
+        ) from exc
+    missing = [name for name in ("open_array", "open_group") if not callable(getattr(zarr, name, None))]
+    if missing:
+        location = getattr(zarr, "__file__", None) or str(getattr(zarr, "__path__", "unknown location"))
+        raise WorkspaceError(
+            f"Zarr installation is incomplete or shadowed: missing {', '.join(missing)}. "
+            f"Imported from {location}. Check for a local zarr.py or zarr folder, "
+            "and reinstall Zarr in the Python environment running napari. "
+            "This is a dependency error, not evidence of missing package data."
+        )
+    return zarr
+
+
+def _create_zarr_array(root, name, **kwargs):
+    # Zarr 2 uses create_dataset; Zarr 3 provides create_array.
+    create = getattr(root, "create_array", None) or root.create_dataset
+    return create(name, **kwargs)
+
+
 def save_workspace(
     viewer: Any,
     destination: str | Path,
@@ -171,6 +197,8 @@ def load_workspace(
         for record in records
         if not _is_transient_edit_helper_name(record.get("name"))
     ]
+    if any((record.get("storage") or {}).get("kind") == "zarr" for record in load_records):
+        _require_zarr()
     total = len(load_records)
     restored: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -542,10 +570,7 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
     kind = str(storage.get("kind") or "")
 
     if kind == "zarr":
-        try:
-            import zarr
-        except Exception as exc:
-            raise WorkspaceError("Loading Zarr project data requires zarr.") from exc
+        zarr = _require_zarr()
         store_path = _resolve_path(storage.get("path"), manifest_path.parent)
         array_path = str(storage.get("array_path") or "").strip().strip("/")
         target = store_path / array_path if array_path else store_path
@@ -716,10 +741,7 @@ def _persist_image_pyramid_to_zarr(
     rgb: bool,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Any]:
-    try:
-        import zarr
-    except Exception as exc:
-        raise WorkspaceError("Optimizing large images requires zarr.") from exc
+    zarr = _require_zarr()
 
     shape = tuple(int(value) for value in getattr(source, "shape", ()))
     if (rgb and len(shape) != 3) or (not rgb and len(shape) != 2):
@@ -757,7 +779,7 @@ def _persist_image_pyramid_to_zarr(
     try:
         root = zarr.open_group(str(temporary), mode="w")
         arrays = [
-            root.create_array(
+            _create_zarr_array(root,
                 f"s{level}",
                 shape=level_shape,
                 chunks=level_chunks,
@@ -872,7 +894,7 @@ def _persist_image_pyramid_to_zarr(
 
 def _persist_image_data_to_zarr(layer, destination: Path, *, xy_chunk: int, progress=None):
     """Package the displayed image arrays without relying on reader plugins or source paths."""
-    import zarr
+    zarr = _require_zarr()
 
     sources = list(layer.data) if bool(getattr(layer, "multiscale", False)) else [layer.data]
     temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
@@ -888,7 +910,7 @@ def _persist_image_data_to_zarr(layer, destination: Path, *, xy_chunk: int, prog
                 chunks = tuple(min(size, max(1, xy_chunk)) if axis in (len(shape) - 3, len(shape) - 2)
                                else size if axis == len(shape) - 1 else 1
                                for axis, size in enumerate(shape))
-            array = root.create_array(f"s{index}", shape=shape, chunks=chunks, dtype=source.dtype)
+            array = _create_zarr_array(root, f"s{index}", shape=shape, chunks=chunks, dtype=source.dtype)
             total = int(np.prod([(size + chunk - 1) // chunk for size, chunk in zip(shape, chunks)]))
             for completed, region in enumerate(_chunk_regions(shape, chunks), start=1):
                 array[region] = np.asarray(source[region])
@@ -910,10 +932,7 @@ def _persist_labels_to_zarr(
     scale: tuple[float, ...],
     progress: Callable[[int, int, str], None] | None = None,
 ):
-    try:
-        import zarr
-    except Exception as exc:
-        raise WorkspaceError("Saving Labels data requires zarr.") from exc
+    zarr = _require_zarr()
 
     shape = tuple(int(value) for value in getattr(source, "shape", ()))
     if len(shape) not in (2, 3):
@@ -933,7 +952,7 @@ def _persist_labels_to_zarr(
         chunks[0] = 1
 
     root = zarr.open_group(str(temp), mode="w")
-    array = root.create_array(
+    array = _create_zarr_array(root,
         "s0",
         shape=shape,
         chunks=tuple(chunks),
@@ -975,10 +994,7 @@ def _ensure_writable_zarr_layer(layer: Any, reference: dict[str, Any]) -> None:
     data = getattr(layer, "data", None)
     if not bool(getattr(data, "read_only", False)):
         return
-    try:
-        import zarr
-    except Exception as exc:
-        raise WorkspaceError("Opening writable Labels data requires zarr.") from exc
+    zarr = _require_zarr()
     store_path = Path(reference["path"]).expanduser()
     array_path = str(reference.get("array_path") or "").strip().strip("/")
     target = store_path / array_path if array_path else store_path

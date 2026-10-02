@@ -428,6 +428,7 @@ class WorkspaceManagerWidget(QWidget):
             )
         except Exception as exc:
             self._set_status(f"Project loading failed: {exc}")
+            QMessageBox.warning(self, "Project loading failed", str(exc))
             return
         finally:
             dialog.close()
@@ -451,8 +452,9 @@ class WorkspaceManagerWidget(QWidget):
             details = "\n".join(f"{item['name']}: {item['reason']}" for item in result["skipped_layers"])
             QMessageBox.warning(
                 self, "Workspace layers could not be loaded",
-                "Some layers are missing. Linked data may be unavailable on this computer. "
-                "On the source computer, use Complete package copy and transfer the entire folder.\n\n" + details,
+                "Some layers failed to load. The reasons below may indicate unavailable data "
+                "or a Python dependency problem. For unavailable source paths, create a "
+                "Complete package copy on the source computer and transfer the entire folder.\n\n" + details,
             )
 
     def _run(
