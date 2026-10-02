@@ -131,3 +131,38 @@ def test_save_failure_is_visible_and_preserves_project(make_napari_viewer, tmp_p
     assert widget.workspace_path is None
     assert "read-only" in widget.status_label.text()
     assert len(warnings) == 1
+
+
+def test_complete_package_setting_persists_and_reaches_save(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools import _workspace_widget as module
+    settings_path = tmp_path / "settings.ini"
+    viewer = make_napari_viewer()
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
+    assert not widget.complete_package_check.isChecked()
+    widget.complete_package_check.setChecked(True)
+    restored = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
+    assert restored.complete_package_check.isChecked()
+    calls = []
+    def fake_save(viewer, path, **kwargs):
+        calls.append(kwargs)
+        return {"path": str(path), "saved_layers": 1, "complete_package": True}
+    monkeypatch.setattr(module, "save_workspace", fake_save)
+    restored._save_path(tmp_path / "project.json")
+    assert calls[0]["complete_package"] is True
+    assert "Transfer the manifest" in restored.status_label.text()
+
+
+def test_partial_load_warns_about_missing_layers(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools import _workspace_widget as module
+    viewer = make_napari_viewer()
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+    monkeypatch.setattr(module, "load_workspace", lambda *args, **kwargs: {
+        "path": "project.json", "restored_layers": ["mask"],
+        "skipped_layers": [{"name": "image", "reason": "missing /shared/image.tiff"}],
+    })
+    warnings = []
+    monkeypatch.setattr(module.QMessageBox, "warning", lambda *args: warnings.append(args))
+    widget._load_with_progress(tmp_path / "project.json")
+    assert len(warnings) == 1
+    assert "image" in warnings[0][2]
+    assert "Complete package copy" in warnings[0][2]

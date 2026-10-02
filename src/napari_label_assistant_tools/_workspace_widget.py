@@ -25,6 +25,7 @@ SETTINGS_ORG = "napari-label-assistant"
 SETTINGS_APP = "label-assistant"
 RECENT_WORKSPACES_KEY = "workspace/recent_manifests"
 LAST_WORKSPACE_KEY = "workspace/last_manifest"
+COMPLETE_PACKAGE_KEY = "workspace/complete_package"
 OPTIMIZE_LARGE_IMAGES_KEY = "workspace/optimize_large_images"
 RECENT_LIMIT = 10
 VIEWER_WORKSPACE_PATH_ATTR = "_label_assistant_workspace_path"
@@ -98,6 +99,23 @@ class WorkspaceManagerWidget(QWidget):
                 OPTIMIZE_LARGE_IMAGES_KEY, bool(checked)
             )
         )
+        self.complete_package_check = QCheckBox("Complete package copy (images and masks)")
+        self.complete_package_check.setChecked(
+            bool(self.settings.value(COMPLETE_PACKAGE_KEY, False, type=bool))
+        )
+        self.complete_package_check.setToolTip(
+            "Save all image and mask pixels beside the manifest using relative paths. "
+            "Move the manifest AND its data folder together to another computer. "
+            "Copying large datasets requires time and disk space."
+        )
+        self.complete_package_check.toggled.connect(
+            lambda checked: self.settings.setValue(COMPLETE_PACKAGE_KEY, bool(checked))
+        )
+        self.package_note = QLabel(
+            "For another computer: enable Complete package copy, Save As into an "
+            "empty folder, then transfer that entire folder."
+        )
+        self.package_note.setWordWrap(True)
         self.recent_list = QListWidget()
         self.recent_list.setMinimumHeight(120)
         self.recent_list.itemDoubleClicked.connect(
@@ -158,6 +176,8 @@ class WorkspaceManagerWidget(QWidget):
         layout.addLayout(first_row)
         layout.addWidget(self.optimize_images_check)
         layout.addWidget(self.optimize_images_note)
+        layout.addWidget(self.complete_package_check)
+        layout.addWidget(self.package_note)
         layout.addWidget(QLabel("Recent workspaces"))
         layout.addWidget(self.recent_list)
         layout.addLayout(second_row)
@@ -333,6 +353,8 @@ class WorkspaceManagerWidget(QWidget):
             )
             saved_layers = result.get("saved_layers")
             saved_path = result.get("path")
+            if result.get("complete_package"):
+                detail += " Complete package saved. Transfer the manifest and its data folder together."
             return f"Saved {saved_layers} layer(s) to {saved_path}." + detail
 
         try:
@@ -343,6 +365,7 @@ class WorkspaceManagerWidget(QWidget):
                     optimize_large_images=optimize,
                     progress=_progress,
                     copy_labels=copy_labels,
+                    complete_package=self.complete_package_check.isChecked(),
                 ),
                 success=_success,
                 completed_path=path,
@@ -424,6 +447,13 @@ class WorkspaceManagerWidget(QWidget):
             f"{result['path']}. "
             f"Skipped {len(result['skipped_layers'])} layer(s)."
         )
+        if result["skipped_layers"]:
+            details = "\n".join(f"{item['name']}: {item['reason']}" for item in result["skipped_layers"])
+            QMessageBox.warning(
+                self, "Workspace layers could not be loaded",
+                "Some layers are missing. Linked data may be unavailable on this computer. "
+                "On the source computer, use Complete package copy and transfer the entire folder.\n\n" + details,
+            )
 
     def _run(
         self,

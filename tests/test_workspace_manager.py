@@ -295,3 +295,69 @@ def test_failed_save_as_keeps_original_mask_binding(tmp_path, monkeypatch):
         save_workspace(FakeViewer([layer]), tmp_path / "case.json", copy_labels=True)
     assert layer.data is original
     assert service.LABEL_ASSISTANT_STORAGE_METADATA_KEY not in layer.metadata
+
+
+@pytest.mark.parametrize("rgb,multiscale", [(False, False), (True, False), (False, True)])
+def test_complete_package_reopens_after_source_and_package_move(tmp_path, rgb, multiscale):
+    import shutil
+    zarr = pytest.importorskip("zarr")
+    source_root = tmp_path / "source_computer"
+    source_root.mkdir()
+    original = np.arange(64, dtype=np.uint8).reshape(8, 8)
+    image_data = np.stack([original] * 3, axis=-1) if rgb else original
+
+    class BoundedImage:
+        shape = image_data.shape
+        dtype = image_data.dtype
+        def __array__(self, *args, **kwargs):
+            raise AssertionError("Full image conversion is forbidden")
+        def __getitem__(self, region):
+            return image_data[region]
+
+    image = Image([BoundedImage(), original[::2, ::2]] if multiscale else BoundedImage(), rgb=rgb)
+    image.multiscale = multiscale
+    image.source.path = str(source_root / "unavailable.tiff")
+    mask_source = zarr.open_array(str(source_root / "mask.zarr"), mode="w", shape=(8, 8), dtype="uint8")
+    mask_source[:] = original
+    mask = Labels(zarr.open_array(str(source_root / "mask.zarr"), mode="r"))
+    package = tmp_path / "package"
+    path = package / "project.json"
+    save_workspace(FakeViewer([image, mask]), path, complete_package=True, xy_chunk=3)
+    payload = json.loads(path.read_text())
+    assert all(not __import__('pathlib').Path(record['storage']['path']).is_absolute() for record in payload['layers'])
+    moved = tmp_path / "computer_a" / "renamed_package"
+    moved.parent.mkdir()
+    shutil.move(str(package), moved)
+    shutil.rmtree(source_root)
+    restored = FakeViewer()
+    result = load_workspace(restored, moved / "project.json")
+    assert result['skipped_layers'] == []
+    actual_image = restored.layers[0].data[0] if multiscale else restored.layers[0].data
+    assert np.array_equal(np.asarray(actual_image), image_data)
+    assert np.array_equal(np.asarray(restored.layers[1].data), original)
+    restored.layers[1].data[0, 0] = 99
+    assert int(restored.layers[1].data[0, 0]) == 99
+
+
+def test_complete_package_copies_fileless_image(tmp_path):
+    pytest.importorskip("zarr")
+    image = Image(np.ones((8, 8), dtype=np.uint8))
+    image.source.path = None
+    path = tmp_path / "project.json"
+    save_workspace(FakeViewer([image]), path, complete_package=True)
+    restored = FakeViewer()
+    assert load_workspace(restored, path)['skipped_layers'] == []
+    assert np.all(np.asarray(restored.layers[0].data) == 1)
+
+
+def test_complete_package_and_optimization_work_together(tmp_path, monkeypatch):
+    pytest.importorskip("zarr")
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, "LARGE_IMAGE_AXIS_THRESHOLD", 4)
+    monkeypatch.setattr(service, "PYRAMID_SMALLEST_LEVEL", 2)
+    image = Image(np.arange(64, dtype=np.uint8).reshape(8, 8))
+    path = tmp_path / "project.json"
+    save_workspace(FakeViewer([image]), path, complete_package=True, optimize_large_images=True)
+    restored = FakeViewer()
+    assert load_workspace(restored, path)['skipped_layers'] == []
+    assert restored.layers[0].multiscale is True

@@ -3,6 +3,20 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-10-02
+
+### Added
+
+- Added **Complete package copy (images and masks)** beside image optimization.
+  Saves include all image and mask arrays with relative paths, including fileless,
+  RGB, and multiscale images. Transfer the manifest and data folder together to
+  reopen on another computer without the original mounts or reader plugins.
+
+### Fixed
+
+- Opening a workspace with missing linked data now displays the affected layer
+  names and failure reasons, with guidance for making a complete package.
+
 ## [2.0.0] - 2026-10-02
 
 - Embed completed training-round history in saved Quick Train models and export it as a neighboring `.history.json` file, preserving it across loading and continuation.

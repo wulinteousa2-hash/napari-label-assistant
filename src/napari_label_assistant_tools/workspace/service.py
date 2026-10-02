@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,10 +36,13 @@ def save_workspace(
     xy_chunk: int = DEFAULT_XY_CHUNK,
     optimize_large_images: bool = False,
     copy_labels: bool = False,
+    complete_package: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Save a lightweight manifest and persist new Labels layers once.
 
+    With complete_package=True, all image and mask data is stored beside the
+    manifest with relative paths, so the folder can be moved between computers.
     With copy_labels=True (Save As), masks are copied to the destination.
     Otherwise existing Zarr-backed layers remain external references. In-memory Labels
     layers are written chunk-by-chunk into a sibling durable-data directory and
@@ -66,6 +70,7 @@ def save_workspace(
                 layer_index=index,
                 optimize_large_images=bool(optimize_large_images),
                 copy_labels=copy_labels,
+                complete_package=complete_package,
                 label_bindings=label_bindings,
                 progress=progress,
                 xy_chunk=int(xy_chunk),
@@ -135,6 +140,7 @@ def save_workspace(
         ),
         "skipped_layers": skipped,
         "data_root": str(data_root),
+        "complete_package": complete_package,
     }
 
 
@@ -372,6 +378,7 @@ def _serialize_layer(
     manifest_path: Path,
     optimize_large_images: bool = False,
     copy_labels: bool = False,
+    complete_package: bool = False,
     label_bindings: list | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     data_root: Path,
@@ -383,7 +390,10 @@ def _serialize_layer(
 
     if layer_type == "Labels":
         reference = _zarr_reference(layer)
-        if reference is None or copy_labels:
+        if reference is None or copy_labels or (
+            complete_package
+            and not Path(reference["path"]).resolve().is_relative_to(data_root.resolve())
+        ):
             data_root.mkdir(parents=True, exist_ok=True)
             target = _new_mask_path(data_root, layer_index, str(getattr(layer, "name", "labels")))
             array = _persist_labels_to_zarr(
@@ -415,6 +425,27 @@ def _serialize_layer(
         return record
 
     if layer_type == "Image":
+        if complete_package:
+            data_root.mkdir(parents=True, exist_ok=True)
+            target = _new_image_path(data_root, layer_index, str(layer.name))
+            if optimize_large_images and _needs_image_pyramid(layer):
+                levels = _persist_image_pyramid_to_zarr(
+                    layer.data, target, xy_chunk=xy_chunk,
+                    scale=tuple(layer.scale), rgb=bool(getattr(layer, "rgb", False)),
+                    progress=progress,
+                )
+                multiscale = True
+            else:
+                levels = _persist_image_data_to_zarr(layer, target, xy_chunk=xy_chunk, progress=progress)
+                multiscale = bool(getattr(layer, "multiscale", False))
+            record["storage"] = {
+                "kind": "zarr", "path": _encode_path(target, manifest_path.parent),
+                "array_path": "" if multiscale else "s0", "mode": "r",
+            }
+            if multiscale:
+                record["storage"].update(multiscale=True, datasets=[f"s{i}" for i in range(len(levels))])
+            record.update(_image_state(layer))
+            return record
         reference = _zarr_reference(layer)
         if (
             (reference is None or not reference.get("multiscale"))
@@ -837,6 +868,38 @@ def _persist_image_pyramid_to_zarr(
         zarr.open_array(str(destination / f"s{level}"), mode="r")
         for level in range(len(shapes))
     ]
+
+
+def _persist_image_data_to_zarr(layer, destination: Path, *, xy_chunk: int, progress=None):
+    """Package the displayed image arrays without relying on reader plugins or source paths."""
+    import zarr
+
+    sources = list(layer.data) if bool(getattr(layer, "multiscale", False)) else [layer.data]
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        root = zarr.open_group(str(temporary), mode="w")
+        for index, source in enumerate(sources):
+            shape = tuple(int(value) for value in source.shape)
+            if not shape or any(size <= 0 for size in shape):
+                raise WorkspaceError(f"Cannot package empty image: {layer.name}")
+            chunks = tuple(min(size, max(1, xy_chunk)) if axis >= len(shape) - 2 else 1
+                           for axis, size in enumerate(shape))
+            if bool(getattr(layer, "rgb", False)):
+                chunks = tuple(min(size, max(1, xy_chunk)) if axis in (len(shape) - 3, len(shape) - 2)
+                               else size if axis == len(shape) - 1 else 1
+                               for axis, size in enumerate(shape))
+            array = root.create_array(f"s{index}", shape=shape, chunks=chunks, dtype=source.dtype)
+            total = int(np.prod([(size + chunk - 1) // chunk for size, chunk in zip(shape, chunks)]))
+            for completed, region in enumerate(_chunk_regions(shape, chunks), start=1):
+                array[region] = np.asarray(source[region])
+                if progress is not None and (completed == total or completed % max(1, total // 200) == 0):
+                    progress(completed, total, f"Copying image: {layer.name}, level {index + 1}…")
+        temporary.replace(destination)
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+    return [zarr.open_array(str(destination / f"s{i}"), mode="r") for i in range(len(sources))]
 
 
 def _persist_labels_to_zarr(
