@@ -13,14 +13,20 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 2.0.0 highlights
+## Version 3.1.0 highlights (unreleased)
 
-- Use the dedicated **Training** tab to review paired image/mask crops, train
-  a small U-Net, continue saved models, and preview predictions.
-- Save models with training history and use spatially separate validation crops.
-- **Save As** creates writable mask copies at the chosen destination, including
-  read-only masks from shared mounts. Saves show progress and visible errors.
-- Navigate **Workspace**, **Labels**, **Training**, **Compare**, and **Combine**.
+- Follow five Training pages: **Dataset**, **Models**, **Train**, **Inference**,
+  and **Advanced**. Prepare datasets separately from optional patch previews.
+- Combine fully reviewed cells with selected component foreground. Persistent
+  library IDs and selections survive workspace saves and reopening.
+- Choose the existing custom U-Net, standard U-Net, optional SMP architectures,
+  or registered custom providers; organize checkpoints and compare models.
+- Evaluate with spatial holdout or independent spatial k-fold validation, inspect
+  learning curves, and export models and reports.
+- Configure augmentation, learning-rate reduction, and early stopping. Use batch
+  sizes up to 128, source patches up to 4096, and model inputs up to 2048.
+- Save model weights and per-run checkpoints with the workspace; complete-package
+  Save As includes model assets and reports. Older workspaces remain readable.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
@@ -109,7 +115,14 @@ without SAM3 Assistant.
 - New in-memory Labels layers are persisted once as writable, chunked
   OME-Zarr data beside the manifest. Later saves reuse the same store instead
   of copying the full mask again.
-- **Save As** to a new destination creates writable mask copies beside the
+- **Complete package copy (images and masks)** saves every image and mask
+  into the data folder beside the manifest with relative paths. Enable it and
+  use **Save As** in an empty folder, then transfer that **entire folder** to
+  another computer. Open the manifest there; original source paths and reader
+  plugins are no longer needed. It also supports fileless and multiscale images
+  and can be combined with image optimization. Allow time and disk space for
+  copying full datasets.
+- With Complete package copy off, **Save As** to a new destination creates writable mask copies beside the
   new manifest, including masks opened read-only from shared mounts. Images
   remain linked; keep the shared mount available when reopening locally.
   Saving to the current project path reuses its existing mask stores.
@@ -199,13 +212,28 @@ column, and cell containing each component centroid.
 
 ### Training
 
-**Quick Train** trains a small U-Net from reviewed image/ground-truth crops
+Training has five pages: **1. Dataset** for sources, reviewed cells, selected objects, and patch previews; **2. Models** for biological tasks, architecture selection, checkpoints, training history, and controlled comparisons; **3. Train** for training and validation; **4. Inference** for predictions; and **5. Advanced** for patch size, model input size, optimization, and augmentation. Progress and Cancel remain available across pages. Models supports the existing custom U-Net, a standard U-Net, and optional SMP U-Net, U-Net++, and DeepLabV3+ encoders. Prepare dataset enables training without adding canvas layers. Show patch preview is optional and displays a separate contact sheet beside the image; Return to image restores the previous view. Workspace Save includes changed model weights; standalone export remains available. See [model management and benchmarking](docs/model-management.md) for the workflow and optional dependency installation.
+
+For partial Curated annotations, combine **Local Editing** reviewed cells with
+the **Training → Dataset → Selected objects** library. Build the library once, then
+check **Train** for individual objects. IDs, bounds, pixel counts, and selections
+persist with the workspace; Save As and portable projects keep independent
+library copies. Object selection confirms foreground only; review background
+under Dataset → Reviewed cells after checking them in Local Editing. Editable Area changes update affected components and invalidate
+edited review cells. See [the training guide](docs/TRAINING.md).
+
+
+**Training** trains the selected model from reviewed image/ground-truth patches
 and previews a bounded area of another image as a new Labels layer.
 
-Install the optional training dependency in the same Python environment as
-napari: `pip install 'napari-label-assistant[train]'`. PyTorch is loaded only
-when training, prediction, or model loading is requested; other tools work
-without it.
+Install training dependencies in the Python environment used to launch napari.
+From this repository, use `python -m pip install -e '.[train]'`. For SMP models,
+use `python -m pip install segmentation-models-pytorch`, then verify with
+`python -c "import segmentation_models_pytorch as smp; print(smp.__version__)"`.
+Restart napari from that same environment after installation. See
+[SMP installation and troubleshooting](docs/model-management.md#installing-and-checking-smp)
+for environment checks and dependency errors. PyTorch is loaded only when
+training, prediction, or model loading is requested; other tools work without it.
 
 1. Open **Training**, select a single-channel 2D **Training image**
    and a same-size **Ground truth** Labels layer. Annotations must be complete:

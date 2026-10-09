@@ -21,6 +21,22 @@ class QuickTrainCancelled(Exception):
     """Cooperative cancellation between crops, training steps, and predictions."""
 
 
+def augment_batch(x, y, valid, rng, config):
+    """Transform inputs and annotation validity together; never augment validation."""
+    arrays = [x, y, valid]
+    if config.augment_rotations:
+        turns = int(rng.integers(4))
+        arrays = [np.rot90(a, turns, axes=(-2, -1)) if a is not None else None for a in arrays]
+    if config.augment_flips and rng.random() < 0.5:
+        arrays = [a[..., ::-1] if a is not None else None for a in arrays]
+    if config.augment_intensity:
+        arrays[0] = np.clip(
+            arrays[0] * rng.uniform(1 - config.contrast_jitter, 1 + config.contrast_jitter)
+            + rng.uniform(-config.brightness_jitter, config.brightness_jitter), 0, 1,
+        )
+    return tuple(a.copy() if a is not None else None for a in arrays)
+
+
 @dataclass(frozen=True)
 class QuickTrainConfig:
     crop_pixels: int = 512
@@ -31,18 +47,30 @@ class QuickTrainConfig:
     base_channels: int = 8
     device: str = "auto"
     seed: int = 42
+    augment_rotations: bool = True
+    augment_flips: bool = True
+    augment_intensity: bool = True
+    contrast_jitter: float = 0.1
+    brightness_jitter: float = 0.03
+    model_spec: dict | None = None
 
     def validate(self) -> None:
+        from ._model_providers import spec_for
+        spec_for(self).validate()
+        if spec_for(self).provider == "smp" and self.input_pixels % 32:
+            raise ValueError("SMP input size must be a multiple of 32.")
         if not 32 <= self.crop_pixels <= 4096:
             raise ValueError("Crop size must be between 32 and 4096 pixels.")
-        if not 32 <= self.input_pixels <= 512 or self.input_pixels % 16:
-            raise ValueError("Model input size must be a multiple of 16, between 32 and 512.")
+        if not 32 <= self.input_pixels <= 2048 or self.input_pixels % 16:
+            raise ValueError("Model input size must be a multiple of 16, between 32 and 2048.")
         if not 8 <= self.samples <= 256:
             raise ValueError("Choose between 8 and 256 training crops.")
         if not 1 <= self.steps <= 10000:
             raise ValueError("Choose between 1 and 10,000 training steps.")
-        if not 1 <= self.batch_size <= 8:
-            raise ValueError("Batch size must be between 1 and 8.")
+        if not 1 <= self.batch_size <= 128:
+            raise ValueError("Batch size must be between 1 and 128.")
+        if not 0 <= self.contrast_jitter <= 0.5 or not 0 <= self.brightness_jitter <= 0.25:
+            raise ValueError("Contrast variation must be 0–0.5 and brightness variation 0–0.25.")
         if self.base_channels not in (4, 8, 12, 16):
             raise ValueError("Unsupported U-Net channel width.")
         if self.device not in ("auto", "cpu", "cuda"):
@@ -54,6 +82,12 @@ class QuickTrainProgress:
     completed: int
     total: int
     message: str
+    metrics: dict | None = None
+    epoch: int | None = None
+    fold: int | None = None
+    training_loss_last_batch: float | None = None
+    training_step: int | None = None
+    series: str | None = None
 
 
 @dataclass
@@ -89,6 +123,7 @@ class QuickTrainModel:
     training_steps: int = 0
     training_rounds: int = 0
     history: list[dict] = field(default_factory=list)
+    identity: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -402,16 +437,23 @@ def _device(torch, requested):
 def _scores(torch, network, images, masks, device, cancel):
     network.eval()
     tp = fp = fn = 0
+    validation_loss = 0.0
     with torch.no_grad():
         for i in range(len(images)):
             _check_cancel(cancel)
             x = torch.from_numpy(images[i:i + 1]).unsqueeze(1).to(device)
-            predicted = torch.sigmoid(network(x)).cpu().numpy()[0, 0] >= 0.5
+            logits = network(x)
+            probability = torch.sigmoid(logits)
+            target = torch.from_numpy(masks[i:i+1]).unsqueeze(1).to(device=device, dtype=logits.dtype)
+            dice_loss = 1 - (2*(probability*target).sum()+1)/(probability.sum()+target.sum()+1)
+            validation_loss += float(torch.nn.functional.binary_cross_entropy_with_logits(logits, target) + dice_loss)
+            predicted = probability.cpu().numpy()[0, 0] >= 0.5
             truth = masks[i] > 0.5
             tp += int(np.count_nonzero(predicted & truth))
             fp += int(np.count_nonzero(predicted & ~truth))
             fn += int(np.count_nonzero(~predicted & truth))
     return {
+        "loss": validation_loss / max(len(images), 1),
         "precision": tp / max(tp + fp, 1), "recall": tp / max(tp + fn, 1),
         "dice": 2 * tp / max(2 * tp + fp + fn, 1), "iou": tp / max(tp + fp + fn, 1),
     }
@@ -426,17 +468,19 @@ def train_quick_unet(image, ground_truth, config, *, cancel=None):
 
 def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learning_rate=0.001, source_info=None):
     """Train only on the already inspected inputs; do not resample locations."""
+    from ._model_providers import build_model, spec_for, training_mode
     config.validate()
     if crops.images.shape[1:] != (config.input_pixels,) * 2 or len(crops.locations) != config.samples:
         raise ValueError("Crop settings changed. Prepare and preview crops again.")
     if not 0 < learning_rate <= 0.1:
         raise ValueError("Learning rate must be greater than zero and at most 0.1.")
-    if initial_model is not None and config.base_channels != initial_model.config.base_channels:
+    if initial_model is not None and spec_for(config) != spec_for(initial_model.config):
         raise ValueError("Continue training requires the existing model architecture.")
     torch = _torch()
     _check_cancel(cancel)
     device = _device(torch, config.device)
-    yield QuickTrainProgress(0, config.steps, f"Training small U-Net on {device.upper()}; {crops.crop_pixels}px context resized to {config.input_pixels}px.")
+    label = "small U-Net" if spec_for(config).provider == "custom" else spec_for(config).label()
+    yield QuickTrainProgress(0, config.steps, f"Training {label} on {device.upper()}; {crops.crop_pixels}px context resized to {config.input_pixels}px.")
     started_at = datetime.now(timezone.utc).isoformat()
     started_clock = monotonic()
     checkpoints = []
@@ -449,7 +493,7 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
         # Restore the host application's CPU random state after initialization.
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(config.seed)
-            network = build_unet(config.base_channels).to(device)
+            network = build_model(config, initialize=initial_model is None).to(device)
         if initial_model is not None:
             # Use a separate network: cancellation must preserve the current model.
             network.load_state_dict(initial_model.network.state_dict())
@@ -464,14 +508,10 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
         batch_size = min(config.batch_size, len(crops.images))
         for step in range(1, config.steps + 1):
             _check_cancel(cancel)
-            network.train()
+            training_mode(network, batch_size)
             indices = rng.choice(len(crops.images), batch_size, replace=False)
             x, y = crops.images[indices], crops.masks[indices]
-            turns = int(rng.integers(4))
-            x, y = np.rot90(x, turns, axes=(-2, -1)), np.rot90(y, turns, axes=(-2, -1))
-            if rng.random() < 0.5:
-                x, y = x[..., ::-1], y[..., ::-1]
-            x = np.clip(x * rng.uniform(0.9, 1.1) + rng.uniform(-0.03, 0.03), 0, 1)
+            x, y, _ = augment_batch(x, y, None, rng, config)
             x = torch.from_numpy(x.copy()).unsqueeze(1).to(device)
             y = torch.from_numpy(y.copy()).unsqueeze(1).float().to(device)
             logits = network(x)
@@ -488,7 +528,8 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
                     best_step = step
                     best_score, best_metrics = metrics["dice"], metrics
                     best_state = {key: value.detach().cpu().clone() for key, value in network.state_dict().items()}
-                yield QuickTrainProgress(step, config.steps, f"Step {step}/{config.steps} · loss {float(loss.detach()):.3f} · validation Dice {metrics['dice']:.1%}.")
+                loss_summary = f" · validation loss {metrics['loss']:.4f}" if 'loss' in metrics else ''
+                yield QuickTrainProgress(step, config.steps, f"Step {step}/{config.steps} · batch training loss {float(loss.detach()):.3f} · validation Dice {metrics['dice']:.1%}{loss_summary}.", metrics=dict(metrics), epoch=step, training_loss_last_batch=float(loss.detach()))
             else:
                 yield QuickTrainProgress(step, config.steps, f"Training step {step}/{config.steps} on {device.upper()}.")
         _check_cancel(cancel)
@@ -503,7 +544,7 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
             "finished_at_utc": datetime.now(timezone.utc).isoformat(),
             "duration_seconds": monotonic() - started_clock,
             "config": asdict(config), "learning_rate": learning_rate,
-            "optimizer": "AdamW (fresh each round)", "device": device,
+            "optimizer": "AdamW (fresh each round)", "singleton_batch_norm": "running_statistics", "device": device,
             "source": deepcopy(source_info or {}), "crop_pixels": crops.crop_pixels,
             "crop_summary": crop_summary(crops), "locations": deepcopy(crops.locations),
             "checkpoints": checkpoints, "retained_step": best_step,
@@ -511,7 +552,7 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
         })
         return QuickTrainModel(network, config, crops.crop_pixels, best_metrics, device, crops.locations,
                                (initial_model.training_steps if initial_model else 0) + config.steps,
-                               (initial_model.training_rounds if initial_model else 0) + 1, history)
+                               (initial_model.training_rounds if initial_model else 0) + 1, history, deepcopy(initial_model.identity) if initial_model else {})
     finally:
         if network is not None:
             network.cpu()
@@ -549,14 +590,26 @@ def predict_area(model, image, center, *, device="auto", cancel=None):
 
 def save_model(model, path):
     torch = _torch()
-    torch.save({
-        "quick_train_version": 1, "config": asdict(model.config),
+    from ._model_providers import library_versions
+    import os
+    from uuid import uuid4
+    path = Path(path)
+    temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    payload = {
+        "quick_train_version": 2,
+        "library_versions": library_versions(),
+        "contract": {"input_channels": 1, "output_channels": 1, "output": "logits"}, "config": asdict(model.config),
         "crop_pixels": model.crop_pixels, "metrics": model.metrics,
         "training_device": model.training_device, "locations": model.locations,
         "training_steps": model.training_steps, "training_rounds": model.training_rounds,
-        "history": model.history,
+        "history": model.history, "identity": model.identity,
         "state_dict": model.network.cpu().state_dict(),
-    }, path)
+    }
+    try:
+        torch.save(payload, temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     history_path = Path(path).with_suffix(".history.json")
     history_path.write_text(json.dumps({
         "history_version": 1, "model_file": Path(path).name,
@@ -564,19 +617,27 @@ def save_model(model, path):
         "history": model.history,
     }, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
+    from ._training_report import history_points, learning_svg
+    Path(path).with_suffix(".learning.svg").write_text(learning_svg(history_points(model.history)), encoding="utf-8")
+    points = history_points(model.history)
+    Path(path).with_suffix(".loss.svg").write_text(learning_svg(points, title="Validation loss", loss=True), encoding="utf-8")
+    from ._training_report import write_metrics_csv
+    write_metrics_csv(points, Path(path).with_suffix(".metrics.csv"))
+
 
 def load_model(path):
     torch = _torch()
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict) or payload.get("quick_train_version") != 1:
+    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2):
         raise ValueError("Choose a model saved by Label Assistant Quick Train.")
     config = QuickTrainConfig(**payload["config"])
     config.validate()
     crop_pixels = int(payload["crop_pixels"])
     if not 32 <= crop_pixels <= config.crop_pixels:
         raise ValueError("The model has an invalid crop size.")
-    network = build_unet(config.base_channels)
+    from ._model_providers import build_model
+    network = build_model(config, initialize=False)
     network.load_state_dict(payload["state_dict"], strict=True)
     network.eval()
     return QuickTrainModel(network, config, crop_pixels, payload["metrics"], payload["training_device"], payload.get("locations", []),
-                           payload.get("training_steps", config.steps), payload.get("training_rounds", 1), payload.get("history", []))
+                           payload.get("training_steps", config.steps), payload.get("training_rounds", 1), payload.get("history", []), payload.get("identity", {}))

@@ -134,9 +134,12 @@ class LargeComponentController:
         delete: bool,
         on_done: Callable[[int], None],
         on_failed: Callable[[], None] | None = None,
+        on_edited: Callable[[tuple[int, int, int, int]], None] | None = None,
     ) -> None:
         if self.busy:
             raise ValueError("Wait for the current large-mask operation to finish.")
+        if getattr(target_layer, "_label_assistant_library_indexing", False):
+            raise ValueError("Wait for the component library scan or cancel it before changing this layer.")
         target_data = target_layer.data
         if not _writable_array_like(target_data):
             raise ValueError(
@@ -152,6 +155,8 @@ class LargeComponentController:
         changed = 0
         tile_count = 0
         self.edit_active = True
+        self._editing_target = target_layer
+        target_layer._label_assistant_component_editing = True
         self.analyze_button.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
@@ -161,11 +166,14 @@ class LargeComponentController:
             nonlocal changed, tile_count
             if self.closed:
                 self.edit_active = False
+                target_layer._label_assistant_component_editing = False
                 return
             try:
                 tile, mask = next(iterator)
             except StopIteration:
                 self.edit_active = False
+                target_layer._label_assistant_component_editing = False
+                self._editing_target = None
                 self.analyze_button.setEnabled(True)
                 self.progress.setVisible(False)
                 if delete:
@@ -190,6 +198,14 @@ class LargeComponentController:
                     source_region = np.asarray(source_data[slices])
                     updated[mask] = source_region[mask]
                 target_data[slices] = updated
+                if on_edited is not None:
+                    ys = np.flatnonzero(mask.any(axis=1))
+                    xs = np.flatnonzero(mask.any(axis=0))
+                    if len(ys) and len(xs):
+                        on_edited((
+                            int(tile.y0 + ys[0]), int(tile.x0 + xs[0]),
+                            int(tile.y0 + ys[-1] + 1), int(tile.x0 + xs[-1] + 1),
+                        ))
                 changed += int(np.count_nonzero(mask))
                 tile_count += 1
                 self.status(
@@ -197,6 +213,13 @@ class LargeComponentController:
                 )
             except Exception as error:
                 self.edit_active = False
+                target_layer._label_assistant_component_editing = False
+                self._editing_target = None
+                if on_edited is not None:
+                    try:
+                        on_edited((tile.y0, tile.x0, tile.y1, tile.x1))
+                    except Exception as notification_error:
+                        error = RuntimeError(f"{error}; edit notification failed: {notification_error}")
                 self.analyze_button.setEnabled(True)
                 self.progress.setVisible(False)
                 if on_failed is not None:
@@ -211,5 +234,10 @@ class LargeComponentController:
         QTimer.singleShot(0, step)
 
     def close(self) -> None:
+        target = getattr(self, "_editing_target", None)
+        if target is not None:
+            target._label_assistant_component_editing = False
+            self._editing_target = None
+        self.edit_active = False
         self.closed = True
         self.cancel()

@@ -275,6 +275,7 @@ def build_large_component_index(
     *,
     tile_size: int = LARGE_ANALYSIS_TILE_SIZE,
     cancel_event=None,
+    compute_euler: bool = True,
 ) -> Iterator[tuple[int, int, str]]:
     """Yield progress and return an exact global component index.
 
@@ -365,7 +366,7 @@ def build_large_component_index(
                 left_ids = np.where(local[:, -1] > 0, local[:, -1] + base, 0)
                 left_values = data[:, -1].copy()
                 done = row * cols + col + 1
-                yield done, total_tiles * 2, f"Indexing tile {done:,}/{total_tiles:,}"
+                yield done, total_tiles * (2 if compute_euler else 1), f"Indexing tile {done:,}/{total_tiles:,}"
             previous_bottom_ids = current_bottom_ids
             previous_bottom_values = current_bottom_values
 
@@ -415,6 +416,10 @@ def build_large_component_index(
         index = LargeComponentIndex(
             shape, tile_size, cache, tiles, provisional_to_final, records
         )
+
+        if not compute_euler:
+            complete = True
+            return index
 
         numerators = np.zeros(len(records) + 1, dtype=np.int64)
         previous_bottom: list[np.ndarray | None] = [None] * cols

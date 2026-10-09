@@ -2320,6 +2320,16 @@ def component_operations_widget(
         edit_controllers = []
         viewer._label_assistant_edit_controllers = edit_controllers
     edit_controllers.append(dynamic_edit_controller)
+    from ._reviewed_regions import ReviewedAreaWidget
+    reviewed_area_widget = ReviewedAreaWidget(viewer, dynamic_edit_controller, container)
+    # Canvas selection stays with editing; training acceptance lives in Dataset.
+    reviewed_area_widget.hide()
+    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.mouse_review_check)
+    reviewed_area_widget.configure_grid(_editable_target_layer, grid_y_spin, grid_x_spin, display_grid_check)
+    from ._component_library_widget import ComponentLibraryWidget
+    component_library_widget = ComponentLibraryWidget(viewer, _editable_target_layer, container)
+    component_library_widget.hide()
+    container.component_library_widget = component_library_widget
     save_edit_btn.clicked.connect(dynamic_edit_controller.save_now)
     undo_edit_btn.clicked.connect(dynamic_edit_controller.undo_stroke)
     redo_edit_btn.clicked.connect(dynamic_edit_controller.redo_stroke)
@@ -2367,6 +2377,11 @@ def component_operations_widget(
                 f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name}."
             )
 
+    def _component_pixels_changed(layer, bounds) -> None:
+        from ._component_library import annotation_changed, notify_library
+        annotation_changed(viewer, layer, bounds)
+        notify_library(layer)
+
     def _delete_selected(component_ids=None) -> None:
         layer = _target_layer()
         ids = _selected_component_ids() if component_ids is None else component_ids
@@ -2374,6 +2389,8 @@ def component_operations_widget(
             raise ValueError("Wait for the current large-label operation to finish.")
         if layer is None or not ids:
             raise ValueError("Select component rows to delete.")
+        if getattr(layer, "_label_assistant_library_indexing", False):
+            raise ValueError("Wait for the component library scan or cancel it before deleting.")
         if state.analyzed_layer_name != layer.name or state.fast_index is None:
             raise ValueError(
                 "Component table is stale. Click Analyze before deleting."
@@ -2398,6 +2415,7 @@ def component_operations_widget(
                 delete=True,
                 on_done=_after_large_delete,
                 on_failed=_invalidate_analysis,
+                on_edited=lambda bounds: _component_pixels_changed(layer, bounds),
             )
             return
         updated, changed = state.fast_index.delete_components(layer.data, ids)
@@ -2473,6 +2491,8 @@ def component_operations_widget(
             viewer.layers.selection.active = source_layer
         if target_layer is None or not isinstance(target_layer, napari.layers.Labels):
             raise ValueError("Choose a valid destination labels layer.")
+        if getattr(target_layer, "_label_assistant_library_indexing", False):
+            raise ValueError("Wait for the destination's component library scan or cancel it before copying.")
         target_shape = _supported_2d_mask_shape(target_layer.data)
         if source_shape is None or target_shape != source_shape:
             raise ValueError(
@@ -2499,6 +2519,7 @@ def component_operations_widget(
                 component_ids=ids,
                 delete=False,
                 on_done=_after_large_copy,
+                on_edited=lambda bounds: _component_pixels_changed(target_layer, bounds),
             )
             return
         updated, copied_pixels = _copy_mask_components_to_target(
@@ -2563,6 +2584,8 @@ def component_operations_widget(
         )
 
     def _handle_mouse_click(_source, event):
+        if reviewed_area_widget.mouse_review_check.isChecked():
+            return
         layer = _target_layer()
         if layer is None:
             return
@@ -2761,6 +2784,8 @@ def component_operations_widget(
 
     def _cleanup_callbacks(*_args) -> None:
         state.closed = True
+        reviewed_area_widget.shutdown()
+        component_library_widget.shutdown()
         with suppress(ValueError, AttributeError):
             viewer._label_assistant_edit_controllers.remove(
                 dynamic_edit_controller
@@ -2848,6 +2873,7 @@ def component_operations_widget(
     container._target_combo = target_combo
     container._assign_grid_check = assign_grid_check
     container._display_grid_check = display_grid_check
+    container._reviewed_area_widget = reviewed_area_widget
     container._grid_y_spin = grid_y_spin
     container._grid_x_spin = grid_x_spin
     container._refresh_grid_labels = _refresh_grid_labels

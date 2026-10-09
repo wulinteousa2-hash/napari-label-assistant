@@ -217,3 +217,87 @@ def test_selected_label_persists_across_tile_reload_and_direct_mode(
 
     assert controller.tile is None
     assert source.selected_label == 7
+
+
+def _tiled_editor(make_napari_viewer, qtbot):
+    viewer = make_napari_viewer()
+    source = viewer.add_labels(np.zeros((96, 128), dtype=np.uint32), name="mask")
+    widget = component_operations_widget(viewer)
+    qtbot.addWidget(widget)
+    widget._editing_strategy_combo.setCurrentIndex(widget._editing_strategy_combo.findData("tiled"))
+    controller = widget._dynamic_edit_controller
+    qtbot.waitUntil(lambda: controller.tile is not None and not controller.loading, timeout=5000)
+    return viewer, source, widget, controller
+
+
+def test_zoom_near_image_edge_does_not_reload_identical_tile(make_napari_viewer, qtbot):
+    viewer, source, widget, controller = _tiled_editor(make_napari_viewer, qtbot)
+    controller.show_boundary.setChecked(False)
+    controller.auto_save.setChecked(False)
+    messages = []
+    controller.status = lambda *args: messages.append(args)
+    request = controller.request_id
+    viewer.camera.center = (0, -100, -100)
+    viewer.camera.zoom *= 0.9
+    qtbot.wait(850)
+    assert controller.request_id == request
+    assert messages == []
+    assert not controller.loading
+
+
+def test_camera_events_do_not_reload_or_steal_other_layer_focus(make_napari_viewer, qtbot, monkeypatch):
+    viewer, source, widget, controller = _tiled_editor(make_napari_viewer, qtbot)
+    image = viewer.add_image(np.ones((96, 128), dtype=np.uint8), name="image")
+    viewer.layers.selection.active = image
+    controller.view_timer.stop()
+    monkeypatch.setattr(controller, "_read_tile", lambda *args: (_ for _ in ()).throw(AssertionError("Unexpected read")))
+    messages = []
+    controller.status = lambda *args: messages.append(args)
+    request = controller.request_id
+    viewer.camera.center = (0, -100, -100)
+    viewer.camera.zoom *= 0.8
+    controller.ensure_tile()
+    qtbot.wait(650)
+    assert controller.request_id == request
+    assert viewer.layers.selection.active is image
+    assert messages == []
+
+
+def test_camera_navigation_preserves_pending_manual_edits_without_status_loop(make_napari_viewer, qtbot):
+    viewer, source, widget, controller = _tiled_editor(make_napari_viewer, qtbot)
+    controller.auto_save.setChecked(False)
+    controller.tile.brush_size = 1
+    controller.tile.paint((6, 10), 7)
+    assert controller.dirty
+    messages = []
+    controller.status = lambda *args: messages.append(args)
+    request = controller.request_id
+    viewer.camera.center = (0, -100, -100)
+    viewer.camera.zoom *= 0.8
+    qtbot.wait(850)
+    assert controller.request_id == request
+    assert messages == []
+    assert controller.dirty
+    assert int(controller.tile.data[6, 10]) == 7
+    assert int(source.data[6, 10]) == 0
+
+
+def test_active_navigation_loads_new_area_but_not_during_stroke(make_napari_viewer, qtbot, monkeypatch):
+    viewer, source, widget, controller = _tiled_editor(make_napari_viewer, qtbot)
+    monkeypatch.setattr(controller, "selected_tile_size", lambda: 32)
+    viewer.camera.center = (0, 16, 16)
+    controller.ensure_tile(force=True)
+    qtbot.waitUntil(lambda: not controller.loading, timeout=5000)
+    previous = controller.bounds
+    request = controller.request_id
+    controller.stroke_active = True
+    viewer.camera.center = (0, 72, 96)
+    controller.ensure_tile()
+    qtbot.wait(350)
+    assert controller.request_id == request
+    assert controller.bounds == previous
+    controller.stroke_active = False
+    controller.schedule()
+    qtbot.waitUntil(lambda: controller.bounds != previous and not controller.loading, timeout=5000)
+    assert controller.bounds.contains(72, 96)
+    assert viewer.layers.selection.active is controller.tile

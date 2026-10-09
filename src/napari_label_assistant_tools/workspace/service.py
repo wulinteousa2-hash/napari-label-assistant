@@ -16,7 +16,7 @@ from .._dynamic_edit import is_internal_layer
 LARGE_IMAGE_AXIS_THRESHOLD = 32768
 PYRAMID_SMALLEST_LEVEL = 2048
 WORKSPACE_FORMAT = "napari-label-assistant-workspace"
-WORKSPACE_VERSION = 1
+WORKSPACE_VERSION = 2
 LEGACY_SAM3_FORMAT = "napari-sam3-workspace"
 DEFAULT_XY_CHUNK = 1024
 LABEL_ASSISTANT_STORAGE_METADATA_KEY = "label_assistant_workspace_storage"
@@ -28,6 +28,12 @@ TRANSIENT_EDIT_HELPER_SUFFIXES = (
 
 class WorkspaceError(RuntimeError):
     """Raised when a Label Assistant project cannot be saved or restored safely."""
+
+
+def _ensure_no_training(viewer):
+    widget = getattr(viewer, "_label_assistant_training_widget", None)
+    if widget is not None and widget.worker is not None:
+        raise WorkspaceError("Wait for training, prediction or model export to finish before saving or opening a workspace.")
 
 
 def _require_zarr():
@@ -56,8 +62,22 @@ def _create_zarr_array(root, name, **kwargs):
     return create(name, **kwargs)
 
 
+def _copy_library(source, target):
+    """SQLite backup also handles a library currently open in another reader."""
+    import sqlite3
+    from contextlib import closing
+    if not Path(source).is_file():
+        raise FileNotFoundError(source)
+    with closing(sqlite3.connect(Path(source).resolve().as_uri()+"?mode=ro", uri=True)) as original:
+        with closing(sqlite3.connect(str(target))) as copied:
+            original.backup(copied)
+
+
 def _workspace_storage_state(records, manifest_path):
     for record in records:
+        library = record.get("label_assistant_component_library")
+        if library and not _resolve_path(library["path"], manifest_path.parent).resolve().is_relative_to(manifest_path.parent.resolve()):
+            return "linked"
         storage = record.get("storage") or {}
         if storage.get("kind") in {"file", "zarr"}:
             source = _resolve_path(storage.get("path"), manifest_path.parent).resolve()
@@ -86,6 +106,10 @@ def save_workspace(
     rebound to the writable Zarr array so later saves do not copy mask pixels.
     """
 
+    _ensure_no_training(viewer)
+    widget = getattr(viewer, "_label_assistant_training_widget", None)
+    if widget is not None:
+        widget.project_settings()
     missing = getattr(viewer, "_label_assistant_missing_workspace_layers", ())
     if missing:
         names = ", ".join(str(item.get("name", "layer")) for item in missing)
@@ -98,6 +122,7 @@ def save_workspace(
     path.parent.mkdir(parents=True, exist_ok=True)
     data_root = path.with_name(f"{_workspace_stem(path)}_label_assistant_data")
     label_bindings: list[tuple[Any, Any, dict[str, Any]]] = []
+    library_bindings: list[tuple[Any, dict[str, Any]]] = []
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
 
@@ -116,6 +141,7 @@ def save_workspace(
                 copy_labels=copy_labels,
                 complete_package=complete_package,
                 label_bindings=label_bindings,
+                library_bindings=library_bindings,
                 progress=progress,
                 xy_chunk=int(xy_chunk),
             )
@@ -169,12 +195,37 @@ def save_workspace(
         "layers": records,
         "skipped_layers": skipped,
     }
+    from .._model_project import save_project
+    payload["model_project"] = save_project(viewer, path, data_root, complete_package)
     _atomic_write_json(path, payload)
+    # Commit references only after the entire manifest has been written safely.
+    from copy import deepcopy
+    from .._model_project import KEY, resolve_references
+    saved_state = resolve_references(deepcopy(payload["model_project"]), path)
+    from .._model_project import project
+    original_reports = {r["id"]: r for r in project(viewer)["comparisons"]}
+    for index, report in enumerate(saved_state["comparisons"]):
+        if report["id"] in original_reports and "locations" in original_reports[report["id"]].get("dataset", {}):
+            full = deepcopy(original_reports[report["id"]])
+            full["report_file"] = report["report_file"]
+            saved_state["comparisons"][index] = full
+    setattr(viewer, KEY, saved_state)
     for layer, array, reference in label_bindings:
-        layer.data = array
-        _remember_layer_storage(layer, reference)
+        layer._label_assistant_library_rebinding = True
+        try:
+            layer.data = array
+            _remember_layer_storage(layer, reference)
+        finally:
+            layer._label_assistant_library_rebinding = False
+    from .._component_library import KEY as LIBRARY_KEY
+    for layer, state in library_bindings:
+        layer.metadata = {**layer.metadata, LIBRARY_KEY: state}
     storage_state = _workspace_storage_state(records, path)
     viewer._label_assistant_workspace_storage_state = storage_state
+    if widget is not None:
+        widget.models_panel._details()
+        if widget.model is not None:
+            widget.model_state_label.setText(f"Model weights saved with workspace: {path}")
     return {
         "storage_state": storage_state,
         "path": str(path),
@@ -200,7 +251,16 @@ def load_workspace(
 ) -> dict[str, Any]:
     """Load a project while keeping Zarr Labels writable and lazy."""
 
+    _ensure_no_training(viewer)
+    _ensure_no_library_scan(viewer)
     path, payload = read_workspace(source)
+    model_state = payload.get("model_project")
+    if model_state is not None:
+        from .._model_project import validate_project_state
+        try:
+            validate_project_state(model_state)
+        except ValueError as exc:
+            raise WorkspaceError(str(exc) + " Existing workspace retained.") from exc
     records = payload.get("layers")
     if not isinstance(records, list) or not records:
         skipped = payload.get("skipped_layers") or []
@@ -241,7 +301,7 @@ def load_workspace(
                 layer = _restore_layer(viewer, record, manifest_path=path)
                 if layer is None:
                     raise WorkspaceError("record did not produce a layer")
-                _apply_common_state(layer, record)
+                _apply_common_state(layer, record, manifest_path=path)
                 restored.append(str(getattr(layer, "name", name)))
             except Exception as exc:
                 skipped.append({"name": name, "reason": str(exc)})
@@ -259,6 +319,8 @@ def load_workspace(
         record for record in load_records
         if str(record.get("name") or "layer") in {item["name"] for item in skipped}
     ]
+    from .._model_project import restore_project
+    restore_project(viewer, payload.get("model_project"), path)
     storage_state = _workspace_storage_state(load_records, path)
     viewer._label_assistant_workspace_storage_state = storage_state
     return {
@@ -308,7 +370,7 @@ def read_workspace(source: str | Path) -> tuple[Path, dict[str, Any]]:
             "shared workspace manifest."
         )
     version = int(payload.get("version", 0))
-    if version != WORKSPACE_VERSION:
+    if version not in (1, WORKSPACE_VERSION):
         raise WorkspaceError(
             f"Unsupported Label Assistant project version {version}; expected {WORKSPACE_VERSION}."
         )
@@ -395,6 +457,17 @@ def create_portable_snapshot(
     records = list(payload.get("layers", []))
     copied: dict[Path, Path] = {}
     for index, record in enumerate(records, start=1):
+        from .._component_library import KEY as LIBRARY_KEY
+        state = record.get(LIBRARY_KEY)
+        if state:
+            library_source = _resolve_path(state["path"], source_manifest.parent).resolve()
+            if library_source in copied:
+                library_target = copied[library_source]
+            else:
+                library_target = target_data / f"{index:03d}_components.sqlite"
+                _copy_library(library_source, library_target)
+                copied[library_source] = library_target
+            record[LIBRARY_KEY] = {**state, "path": _encode_path(library_target, target_root), "durable": True}
         storage = record.get("storage") or {}
         kind = str(storage.get("kind") or "")
         if kind not in {"file", "zarr"}:
@@ -437,6 +510,7 @@ def _serialize_layer(
     copy_labels: bool = False,
     complete_package: bool = False,
     label_bindings: list | None = None,
+    library_bindings: list | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     data_root: Path,
     layer_index: int,
@@ -444,6 +518,21 @@ def _serialize_layer(
 ) -> dict[str, Any] | None:
     layer_type = type(layer).__name__
     record = _common_record(layer, layer_type)
+    from .._component_library import KEY as LIBRARY_KEY, library_for
+    if getattr(layer, "metadata", {}).get(LIBRARY_KEY):
+        library = library_for(layer)
+        state = dict(layer.metadata[LIBRARY_KEY])
+        source_path = library.path.resolve()
+        if not state.get("durable") or copy_labels or (
+            complete_package and not source_path.is_relative_to(data_root.resolve())
+        ):
+            data_root.mkdir(parents=True, exist_ok=True)
+            target = data_root / f"{layer_index:03d}_{_safe_name(layer.name)}_library_{uuid.uuid4().hex[:8]}.sqlite"
+            _copy_library(source_path, target)
+            state.update(path=str(target), durable=True)
+            if library_bindings is not None:
+                library_bindings.append((layer, state))
+        record[LIBRARY_KEY] = {**state, "path": _encode_path(Path(state["path"]), manifest_path.parent)}
 
     if layer_type == "Labels":
         reference = _zarr_reference(layer)
@@ -1108,6 +1197,8 @@ def _common_record(layer: Any, layer_type: str) -> dict[str, Any]:
         record["label_assistant_grid"] = _json_ready(
             metadata["label_assistant_grid"]
         )
+    if isinstance(metadata, dict) and isinstance(metadata.get("label_assistant_review"), dict):
+        record["label_assistant_review"] = _json_ready(metadata["label_assistant_review"])
     return record
 
 
@@ -1123,7 +1214,7 @@ def _image_state(layer: Any) -> dict[str, Any]:
     }
 
 
-def _apply_common_state(layer: Any, record: dict[str, Any]) -> None:
+def _apply_common_state(layer: Any, record: dict[str, Any], *, manifest_path=None) -> None:
     for attribute in ("name", "visible", "opacity", "blending"):
         if attribute in record:
             try:
@@ -1149,6 +1240,22 @@ def _apply_common_state(layer: Any, record: dict[str, Any]) -> None:
                 layer.colormap = record["colormap"]
             except Exception:
                 pass
+    review = record.get("label_assistant_review")
+    if isinstance(review, dict):
+        layer.metadata = {**getattr(layer, "metadata", {}), "label_assistant_review": dict(review)}
+    from .._component_library import KEY as LIBRARY_KEY, ComponentLibrary
+    library_state = record.get(LIBRARY_KEY)
+    if isinstance(library_state, dict):
+        state = dict(library_state)
+        base = manifest_path.parent if manifest_path is not None else Path.cwd()
+        state["path"] = str(_resolve_path(state["path"], base))
+        library = ComponentLibrary(state["path"])
+        from .._quick_train import array_2d
+        if tuple(library.shape) != tuple(array_2d(layer.data).shape):
+            raise WorkspaceError("Component library dimensions do not match the Labels layer.")
+        if library.state()["source_id"] != state.get("source_id"):
+            raise WorkspaceError("Component library belongs to another source layer.")
+        layer.metadata = {**getattr(layer, "metadata", {}), LIBRARY_KEY: state}
     grid = record.get("label_assistant_grid")
     if isinstance(grid, dict):
         metadata = dict(getattr(layer, "metadata", {}) or {})
@@ -1159,8 +1266,18 @@ def _apply_common_state(layer: Any, record: dict[str, Any]) -> None:
             pass
 
 
+def _ensure_no_library_scan(viewer: Any) -> None:
+    if any(getattr(layer, "_label_assistant_component_editing", False) for layer in viewer.layers):
+        raise WorkspaceError("Wait for component copy/delete to finish before saving/opening a workspace.")
+    for widget in getattr(viewer, "_label_assistant_library_widgets", ()):
+        if widget.worker is not None:
+            raise WorkspaceError("Wait for the component library update or cancel it before saving/opening a workspace.")
+
+
+
 def _commit_pending_local_edits(viewer: Any) -> None:
     """Move pending editable-tile pixels into source layers before saving."""
+    _ensure_no_library_scan(viewer)
     controllers = list(
         getattr(viewer, "_label_assistant_edit_controllers", ()) or ()
     )

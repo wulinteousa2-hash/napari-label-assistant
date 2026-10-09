@@ -3,9 +3,91 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [3.1.0] - Unreleased
+
+- Separated required Prepare dataset from optional Show patch preview. Preparation leaves the canvas unchanged; contact-sheet previews respect source world scale, sit beside the image, and offer Return to image. Outdated previews are hidden when the dataset changes.
+
+- Documented direct SMP installation, interpreter verification, restart steps, and troubleshooting of missing packages versus dependency import failures; synchronized training-page documentation.
+
+- SMP import errors now distinguish a missing package from a broken dependency, display the actual napari Python executable, and preserve the underlying error. Installation guidance uses the SMP package directly rather than an unreleased plugin extra.
+
+- Added a task-oriented Models page between Dataset and Train, with target definitions, architecture configurations, checkpoint/run selection, configuration reuse, and training history.
+- Added a shared model factory for the existing small custom U-Net, standard U-Net, optional SMP U-Net/U-Net++/DeepLabV3+ encoders, and registered custom Python providers. Checkpoint version 2 records model specifications and dependency versions; version-1 checkpoints remain readable.
+- Added controlled sequential model comparisons using identical indexed data and spatial partitions, fresh candidate/fold weights, bounded input fingerprints, validation metrics, parameter counts, training time, and CSV export.
+- Extended workspace format to version 2 while retaining version-1 loading. Workspace Save persists changed model weights and per-run checkpoints; complete-package Save As includes checkpoints and comparison reports using relative references. Large histories remain in sidecars, and networks load only when selected.
+- Handle singleton batches with running BatchNorm statistics and retain the previous valid workspace manifest when checkpoint persistence fails.
+
+- Reorganized Training into Dataset, Models, Train, Inference, and Advanced pages. Dataset
+  owns reviewed-cell confirmation and the training component library; Labels
+  retains canvas cell selection, mask editing, and component QC. Detailed training
+  metrics expand on demand; annotation tables share the existing editing state.
+
+
+See [the version 3 release plan](docs/V3_RELEASE_PLAN.md) for completed UI
+changes and the implemented persistent component-library training workflow.
+
+- Connect local editing to reviewed-area marking and removal; preserve Curated object IDs, automatically select image-associated coverage in partial Training mode, and persist associations in workspaces. Add a bounded read-only preview of reviewed annotations.
+
+### Fixed
+
+- Dataset's “Mark already-checked cells with clicks” now activates canvas review
+  mode and selects the marking action directly. Turning it off restores editing;
+  hiding the address grid clears click-marking mode as well.
+
+### Added
+
+- Added a Validation box in Training → Train with configurable spatial holdout, independent spatial k-fold evaluation, visible fold assignments and per-fold/mean/standard-deviation metrics. Added a separate final-model action using all reviewed patches, fold-model/report exports, and exact validation provenance in model history.
+- Added live validation learning curves for Dice, IoU, precision and recall, plus standalone SVG charts saved with models and validation reports. Renamed additional target sampling to Extra visits to patches with objects (%).
+
+- Advanced augmentation controls for rotations, flips, and brightness/contrast;
+  optional validation-loss plateau handling with one learning-rate reduction and
+  configurable early stopping. Persist settings/events and actual epoch counts
+  in model history while retaining the best validation Dice checkpoint.
+- Batch sizes up to 128, source patches up to 4096, model input sizes up to 2048,
+  and maximum training rounds up to 1000 epochs.
+
+
+- Added a paged, disk-backed training component library in Training → Dataset → Selected objects, with
+  persistent IDs, label pixel counts, bounds, and Train checkboxes. Library scans
+  skip Euler calculations and run in a cancellable worker; checkbox changes
+  update SQLite records without refreshing the full image.
+- Persist library records, compressed ID tiles, source fingerprints, selections,
+  and retired IDs with workspace Save/Open, Save As, and portable exports.
+- Combine selected foreground components with manually reviewed regions, ignore
+  unchecked surroundings, deduplicate patch coordinates, and keep each component
+  out of the opposite validation split.
+- Update affected components after Editable Area and QC copy/delete changes.
+  Preserve unambiguous unchanged IDs; new objects start unchecked; splits/merges
+  allocate new IDs. Edited review cells require background review again.
+
+- Automatically use all-patch coverage training for partial annotations and disable the incompatible sampled-patch workflow, preventing reviewed cells from failing at preview.
+
+- Simplified cell review to select, edit Curated, and Finish review. Moved direct click marking into Advanced, removed the redundant local-preview action, and automatically select associated Curated ground truth and reviewed coverage in Partial Training mode. Hide manual mask creation and exclude generated helper masks from ground-truth choices.
+
+- Added mouse-driven address-grid review: select cells, mark/unmark with clicks, yellow selection and green reviewed outlines, and shared grid-size controls. Marking merges accepted objects into a disk-backed Reviewed annotations layer with value 1 while preserving original object IDs.
+
+- Added default **Coverage training**: index eligible image patches once, stream
+  batches from disk, and visit every training patch each epoch. Reserved spatial
+  validation regions remain separate; progress reports unique patch coverage.
+- Added partial-annotation support with a separate reviewed-region mask. Pixels
+  outside fully reviewed regions and image-edge padding are excluded from loss
+  and validation. Empty disk-backed reviewed masks can be created from Training.
+- Added configurable epochs, batch size, and additional target-patch visits.
+  Representative galleries stay bounded instead of loading the full dataset.
+- Show model state explicitly as in memory or saved to disk. Continue training
+  preserves existing weights on cancellation and retains the best validation
+  checkpoint. Coverage history and validation block assignments are saved with
+  model weights; sampled-crop training remains available for quick experiments.
 
 ### Changed
+
+- Increment the package version from 3.0.0 to 3.1.0 and refresh README highlights
+  for the current training, model-management, validation, and workspace workflows.
+
+- Organize Quick Train into Dataset, Train, Advanced, and Inference pages with concise
+  guidance. Use saved bounds to index only candidate patches where available.
+- Replace duplicate manual-review data refresh notifications with lightweight
+  training notifications.
 
 - Refined Workspace labels and tooltips, including **Include all images and
   masks** for portable saves intended for sharing, transfer, or archiving.
@@ -16,6 +98,10 @@ uses [Semantic Versioning](https://semver.org/).
   image optimization and a separate indicator for the last saved workspace.
 
 ### Fixed
+
+- Stopped repeated editable-area reloads and status flashing at image edges.
+  Camera navigation preserves unrelated layer focus and pending manual edits;
+  active paint strokes are not interrupted by area reloads.
 
 - Retained unavailable layer records after partial loading and blocked saves
   until the workspace can be fully reopened, preventing accidental data loss.

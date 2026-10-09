@@ -242,3 +242,104 @@ def test_combine_labels_merges_a_single_multivalue_layer(make_napari_viewer):
     assert np.array_equal(
         result.data, np.array([[0, 7], [7, 0]], dtype=np.int32)
     )
+
+
+def test_dataset_owns_annotations_and_shares_editor_selection(make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._dynamic_edit import TileBounds
+
+    viewer = make_napari_viewer()
+    image = viewer.add_image(np.zeros((32, 32), dtype=np.float32), name="image")
+    curated = viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="Curated")
+    other = viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="other")
+    panel = label_assistant_widget(viewer)
+    qtbot.addWidget(panel)
+    panel.resize(540, 850)
+    panel.show()
+    labels = panel._tool_tabs.widget(1)
+    training = panel._tool_tabs.widget(2)
+    review = labels._reviewed_area_widget
+    library = labels.component_library_widget
+    panel._tool_tabs.setCurrentIndex(2)
+    assert training.reviewed_area_widget is review
+    assert training.component_library_widget is library
+    assert review.parentWidget() is training.reviewed_cells_page
+    assert library.parentWidget() is training.selected_objects_page
+    assert training.image_combo.currentData() is image
+    assert review.image_combo.currentData() is image
+    training.truth_combo.setCurrentIndex(training.truth_combo.findData(curated))
+    assert labels._target_combo.currentText() == "Curated"
+    selected = (curated, TileBounds(0, 0, 16, 16), 16, 16)
+    review.selected_cell = selected
+    training.annotation_tabs.setCurrentIndex(1)
+    assert library.isVisible()
+    assert not review.isVisible()
+    assert library.source_layer() is curated
+    training.workflow_tabs.setCurrentIndex(next(
+        i for i in range(training.workflow_tabs.count())
+        if training.workflow_tabs.tabText(i).endswith(". Train")
+    ))
+    assert training.train_button.isVisible()
+    assert not library.isVisible()
+    training.workflow_tabs.setCurrentIndex(0)
+    training.annotation_tabs.setCurrentIndex(0)
+    assert review.isVisible()
+    assert review.selected_cell is selected
+    labels._target_combo.setCurrentText("other")
+    assert training.truth_combo.currentData() is other
+    assert library.source_layer() is other
+    assert review.selected_cell is None
+    panel._tool_tabs.setCurrentIndex(1)
+    assert not library.isVisible()
+    assert not review.mark_button.isVisible()
+    assert review.mouse_review_check.parentWidget() is labels._annotate_page
+    training.workflow_tabs.setCurrentIndex(next(
+        i for i in range(training.workflow_tabs.count())
+        if training.workflow_tabs.tabText(i).endswith(". Train")
+    ))
+    assert training.metrics_label.isHidden()
+    training.results_toggle.setChecked(True)
+    assert not training.metrics_label.isHidden()
+
+
+def test_dataset_click_marking_activates_canvas_and_restores_editing(make_napari_viewer, qtbot):
+    from types import SimpleNamespace
+    from napari_label_assistant_tools._reviewed_regions import KEY, associate, identity
+
+    viewer = make_napari_viewer()
+    image = viewer.add_image(np.zeros((64, 64), dtype=np.float32), name="image")
+    curated = viewer.add_labels(np.zeros((64, 64), dtype=np.uint8), name="Curated")
+    curated.data[2:6, 2:6] = 7
+    mask = viewer.add_labels(np.zeros((64, 64), dtype=np.uint8), name="Reviewed regions")
+    associate(mask, image)
+    mask.metadata = {**mask.metadata, KEY: {**mask.metadata[KEY], "truth_id": identity(curated)}}
+    panel = label_assistant_widget(viewer)
+    qtbot.addWidget(panel)
+    labels = panel._tool_tabs.widget(1)
+    training = panel._tool_tabs.widget(2)
+    review = training.reviewed_area_widget
+    training.truth_combo.setCurrentIndex(training.truth_combo.findData(curated))
+    labels._grid_y_spin.setValue(32)
+    labels._grid_x_spin.setValue(32)
+    curated.mode = "paint"
+    assert not review.mouse_review_check.isChecked()
+    review.advanced_check.setChecked(True)
+    assert review.mouse_review_check.isChecked()
+    assert review.mouse_action_combo.currentData() == "mark"
+    assert labels._display_grid_check.isChecked()
+    assert str(curated.mode) == "pan_zoom"
+    review.mouse_click(viewer, SimpleNamespace(type="mouse_press", button=1,
+                       position=curated.data_to_world((4, 4))))
+    assert mask.data[:32, :32].all()
+    assert not mask.data[32:, :].any()
+    assert mask.metadata[KEY]["areas"] == [[0, 0, 32, 32]]
+    review.advanced_check.setChecked(False)
+    assert not review.mouse_review_check.isChecked()
+    assert review.mouse_action_combo.currentData() == "select"
+    assert str(curated.mode) == "paint"
+    review.mouse_click(viewer, SimpleNamespace(type="mouse_press", button=1,
+                       position=curated.data_to_world((40, 40))))
+    assert not mask.data[32:, 32:].any()
+    review.advanced_check.setChecked(True)
+    labels._display_grid_check.setChecked(False)
+    assert not review.mouse_review_check.isChecked()
+    assert not review.advanced_check.isChecked()

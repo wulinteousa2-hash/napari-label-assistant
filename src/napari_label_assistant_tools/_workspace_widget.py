@@ -212,7 +212,13 @@ class WorkspaceManagerWidget(QWidget):
             "Writable Zarr data already saved on disk will not be deleted."
         ):
             return
+        training = getattr(self.viewer, "_label_assistant_training_widget", None)
+        if training is not None and training.worker is not None:
+            self._set_status("Finish or cancel the training operation before starting a new workspace.")
+            return
         self.viewer.layers.clear()
+        from ._model_project import restore_project
+        restore_project(self.viewer, None, Path("new-workspace.json"))
         self._disassociate_workspace()
         self._refresh_current_label()
         self._set_status("Started a new empty Label Assistant project.")

@@ -131,7 +131,8 @@ def test_actual_cpu_training_prediction_and_checkpoint_round_trip(tmp_path):
     model, updates = consume(train_quick_unet(image, truth, tiny_config()))
     assert model.training_device == "cpu"
     assert updates[-1].completed == 2
-    assert all(0 <= value <= 1 for value in model.metrics.values())
+    assert all(0 <= model.metrics[key] <= 1 for key in ("dice", "iou", "precision", "recall"))
+    assert np.isfinite(model.metrics["loss"]) and model.metrics["loss"] >= 0
     lazy_image = SliceOnlyArray(image)
     prediction = predict_area(model, lazy_image, (128, 128), device="cpu")
     assert prediction.probability.shape == (64, 64)
@@ -302,3 +303,34 @@ def test_continuation_retains_starting_weights_if_validation_declines(monkeypatc
     continued, _ = consume(backend.train_prepared_unet(crops, config, initial_model=original))
     for key, value in original.network.state_dict().items():
         assert torch.equal(value, continued.network.state_dict()[key])
+
+
+def test_augmentation_preserves_annotation_alignment_and_can_be_disabled():
+    from dataclasses import replace
+    from napari_label_assistant_tools._quick_train import augment_batch
+    x = np.arange(32, dtype=np.float32).reshape(2, 4, 4) / 32
+    y, valid = x.copy(), x.copy()
+    config = QuickTrainConfig(augment_intensity=False)
+    a, b, c = augment_batch(x, y, valid, np.random.default_rng(5), config)
+    assert np.array_equal(a, b)
+    assert np.array_equal(b, c)
+    off = replace(config, augment_rotations=False, augment_flips=False)
+    a, b, c = augment_batch(x, y, valid, np.random.default_rng(5), off)
+    assert np.array_equal(a, x)
+    assert np.array_equal(b, y)
+    assert np.array_equal(c, valid)
+    intensity = replace(off, augment_intensity=True, contrast_jitter=0.5, brightness_jitter=0.1)
+    a, b, c = augment_batch(x, y, valid, np.random.default_rng(5), intensity)
+    assert not np.array_equal(a, x)
+    assert np.array_equal(b, y)
+    assert np.array_equal(c, valid)
+    assert np.all((a >= 0) & (a <= 1))
+    assert np.array_equal(x, y)  # Source arrays were not changed.
+
+
+def test_larger_patch_input_and_batch_config_limits():
+    from dataclasses import replace
+    config = QuickTrainConfig(crop_pixels=4096, input_pixels=2048, batch_size=128)
+    config.validate()
+    with pytest.raises(ValueError, match="Batch size"):
+        replace(config, batch_size=129).validate()

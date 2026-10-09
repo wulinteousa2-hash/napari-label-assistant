@@ -35,13 +35,11 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
         WorkspaceManagerWidget(napari_viewer=viewer),
         "Workspace",
     )
-    tools.addTab(
-        component_operations_widget(
-            viewer, activity_indicator=activity_header
-        ),
-        "Labels",
-    )
-    tools.addTab(QuickTrainWidget(viewer), "Training")
+    components = component_operations_widget(viewer, activity_indicator=activity_header)
+    tools.addTab(components, "Labels")
+    training = QuickTrainWidget(viewer)
+    training.attach_annotation_widgets(components)
+    tools.addTab(training, "Training")
     tools.addTab(quick_compare_toggle_widget(viewer), "Compare")
     tools.addTab(label_operations_widget(viewer), "Combine")
     tools.setTabToolTip(

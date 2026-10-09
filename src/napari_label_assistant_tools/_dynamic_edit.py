@@ -325,15 +325,21 @@ class DynamicLabelsEditController:
                 with suppress(Exception):
                     self.viewer.layers.remove(layer)
 
+    def _editing_has_focus(self) -> bool:
+        active = getattr(getattr(self.viewer.layers, "selection", None), "active", None)
+        return active is self.source or (self.tile is not None and active is self.tile)
+
     def schedule(self, *_args) -> None:
-        if self.closed:
+        if self.closed or self.stroke_active or not self._editing_has_focus():
+            return
+        if self.dirty and not self._automatic_save_enabled():
             return
         layer = self.source_layer()
         if layer is not None and self.resolved_strategy(layer) == "tiled":
             self.view_timer.start()
 
     def ensure_tile(self, force: bool = False) -> None:
-        if self.closed:
+        if self.closed or self.stroke_active:
             return
         layer = self.source_layer()
         shape = tuple(int(v) for v in getattr(getattr(layer, "data", None), "shape", ()))
@@ -342,6 +348,8 @@ class DynamicLabelsEditController:
             or len(shape) != 2
             or self.resolved_strategy(layer) != "tiled"
         ):
+            return
+        if not force and self.tile is not None and not self._editing_has_focus():
             return
         center = self._center_in_data(layer)
         desired = aligned_tile_bounds(
@@ -354,7 +362,7 @@ class DynamicLabelsEditController:
             not force
             and self.source is layer
             and self.bounds is not None
-            and self.bounds.contains(*center, margin_fraction=0.20)
+            and (self.bounds == desired or self.bounds.contains(*center, margin_fraction=0.20))
         ):
             return
         if self.loading:
@@ -413,6 +421,8 @@ class DynamicLabelsEditController:
             return
         self.loading = False
         self.worker = None
+        active_before_load = getattr(self.viewer.layers.selection, "active", None)
+        retain_edit_focus = active_before_load is source or active_before_load is self.tile
         previous_mode = str(getattr(self.tile, "mode", "pan_zoom"))
         selected_label = int(
             getattr(
@@ -467,17 +477,19 @@ class DynamicLabelsEditController:
         self._update_boundary()
         self._set_actions_enabled(True)
         with suppress(Exception):
-            self.viewer.layers.selection.active = self.tile
+            self.viewer.layers.selection.active = self.tile if retain_edit_focus else active_before_load
+        if not retain_edit_focus:
+            return
         self.status(
             f"Ready: x {bounds.x0}:{bounds.x1}, y {bounds.y0}:{bounds.y1}. "
             + (
-                "Paint or erase inside the outlined area; changes save automatically."
+                "Paint or erase in this area; changes apply automatically."
                 if self._automatic_save_enabled()
-                else "Paint or erase inside the outlined area, then click Apply edits."
+                else "Paint or erase in this area, then click Apply edits."
             ),
             "ready",
         )
-        self.view_timer.start()
+        self.schedule()
 
     def _load_failed(self, request_id: int, error: Exception) -> None:
         if request_id != self.request_id:
@@ -736,11 +748,22 @@ class DynamicLabelsEditController:
             previous_region = np.asarray(self.original[local]).copy()
             changed_mask = changed_region != previous_region
             self.source.data[destination] = changed_region
-            preview_updated = self._refresh_source_region(
-                changed_region,
-                destination,
-                changed_mask,
+            from ._component_library import annotation_changed, notify_library
+            annotation_changed(
+                self.viewer, self.source,
+                (destination[0].start, destination[1].start,
+                 destination[0].stop, destination[1].stop),
             )
+            notify_library(self.source)
+            self.source._label_assistant_library_precise_edit = True
+            try:
+                preview_updated = self._refresh_source_region(
+                    changed_region,
+                    destination,
+                    changed_mask,
+                )
+            finally:
+                self.source._label_assistant_library_precise_edit = False
             self.original[local] = changed_region
             self.dirty = False
             self.dirty_bounds = None
