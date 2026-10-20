@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import napari
-from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QComboBox, QAbstractSpinBox, QCheckBox
 
 from ._widget import (
     _LayerActivityIndicator,
@@ -31,10 +31,8 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     )
     layout.addWidget(activity_header)
     tools = QTabWidget()
-    tools.addTab(
-        WorkspaceManagerWidget(napari_viewer=viewer),
-        "Workspace",
-    )
+    workspace = WorkspaceManagerWidget(napari_viewer=viewer)
+    tools.addTab(workspace, "Workspace")
     components = component_operations_widget(viewer, activity_indicator=activity_header)
     tools.addTab(components, "Labels")
     training = QuickTrainWidget(viewer)
@@ -42,6 +40,13 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     tools.addTab(training, "Training")
     tools.addTab(quick_compare_toggle_widget(viewer), "Compare")
     tools.addTab(label_operations_widget(viewer), "Combine")
+    for panel in (components, training):
+        for control in panel.findChildren(QComboBox):
+            control.currentIndexChanged.connect(workspace.mark_changed)
+        for control in panel.findChildren(QAbstractSpinBox):
+            control.valueChanged.connect(workspace.mark_changed)
+        for control in panel.findChildren(QCheckBox):
+            control.toggled.connect(workspace.mark_changed)
     tools.setTabToolTip(
         0,
         "Create, open, save, and transfer complete Label Assistant workspaces.",

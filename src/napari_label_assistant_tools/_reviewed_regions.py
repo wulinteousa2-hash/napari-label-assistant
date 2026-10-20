@@ -54,6 +54,12 @@ class ReviewedAreaWidget(QGroupBox):
             viewer._label_assistant_review_widgets = widgets
         widgets.append(self)
         self.selected_cell = None
+        self.editor_summary = QLabel()
+        self.editor_summary.setWordWrap(True)
+        self.next_button = QPushButton("Mark reviewed & next")
+        self.next_button.setEnabled(False)
+        self.next_button.setToolTip("Confirm all objects and background in this cell, then move to the next unreviewed cell.")
+        self.next_button.clicked.connect(lambda: self.run(self.finish_and_next))
         self.grid_config = None
         self.selection_overlay = None
         self.review_overlay = None
@@ -148,12 +154,15 @@ class ReviewedAreaWidget(QGroupBox):
     def clear_cell(self, *_args):
         self.selected_cell = None
         self.mark_button.setEnabled(False)
+        self.next_button.setEnabled(False)
         self.remove_button.setEnabled(False)
         self.cell_label.setText("No grid cell selected. Enable mouse review, then click a cell.")
         if self.selection_overlay is not None:
             self.selection_overlay.visible = False
         self.mark_button.setText("Finish review — include this cell in training")
         self.remove_button.setText("Remove reviewed status")
+
+        self.update_status()
 
     def toggle_mouse_review(self, enabled):
         self.mouse_action_combo.setEnabled(enabled)
@@ -239,12 +248,14 @@ class ReviewedAreaWidget(QGroupBox):
             bounds = TileBounds(row*sy, col*sx, min((row+1)*sy,h), min((col+1)*sx,w))
             self.selected_cell = (truth, bounds, sy, sx)
             self.mark_button.setEnabled(True)
+            self.next_button.setEnabled(True)
             self.remove_button.setEnabled(True)
             self.cell_label.setText(f"Selected R{row:02d}C{col:02d} · {bounds.shape[1]} × {bounds.shape[0]} px")
             self.mark_button.setText("Finish review — include this cell in training")
             self.remove_button.setText("Remove reviewed status")
             layer = self.make_outline(truth, [[bounds.y0,bounds.x0,bounds.y1,bounds.x1]], "Selected review cell", "yellow", "selection_overlay")
             self.viewer.layers.selection.active = layer
+            self.update_status()
             action = self.mouse_action_combo.currentData()
             if action != "select":
                 self.mark(1 if action == "mark" else 0)
@@ -292,6 +303,7 @@ class ReviewedAreaWidget(QGroupBox):
             self.status.setText(f"{count} marked area(s) · Training selects this mask in Partial mode. Preview patches again after changes.")
         else:
             self.status.setText("No reviewed coverage yet. Marking an area creates a separate mask.")
+        self.editor_summary.setText(self.cell_label.text() + "\n" + self.status.text())
 
     def context(self):
         from ._quick_train import array_2d
@@ -335,7 +347,7 @@ class ReviewedAreaWidget(QGroupBox):
                 raise ValueError("This image has no reviewed-region mask.")
             path, _ = QFileDialog.getSaveFileName(self, "Store Reviewed Areas", "reviewed-regions.zarr", "Zarr mask (*.zarr)")
             if not path:
-                return
+                return False
             if not path.endswith(".zarr"):
                 path += ".zarr"
             data = _require_zarr().open_array(path, mode="w-", shape=truth.data.shape,
@@ -388,6 +400,40 @@ class ReviewedAreaWidget(QGroupBox):
         self.update_status()
         if self.grid_config is not None:
             self.update_review_overlay(truth)
+        return True
+
+    def finish_and_next(self):
+        if self.selected_cell is None:
+            raise ValueError("Select a grid cell first, then check all objects and background.")
+        truth, current, sy, sx = self.selected_cell
+        if not self.mark(1):
+            return
+        mask = associated_mask(self.viewer, self.image_combo.currentData())
+        h, w = truth.data.shape
+        columns = (w + sx - 1) // sx
+        total = ((h + sy - 1) // sy) * columns
+        start = (current.y0 // sy) * columns + current.x0 // sx
+        from ._dynamic_edit import TileBounds
+        areas = mask.metadata[KEY].get("areas", [])
+        exact = {tuple(area) for area in areas}
+        spanning = [area for area in areas if area[2]-area[0] != sy or area[3]-area[1] != sx]
+        invalid = mask.metadata[KEY].get("invalid_regions", [])
+        for offset in range(1, total + 1):
+            row, col = divmod((start + offset) % total, columns)
+            bounds = TileBounds(row*sy, col*sx, min((row+1)*sy,h), min((col+1)*sx,w))
+            covered = (bounds.y0, bounds.x0, bounds.y1, bounds.x1) in exact or any(a <= bounds.y0 and b <= bounds.x0 and d >= bounds.y1 and e >= bounds.x1 for a,b,d,e in spanning)
+            stale = any(a < bounds.y1 and b < bounds.x1 and d > bounds.y0 and e > bounds.x0 for a,b,d,e in invalid)
+            if covered and not stale:
+                continue
+            self.selected_cell = (truth, bounds, sy, sx)
+            self.cell_label.setText(f"Selected R{row:02d}C{col:02d} · {bounds.shape[1]} × {bounds.shape[0]} px")
+            self.make_outline(truth, [[bounds.y0,bounds.x0,bounds.y1,bounds.x1]], "Selected review cell", "yellow", "selection_overlay")
+            self.mouse_review_check.setChecked(False)
+            self.viewer.camera.center = truth.data_to_world(((bounds.y0+bounds.y1)/2, (bounds.x0+bounds.x1)/2))
+            self.update_status()
+            return
+        self.status.setText("All cells in this grid are reviewed. Prepare the dataset in Training.")
+        self.editor_summary.setText(self.status.text())
 
     def update_annotations(self, image, truth, mask, bounds, value):
         """Merge trusted foreground into a binary disk-backed annotation layer."""

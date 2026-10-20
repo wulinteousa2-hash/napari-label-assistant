@@ -3,7 +3,47 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
-## [3.1.0] - Unreleased
+## [3.2.0] - 2026-10-20
+
+### Added
+
+- Added **Mark reviewed & next** beside Local Editing, with selected-cell and
+  review status. Confirming a cell advances to the next unreviewed cell in row
+  order, wraps at the image edge, and reports when the grid is fully reviewed.
+  Canceling the initial reviewed-mask save leaves the selected cell unchanged.
+- Added visible training and prediction prerequisites, including reasons why
+  continuation is unavailable with k-fold validation or previously used holdouts.
+- Show the shared image/annotation pair in Local Editing and Training. Remember
+  image-to-annotation associations in workspace metadata and restore them when
+  switching images.
+- Preview the number of components and pixels affected by small-component cleanup.
+- Added disk-backed **Undo last deletion** for component deletions and bulk
+  cleanup. Recovery restores original label values, preserves later nonzero
+  edits, and supports large masks without keeping a full-image recovery copy
+  in memory. Recovery lasts until another deletion starts or the panel closes.
+- Added workspace change tracking and successful save/open timestamps, with
+  explicit guidance distinguishing applied mask edits from saved project settings.
+- Added regression coverage for review navigation, canceled storage selection,
+  remembered source pairs, workspace changes, and small/large-mask deletion
+  recovery, including Zarr storage and replaced-data protection.
+
+### Changed
+
+- Bumped package and runtime versions to 3.2.0 and documented the new workflow
+  shortcuts and recovery lifetime in the README.
+- Retain the training, model-management, validation, and workspace capabilities
+  documented in the 3.1.0 development snapshot below.
+
+### Fixed
+
+- Require pending paint edits to be finished and applied before deleting components.
+- Refresh component results and local editing after recovery; notify review
+  tracking only for affected recovery regions.
+- Use the actual **Find components** button name in stale-analysis guidance.
+- Disconnect workspace change listeners for removed layers and release temporary
+  deletion-recovery files when the panel closes.
+
+## [3.1.0] - Development snapshot (not separately released)
 
 - Separated required Prepare dataset from optional Show patch preview. Preparation leaves the canvas unchanged; contact-sheet previews respect source world scale, sit beside the image, and offer Return to image. Outdated previews are hidden when the dataset changes.
 

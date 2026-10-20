@@ -2,7 +2,9 @@
 
 This records the training and review workflow discussion and its implementation.
 The work started with the 3.0.0 major-version increment after 2.0.2.
-The current development version is 3.1.0 and remains unreleased.
+The current version is 3.2.0. It includes the 3.1.0 development work and the
+editing, review-navigation, deletion-recovery, and save-state improvements
+documented in [CHANGELOG.md](../CHANGELOG.md).
 The persistent library, combined supervision, workspace persistence, and local
 update paths are implemented. The user workflow is in [TRAINING.md](TRAINING.md).
 

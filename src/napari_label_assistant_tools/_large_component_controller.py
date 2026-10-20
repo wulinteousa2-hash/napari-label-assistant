@@ -135,6 +135,7 @@ class LargeComponentController:
         on_done: Callable[[int], None],
         on_failed: Callable[[], None] | None = None,
         on_edited: Callable[[tuple[int, int, int, int]], None] | None = None,
+        before_write=None,
     ) -> None:
         if self.busy:
             raise ValueError("Wait for the current large-mask operation to finish.")
@@ -193,6 +194,8 @@ class LargeComponentController:
                 slices = (slice(tile.y0, tile.y1), slice(tile.x0, tile.x1))
                 updated = np.asarray(target_data[slices]).copy()
                 if delete:
+                    if before_write is not None:
+                        before_write(slices, mask)
                     updated[mask] = 0
                 else:
                     source_region = np.asarray(source_data[slices])

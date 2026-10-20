@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 
 from napari import current_viewer
 from napari.viewer import Viewer
@@ -75,9 +76,11 @@ class WorkspaceManagerWidget(QWidget):
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
         self.status_label = QLabel(
-            "Choose save options, then save your workspace."
+            "Mask edits and workspace saves are separate. Save here to preserve the project and its settings."
         )
         self.status_label.setWordWrap(True)
+        self.save_state_label = QLabel("Workspace has not been saved in this session.")
+        self.save_state_label.setWordWrap(True)
         self.optimize_images_check = QCheckBox(
             "Optimize large images"
         )
@@ -174,6 +177,7 @@ class WorkspaceManagerWidget(QWidget):
         layout.addWidget(QLabel("Workspace files"))
         layout.addWidget(self.current_label)
         layout.addWidget(self.storage_state_label)
+        layout.addWidget(self.save_state_label)
         layout.addLayout(first_row)
         layout.addWidget(QLabel("Data storage for next save"))
         layout.addWidget(self.storage_mode_combo)
@@ -195,6 +199,59 @@ class WorkspaceManagerWidget(QWidget):
 
         self._refresh_current_label()
         self._refresh_recent_list()
+        self._change_connections = []
+        self._watched_layers = set()
+        self._layer_connections = {}
+        self._watch_changes(self.viewer.layers.events.inserted, self._layer_inserted)
+        self._watch_changes(self.viewer.layers.events.removed, self._layer_removed)
+        for name in ("center", "zoom"):
+            self._watch_changes(getattr(self.viewer.camera.events, name), self.mark_changed)
+        for layer in self.viewer.layers:
+            self._watch_layer(layer)
+        self.destroyed.connect(self._disconnect_changes)
+
+    def _watch_changes(self, emitter, callback):
+        emitter.connect(callback)
+        self._change_connections.append((emitter, callback))
+
+    def _watch_layer(self, layer):
+        if id(layer) in self._watched_layers:
+            return
+        from ._dynamic_edit import is_internal_layer
+        if is_internal_layer(layer):
+            return
+        self._watched_layers.add(id(layer))
+        start = len(self._change_connections)
+        for name in ("data", "paint", "labels_update", "metadata", "name", "scale", "translate", "rotate", "shear", "affine", "visible", "opacity"):
+            emitter = getattr(layer.events, name, None)
+            if emitter is not None:
+                self._watch_changes(emitter, self.mark_changed)
+        self._layer_connections[id(layer)] = self._change_connections[start:]
+
+    def _layer_removed(self, event):
+        for emitter, callback in self._layer_connections.pop(id(event.value), []):
+            emitter.disconnect(callback)
+            self._change_connections.remove((emitter, callback))
+        self._watched_layers.discard(id(event.value))
+        self.mark_changed()
+
+    def _layer_inserted(self, event):
+        self._watch_layer(event.value)
+        from ._dynamic_edit import is_internal_layer
+        if not is_internal_layer(event.value):
+            self.mark_changed()
+
+    def mark_changed(self, *_args):
+        self.save_state_label.setText("Workspace changed since last save. Mask edits may already be applied; save to preserve project settings.")
+
+    def _disconnect_changes(self, *_args):
+        from contextlib import suppress
+        for emitter, callback in self._change_connections:
+            with suppress(Exception):
+                emitter.disconnect(callback)
+        self._change_connections.clear()
+        self._layer_connections.clear()
+        self._watched_layers.clear()
 
     def new_workspace(self) -> None:
         if self.viewer is None:
@@ -331,7 +388,7 @@ class WorkspaceManagerWidget(QWidget):
             saved_path = result.get("path")
             if result.get("complete_package"):
                 detail += " Portable workspace saved. Keep the workspace file and data folder together."
-            return f"Saved {saved_layers} layer(s) to {saved_path}." + detail
+            return f"Workspace saved at {datetime.now():%H:%M:%S}: {saved_layers} layer(s) to {saved_path}." + detail
 
         try:
             self._run(
@@ -459,6 +516,8 @@ class WorkspaceManagerWidget(QWidget):
             self._refresh_current_label()
             self._refresh_recent_list()
         self._set_status(success(result))
+        if completed_path is not None:
+            self.save_state_label.setText(f"Workspace saved or opened at {datetime.now():%H:%M:%S}. No subsequent changes recorded.")
 
     def _confirm_clear(self, message: str) -> bool:
         answer = QMessageBox.question(

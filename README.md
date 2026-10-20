@@ -13,7 +13,20 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 3.1.0 highlights (unreleased)
+## Version 3.2.0 highlights
+
+- Finish a cell with **Mark reviewed & next** directly in Local Editing; move
+  to the next unreviewed cell without switching to Training.
+- See the shared image/annotation pair in editing and training, with associations
+  remembered in workspace metadata and clear training/prediction prerequisites.
+- Preview cleanup counts and use **Undo last deletion** for component deletion
+  and cleanup, including disk-backed masks. Recovery preserves later nonzero
+  edits and lasts until another deletion starts or the panel closes.
+- Distinguish applied mask edits from saved workspace settings, with visible
+  change tracking and successful save/open timestamps.
+
+The training and model-management capabilities introduced during 3.1 development
+are also included:
 
 - Follow five Training pages: **Dataset**, **Models**, **Train**, **Inference**,
   and **Advanced**. Prepare datasets separately from optional patch previews.
@@ -43,6 +56,22 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
    independent reviewer and annotator can refer to the same location.
 5. **Correct and resume:** return to a reported cell, update the source mask,
    save the project, and continue later with the same layer and viewer state.
+
+## Everyday workflow shortcuts
+
+- **Labels → Local Editing** shows the image and annotation pair shared with
+  Training. After checking every object and the background in a selected grid
+  cell, use **Mark reviewed & next** to include it in training and move to the
+  next unreviewed cell. Navigation wraps at the end of the image.
+- Training shows the missing prerequisites for training and prediction. Image
+  and annotation associations are remembered in workspace metadata.
+- Component cleanup previews the number of components and pixels affected.
+  **Undo last deletion** restores the most recent component deletion or cleanup,
+  including on disk-backed masks, while preserving subsequent nonzero edits.
+  This recovery is available until another deletion starts or the panel closes.
+- Applied paint edits update the source mask. **Workspace Save** preserves the
+  project and its settings separately; the Workspace panel shows recorded changes
+  and the time of the latest successful save or open.
 
 ## Connected-component inquiry and curation
 

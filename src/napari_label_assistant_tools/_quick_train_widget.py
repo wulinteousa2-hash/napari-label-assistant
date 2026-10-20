@@ -79,11 +79,14 @@ class QuickTrainWidget(QWidget):
         dataset_layout.setContentsMargins(0, 0, 0, 0)
         dataset_layout.addWidget(scroll, 1)
         self.workflow_tabs.addTab(dataset_page, "1. Dataset")
+        self.source_context = QLabel()
+        self.source_context.setWordWrap(True)
+        outer.addWidget(self.source_context)
         outer.addWidget(self.workflow_tabs)
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 6, 0, 0)
         note = QLabel(
-            "Choose annotations, then preview the combined dataset."
+            "Choose annotations and prepare the dataset. Patch preview is optional."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -464,6 +467,9 @@ class QuickTrainWidget(QWidget):
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         outer.addWidget(self.progress)
+        self.readiness_label = QLabel()
+        self.readiness_label.setWordWrap(True)
+        outer.addWidget(self.readiness_label)
         self.status_label = QLabel("Choose the training image, ground truth, and annotation coverage.")
         self.status_label.setWordWrap(True)
         self.status_label.setFixedHeight(self.status_label.fontMetrics().lineSpacing()*2+8)
@@ -651,6 +657,8 @@ class QuickTrainWidget(QWidget):
         self._select_associated_reviewed_mask()
         if any(a is not b for a, b in zip(previous, (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()))):
             self._sources_changed()
+        else:
+            self._update_controls()
 
     def _source_removed(self, event):
         if any(event.value is layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())):
@@ -756,6 +764,26 @@ class QuickTrainWidget(QWidget):
         self.predict_button.setEnabled(not busy and self.model is not None)
         self.models_panel.set_busy(busy)
         self._update_model_summary()
+        image, truth = self.image_combo.currentData(), self.truth_combo.currentData()
+        self.source_context.setText(f"Image: {image.name if image is not None else 'Choose an image'} · Annotations: {truth.name if truth is not None else 'Choose a Labels layer'}")
+        if hasattr(self, "editor_pair_context"):
+            self.editor_pair_context.setText(self.source_context.text())
+        reason = ("An operation is running. Wait or use Cancel." if busy else
+                  "Choose an image and annotation layer in Dataset." if image is None or truth is None else
+                  "Prepare the dataset in Dataset to enable training." if self.prepared is None else
+                  "Dataset ready. Train a new model in Train.")
+        predict_reason = "Train or load a model to enable prediction." if self.model is None else "Model ready for prediction in Inference."
+        if busy:
+            predict_reason = "Prediction is unavailable while an operation is running."
+        if self.model is not None and self.prepared is not None:
+            if kfold:
+                reason += " Continue training requires spatial holdout instead of k-fold validation."
+            elif seen_holdout:
+                reason += " " + self.continuation_note.text()
+        self.readiness_label.setText(reason + "\n" + predict_reason)
+        self.train_button.setToolTip(reason)
+        self.predict_button.setToolTip(predict_reason)
+        self.continue_button.setToolTip("Continue training requires spatial holdout instead of k-fold validation." if kfold else self.continuation_note.text() if seen_holdout else "Prepare a dataset and train or load a model first." if self.prepared is None or self.model is None else reason)
         self.cancel_button.setEnabled(busy)
         self.progress.setVisible(busy)
         if not busy:
@@ -1641,16 +1669,26 @@ class QuickTrainWidget(QWidget):
         review.show()
         library.show()
         review.image_combo.hide()  # Uses the Dataset image selector.
+        pair_context = QLabel()
+        self.editor_pair_context = pair_context
+        pair_context.setWordWrap(True)
+        components._annotate_page.layout().insertWidget(0, pair_context)
         library.source_layer = lambda: self.truth_combo.currentData()
         library.table.setMaximumHeight(16777215)
         library.layout().setStretchFactor(library.table, 1)
 
         def sync_sources(*_args):
+            from ._reviewed_regions import identity
             image = self.image_combo.currentData()
             image_index = review.image_combo.findData(image)
             if image_index >= 0:
                 review.image_combo.setCurrentIndex(image_index)
             truth = self.truth_combo.currentData()
+            if image is not None and truth is not None:
+                annotation_id = identity(truth)
+                if image.metadata.get("label_assistant_annotation_id") != annotation_id:
+                    image.metadata = {**image.metadata, "label_assistant_annotation_id": annotation_id}
+            pair_context.setText(f"Image: {image.name if image is not None else 'Choose in Training → Dataset'}\nAnnotations: {truth.name if truth is not None else 'Choose in Training → Dataset'}")
             target_index = components._target_combo.findText(truth.name) if truth is not None else -1
             if review.selected_cell is not None and review.selected_cell[0] is not truth:
                 review.clear_cell()
@@ -1665,9 +1703,22 @@ class QuickTrainWidget(QWidget):
             if index >= 0:
                 self.truth_combo.setCurrentIndex(index)
 
+        def restore_pair(*_args):
+            image = self.image_combo.currentData()
+            annotation_id = image.metadata.get("label_assistant_annotation_id") if image is not None else None
+            if annotation_id:
+                from ._reviewed_regions import KEY
+                for index in range(self.truth_combo.count()):
+                    layer = self.truth_combo.itemData(index)
+                    if layer.metadata.get(KEY, {}).get("id") == annotation_id:
+                        self.truth_combo.setCurrentIndex(index)
+                        break
+
+        self.image_combo.currentIndexChanged.connect(restore_pair)
         self.image_combo.currentIndexChanged.connect(sync_sources)
         self.truth_combo.currentIndexChanged.connect(sync_sources)
         components._target_combo.currentIndexChanged.connect(sync_editor)
+        restore_pair()
         sync_sources()
 
     def shutdown(self):

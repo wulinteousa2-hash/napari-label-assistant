@@ -1630,8 +1630,9 @@ def component_operations_widget(
     auto_save_edit_check = QCheckBox("Apply edits automatically")
     auto_save_edit_check.setChecked(True)
     auto_save_edit_check.setToolTip(
-        "When on, save 400 ms after a completed stroke. When off, edits "
-        "remain in the editable area until Apply edits is clicked."
+        "When on, apply strokes to the source mask after 400 ms. When off, edits "
+        "remain in the editable area until Apply edits is clicked. "
+        "Use Workspace Save separately to preserve project settings."
     )
     dynamic_edit_status = QLabel("Select a source Labels layer.")
     dynamic_edit_status.setWordWrap(True)
@@ -1682,10 +1683,15 @@ def component_operations_widget(
     btn_analyze = QPushButton("Find components")
     btn_delete = QPushButton("Delete selected")
     btn_copy = QPushButton("Copy selected")
+    btn_undo_delete = QPushButton("Undo last deletion")
+    btn_undo_delete.setEnabled(False)
+    btn_undo_delete.setToolTip("Restore the last component deletion. Later nonzero edits are preserved. Recovery lasts until the panel closes or another deletion starts.")
+    deletion_history = None
     action_layout.addWidget(btn_analyze)
     action_layout.addWidget(btn_delete)
     action_layout.addWidget(btn_copy)
     analysis_layout.addWidget(action_row)
+    analysis_layout.addWidget(btn_undo_delete)
 
     cleanup_row = QWidget()
     cleanup_layout = QHBoxLayout(cleanup_row)
@@ -1706,6 +1712,9 @@ def component_operations_widget(
     )
     cleanup_layout.addWidget(btn_remove_small)
     analysis_layout.addWidget(cleanup_row)
+    cleanup_preview = QLabel("Find components to preview cleanup.")
+    cleanup_preview.setWordWrap(True)
+    analysis_layout.addWidget(cleanup_preview)
 
     btn_analyze.setToolTip(
         "Detect and measure connected components in the selected 2D Labels layer."
@@ -1994,6 +2003,8 @@ def component_operations_widget(
         background, foreground = colors.get(
             state_name, colors["neutral"]
         )
+        if state_name == "ready":
+            message += " · Use Workspace Save to preserve project settings."
         dynamic_edit_status.setText(message)
         dynamic_edit_status.setStyleSheet(
             f"QLabel {{ background: {background}; color: {foreground}; "
@@ -2155,6 +2166,12 @@ def component_operations_widget(
         return sorted(int(value) for value in state.selected_component_ids)
 
     def _update_selection_summary() -> None:
+        if state.fast_index is None:
+            cleanup_preview.setText("Find components to preview cleanup.")
+        else:
+            small = [record for record in state.fast_index.active_records()
+                     if record.area < small_component_size_spin.value()]
+            cleanup_preview.setText(f"Cleanup will remove {len(small):,} components, {sum(record.area for record in small):,} pixels across all pages. Undo last deletion restores the result.")
         ids = _selected_component_ids()
         if not ids:
             selection_summary.setText("Selected components: 0")
@@ -2325,6 +2342,8 @@ def component_operations_widget(
     # Canvas selection stays with editing; training acceptance lives in Dataset.
     reviewed_area_widget.hide()
     annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.mouse_review_check)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.editor_summary)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.next_button)
     reviewed_area_widget.configure_grid(_editable_target_layer, grid_y_spin, grid_x_spin, display_grid_check)
     from ._component_library_widget import ComponentLibraryWidget
     component_library_widget = ComponentLibraryWidget(viewer, _editable_target_layer, container)
@@ -2383,18 +2402,26 @@ def component_operations_widget(
         notify_library(layer)
 
     def _delete_selected(component_ids=None) -> None:
+        nonlocal deletion_history
         layer = _target_layer()
         ids = _selected_component_ids() if component_ids is None else component_ids
         if large_controller.busy:
             raise ValueError("Wait for the current large-label operation to finish.")
         if layer is None or not ids:
             raise ValueError("Select component rows to delete.")
+        if not layer.editable or dynamic_edit_controller.stroke_active or dynamic_edit_controller.dirty:
+            raise ValueError("Finish and apply pending paint edits before deleting components.")
         if getattr(layer, "_label_assistant_library_indexing", False):
             raise ValueError("Wait for the component library scan or cancel it before deleting.")
         if state.analyzed_layer_name != layer.name or state.fast_index is None:
             raise ValueError(
-                "Component table is stale. Click Analyze before deleting."
+                "Component table is stale. Click Find components before deleting."
             )
+        from ._deletion_history import DeletionHistory
+        if deletion_history is not None:
+            deletion_history.close()
+        deletion_history = DeletionHistory(layer)
+        btn_undo_delete.setEnabled(True)
         if isinstance(state.fast_index, LargeComponentIndex):
             index = state.fast_index
 
@@ -2416,18 +2443,76 @@ def component_operations_widget(
                 on_done=_after_large_delete,
                 on_failed=_invalidate_analysis,
                 on_edited=lambda bounds: _component_pixels_changed(layer, bounds),
+                before_write=deletion_history.capture,
             )
             return
+        for component_id in ids:
+            record = state.fast_index.records[int(component_id)]
+            slices = (slice(record.bbox_y0, record.bbox_y1), slice(record.bbox_x0, record.bbox_x1))
+            deletion_history.capture(slices, state.fast_index.component_id_map[slices] == int(component_id))
         updated, changed = state.fast_index.delete_components(layer.data, ids)
         if changed <= 0:
             raise ValueError("Selected component delete made no label changes.")
         layer.data = updated
+        deletion_history.data = updated
         state.selected_component_ids.difference_update(ids)
         component_table.set_records(state.fast_index.active_records())
         _update_selection_summary()
         _set_status(
             f"Deleted {len(ids)} component(s), {changed:,} pixels from {layer.name}."
         )
+
+    def _undo_component_deletion() -> None:
+        if deletion_history is None:
+            return
+        layer = deletion_history.layer
+        if large_controller.busy or getattr(layer, "_label_assistant_library_indexing", False):
+            raise ValueError("Wait for the current mask operation to finish before undoing.")
+        if not any(layer is candidate for candidate in viewer.layers) or not layer.editable:
+            raise ValueError("The original mask must be available and editable.")
+        if dynamic_edit_controller.dirty or dynamic_edit_controller.stroke_active:
+            raise ValueError("Finish and apply the current paint stroke before undoing deletion.")
+        iterator = deletion_history.restore()
+        was_editable = layer.editable
+        layer.editable = False
+        layer._label_assistant_component_editing = True
+        tile = dynamic_edit_controller.tile if dynamic_edit_controller.source is layer else None
+        tile_editable = tile.editable if tile is not None else False
+        if tile is not None:
+            tile.editable = False
+        large_controller.edit_active = True
+        btn_undo_delete.setEnabled(False)
+        totals = (0, 0)
+
+        def step():
+            nonlocal totals
+            if large_controller.closed:
+                layer.editable = was_editable
+                layer._label_assistant_component_editing = False
+                return
+            try:
+                restored, skipped, slices = next(iterator)
+                totals = (restored, skipped)
+                _component_pixels_changed(layer, (slices[0].start, slices[1].start, slices[0].stop, slices[1].stop))
+            except Exception as error:
+                large_controller.edit_active = False
+                layer.editable = was_editable
+                layer._label_assistant_component_editing = False
+                if tile is not None:
+                    tile.editable = tile_editable
+                layer.refresh()
+                _invalidate_analysis()
+                dynamic_edit_controller.sync(force=True)
+                if isinstance(error, StopIteration):
+                    _set_status(f"Restored {totals[0]:,} pixels in {layer.name}; preserved {totals[1]:,} later edits. Find components to refresh results.")
+                    deletion_history.close()
+                else:
+                    btn_undo_delete.setEnabled(True)
+                    _set_status(f"Undo stopped: {error}. Recovery is still available.")
+                return
+            QTimer.singleShot(0, step)
+
+        QTimer.singleShot(0, step)
 
     def _remove_small_components() -> None:
         layer = _target_layer()
@@ -2792,6 +2877,8 @@ def component_operations_widget(
             )
         dynamic_edit_controller.close()
         large_controller.close()
+        if deletion_history is not None:
+            deletion_history.close()
         if isinstance(state.fast_index, LargeComponentIndex):
             state.fast_index.close()
             state.fast_index = None
@@ -2829,10 +2916,12 @@ def component_operations_widget(
     btn_refresh.clicked.connect(_refresh_and_sync)
     btn_analyze.clicked.connect(lambda: _run_safely(_analyze))
     btn_delete.clicked.connect(lambda: _run_safely(_delete_selected))
+    btn_undo_delete.clicked.connect(lambda: _run_safely(_undo_component_deletion))
     btn_copy.clicked.connect(
         lambda: _run_safely(lambda: _copy_selected_to_layer(_copy_target_layer()))
     )
     btn_remove_small.clicked.connect(lambda: _run_safely(_remove_small_components))
+    small_component_size_spin.valueChanged.connect(lambda _value: _update_selection_summary())
     btn_copy.setToolTip("Copy all currently selected rows to the chosen target layer.")
     component_table.itemSelectionChanged.connect(_on_table_selection_changed)
     page_spin.valueChanged.connect(lambda _value: _render_component_page())
@@ -2886,6 +2975,7 @@ def component_operations_widget(
     container._append_click_select_check = append_click_select_check
     container._copy_button = btn_copy
     container._delete_button = btn_delete
+    container._undo_delete_button = btn_undo_delete
     container._remove_small_button = btn_remove_small
     container._small_component_size_spin = small_component_size_spin
     container._cancel_analysis_button = btn_cancel_analysis
