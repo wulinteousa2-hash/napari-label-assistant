@@ -13,7 +13,18 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 3.2.0 highlights
+## Version 3.2.1
+
+- Selecting an existing model or loading a checkpoint now retains a compatible
+  prepared dataset, so **Train new model** remains available without repeating
+  preparation. The current dataset's validation settings and partition stay intact.
+- Checkpoints that previously trained in the reserved validation regions cannot
+  continue training against that holdout; training a new model remains available.
+- Both **Prepare dataset → select model → train** and **select model → prepare
+  dataset → train** are supported. After changing annotations, sources, or dataset
+  settings, prepare the dataset again.
+
+### Version 3.2.0 workflow improvements
 
 - Finish a cell with **Mark reviewed & next** directly in Local Editing; move
   to the next unreviewed cell without switching to Training.

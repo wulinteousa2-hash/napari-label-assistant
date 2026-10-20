@@ -3,6 +3,22 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [3.2.1] - 2026-10-20
+
+### Fixed
+
+- Selecting an existing model or loading a checkpoint no longer unconditionally
+  discards a compatible prepared dataset and disables **Train new model**.
+- Retain the prepared dataset's validation settings and cached spatial partition
+  instead of replacing them with the loaded checkpoint's defaults.
+- Recheck loaded-model training history against held-out patches before allowing
+  continuation. Exposed holdouts block **Continue training**, while fresh model
+  training remains available. Switching to an unexposed checkpoint clears the
+  previous checkpoint's continuation restriction.
+- Explain whether the prepared dataset was retained or preparation is required.
+- Add UI regressions for architecture changes, copied configurations, in-memory
+  model selection, checkpoint file loading, and validation exposure checks.
+
 ## [3.2.0] - 2026-10-20
 
 ### Added

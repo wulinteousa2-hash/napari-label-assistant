@@ -1604,9 +1604,12 @@ class QuickTrainWidget(QWidget):
             self._start_worker(self._load_task, lambda model: self._model_loaded(model, path), path)
 
     def _model_loaded(self, model, path, register=True):
-        self._invalidate_crops()
+        prepared = self.prepared
+        reuse_prepared = prepared is not None and self._prepared_signature == self._signature()
+        if not reuse_prepared:
+            self._invalidate_crops()
         image = self.image_combo.currentData()
-        if image is not None:
+        if image is not None and not reuse_prepared:
             for key in list(self._coverage_splits):
                 if key[0] == id(image):
                     del self._coverage_splits[key]
@@ -1633,7 +1636,10 @@ class QuickTrainWidget(QWidget):
                 self.lr_factor_spin.setValue(plateau.get("factor", 0.5))
                 self.min_delta_spin.setValue(plateau.get("min_delta", 0.0001))
                 break
-        for record in reversed(model.history):
+        # A prepared dataset owns its validation settings and partition. Loading
+        # weights must not silently replace them with checkpoint defaults.
+        reuse_prepared = reuse_prepared and self.prepared is prepared and self._prepared_signature == self._signature()
+        for record in reversed(model.history) if not reuse_prepared else ():
             settings = record.get('validation', {})
             if settings.get('method') in ('holdout', 'kfold'):
                 self.validation_method_combo.setCurrentIndex(self.validation_method_combo.findData(settings['method']))
@@ -1641,14 +1647,39 @@ class QuickTrainWidget(QWidget):
                 self.validation_seed_spin.setValue(settings.get('seed', 42))
                 self.fold_spin.setValue(settings.get('fold_count', 5) if settings['method'] == 'kfold' else 5)
                 break
-        for history in reversed(model.history):
+        for history in reversed(model.history) if not reuse_prepared else ():
             if history.get('workflow') == 'coverage':
                 image = self.image_combo.currentData()
                 if image is not None and history.get('source', {}).get('image_layer') == image.name and history.get('source', {}).get('image_shape') == list(array_2d(image.data).shape):
                     key = (id(image), tuple(array_2d(image.data).shape), history['config']['crop_pixels'])
                     self._coverage_splits[key] = history['validation_blocks']
                 break
-        self._status('Model loaded. Prepare the dataset and review examples before continuing training.')
+        if reuse_prepared and isinstance(prepared, IndexedPatches):
+            # Reassess this checkpoint against the current holdout. A loaded
+            # model may have trained on regions reserved by another model.
+            size = prepared.crop_pixels
+            held_out = {(p['y0'] // size, p['x0'] // size)
+                        for p in prepared.locations if p['split'] == 'validation'}
+            seen = False
+            for region in self._previous_sampled_training(image):
+                y0, x0 = max(0, region['y0']), max(0, region['x0'])
+                y1 = min(prepared.image.shape[0], region['y0'] + region['size'])
+                x1 = min(prepared.image.shape[1], region['x0'] + region['size'])
+                if y1 <= y0 or x1 <= x0:
+                    continue
+                if any((row, col) in held_out
+                       for row in range(y0 // size, (y1 - 1) // size + 1)
+                       for col in range(x0 // size, (x1 - 1) // size + 1)):
+                    seen = True
+                    break
+            prepared.validation_seen_before = seen
+        self._update_controls()
+        if reuse_prepared:
+            self._status(f'Model loaded. Prepared dataset retained; {self.train_button.text()} is available.' +
+                         (' Continue training is blocked because this model has trained in the reserved validation regions.'
+                          if isinstance(prepared, IndexedPatches) and prepared.validation_seen_before else ''))
+        else:
+            self._status('Model loaded. Prepare the dataset before training; source or dataset settings changed, or no dataset was prepared.')
 
     @staticmethod
     def _load_task(path, *, cancel):
