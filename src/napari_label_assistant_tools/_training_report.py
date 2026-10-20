@@ -27,8 +27,10 @@ def history_points(history):
     return points
 
 
-def learning_svg(points, title='Validation learning progress', *, background='#fafafa', foreground='#333333', grid='#dddddd', dark=False, loss=False):
+def learning_svg(points, title='Validation learning progress', *, background='#fafafa', foreground='#333333', grid='#dddddd', dark=False, loss=False, series_colors=None):
     width, height, left, top, plot_w, plot_h = 760, 360, 60, 55, 650, 220
+    if series_colors:
+        height += 20 * len(series_colors)
     max_epoch = max([p['epoch'] for p in points] + [1])
     loss_values = [p['metrics']['loss'] for p in points if 'loss' in p['metrics']]
     maximum = max(loss_values)*1.1 if loss and loss_values else 1.0
@@ -52,6 +54,8 @@ def learning_svg(points, title='Validation learning progress', *, background='#f
     for group_index, group in enumerate(series):
         rows = [p for p in points if p.get('series', 'Training') == group]
         for metric, color in colors.items():
+            if series_colors:
+                color = series_colors.get(group, color)
             coords = [(left+plot_w*p['epoch']/max_epoch, top+plot_h*(1-p['metrics'][metric]/maximum)) for p in rows if metric in p['metrics']]
             if coords:
                 values = ' '.join(f'{x:.2f},{y:.2f}' for x,y in coords)
@@ -65,6 +69,8 @@ def learning_svg(points, title='Validation learning progress', *, background='#f
         x = 60+index*165
         label = "Validation loss (lower is better)" if metric == "loss" else metric.title()
         svg.append(f'<text x="{x}" y="340" font-size="13" fill="{color}">{label}</text>')
+    for index, (label, color) in enumerate((series_colors or {}).items()):
+        svg.append(f'<text x="60" y="{370+index*20}" font-size="12" fill="{color}">{escape(label)}</text>')
     svg.append('</svg>')
     return '\n'.join(svg)
 

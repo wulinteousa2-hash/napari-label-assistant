@@ -3,6 +3,38 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Added **Model Library** as a separate plugin menu entry alongside Label
+  Curation and Model Training, plus a shortcut from the training Models page.
+- Added workspace-wide Models and Training History tables with per-run metrics,
+  architecture and training settings, dataset snapshots, source layers,
+  annotation coverage, parameter counts, duration, and checkpoint availability.
+- Added model/dataset names, run notes, tags, and favorites, persisted through
+  workspace saves and portable exports. Filters include task, dataset, search,
+  parameter limits, favorites, and matching dataset/validation provenance.
+- Added selected-run metric, model-size, chronology, and learning-curve charts,
+  history CSV exports, and standalone SVG/PNG chart exports. Missing or different
+  dataset/split provenance is labeled exploratory rather than ranked as best.
+- Added explicit checkpoint selection/import and bounded-sample loaded-weight
+  inspection with tensor shapes, parameter counts, statistics, and CSV export.
+- Added project-change notifications to keep library records current after
+  training, selection, documentation edits, and workspace saves/reopening.
+
+### Changed
+
+- Renamed the visible **Label Assistant** panel to **Label Curation** with the
+  description “Edit, review, and organize segmentation labels.” Package/import
+  names, command IDs, and workspace formats remain compatible.
+- Renamed the user-facing **Quick Train** menu and panel wording to **Model
+  Training**, retaining the existing command ID and checkpoint compatibility.
+- Record immutable configuration, parameter count, and metrics on each new run
+  so older history rows cannot inherit the latest model's results.
+- Read learning curves from runtime history or JSON sidecars without loading
+  networks. Missing legacy metrics and histories remain explicitly unavailable.
+
 ## [3.2.1] - 2026-10-20
 
 ### Fixed

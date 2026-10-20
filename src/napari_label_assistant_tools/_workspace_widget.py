@@ -202,6 +202,8 @@ class WorkspaceManagerWidget(QWidget):
         self._change_connections = []
         self._watched_layers = set()
         self._layer_connections = {}
+        from ._model_project import model_project_events
+        self._watch_changes(model_project_events(self.viewer).changed, self.mark_changed)
         self._watch_changes(self.viewer.layers.events.inserted, self._layer_inserted)
         self._watch_changes(self.viewer.layers.events.removed, self._layer_removed)
         for name in ("center", "zoom"):
@@ -264,7 +266,7 @@ class WorkspaceManagerWidget(QWidget):
             )
             return
         if len(self.viewer.layers) and not self._confirm_clear(
-            "Start a new Label Assistant project? Current layers will be "
+            "Start a new workspace? Current layers will be "
             "removed from the viewer. "
             "Writable Zarr data already saved on disk will not be deleted."
         ):
@@ -278,16 +280,16 @@ class WorkspaceManagerWidget(QWidget):
         restore_project(self.viewer, None, Path("new-workspace.json"))
         self._disassociate_workspace()
         self._refresh_current_label()
-        self._set_status("Started a new empty Label Assistant project.")
+        self._set_status("Started a new empty workspace.")
 
     def open_workspace(self) -> None:
         reference = self.workspace_path or self._last_workspace_path
         initial = str(reference.parent) if reference else ""
         chosen, _ = QFileDialog.getOpenFileName(
             self,
-            "Open Label Assistant Project",
+            "Open Workspace",
             initial,
-            "Label Assistant project (*.label-assistant.json *.sam3.json *.json)",
+            "Workspace (*.label-assistant.json *.sam3.json *.json)",
         )
         if chosen:
             self._load_path(Path(chosen))
@@ -328,9 +330,9 @@ class WorkspaceManagerWidget(QWidget):
         )
         chosen, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Label Assistant Project As",
+            "Save Workspace As",
             initial,
-            "Label Assistant project (*.label-assistant.json)",
+            "Workspace (*.label-assistant.json)",
         )
         if not chosen:
             return
@@ -419,7 +421,7 @@ class WorkspaceManagerWidget(QWidget):
             )
             return
         if len(self.viewer.layers) and not self._confirm_clear(
-            "Open this Label Assistant project? Current layers will be "
+            "Open this workspace? Current layers will be "
             "removed from the viewer. "
             "Writable Zarr data already saved on disk will not be deleted."
         ):
@@ -428,7 +430,7 @@ class WorkspaceManagerWidget(QWidget):
 
     def _load_with_progress(self, path: Path) -> None:
         dialog = QProgressDialog(self)
-        dialog.setWindowTitle("Loading Label Assistant Project")
+        dialog.setWindowTitle("Loading Workspace")
         dialog.setWindowModality(Qt.WindowModal)
         dialog.setCancelButton(None)
         dialog.setAutoClose(False)
@@ -522,7 +524,7 @@ class WorkspaceManagerWidget(QWidget):
     def _confirm_clear(self, message: str) -> bool:
         answer = QMessageBox.question(
             self,
-            "Label Assistant Project",
+            "Workspace",
             message,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,

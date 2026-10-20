@@ -13,6 +13,47 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
+## In development: Model Library
+
+The plugin menu now provides three separate panels:
+
+- **Label Curation** — edit, review, and organize segmentation labels.
+- **Model Training** (formerly Quick Train) — prepare datasets, configure models,
+  train, validate, and predict.
+- **Model Library** — organize models and checkpoints, document training runs,
+  and compare recorded results across models. The Models page in Model Training
+  also provides an **Open Model Library** shortcut.
+
+Model Library shares the workspace's existing records; browsing does not load
+model weights. **Models** lists model families and their latest recorded runs.
+**Training History** shows one row per recorded run/checkpoint, with its own
+scores, architecture, dataset snapshot, settings, duration, and file availability.
+Use **Edit selected model / run documentation** to name a model or dataset, add
+run notes and tags, or mark a favorite. Save the workspace to persist these edits.
+
+Search and filter by task or dataset. **More filters** includes favorites,
+maximum parameter count in millions, and matching dataset/validation provenance.
+**Show all history columns** exposes training settings, annotation coverage,
+patch counts, source layers, checkpoint paths, and stable identifiers. Older
+records with missing information display an unknown value rather than borrowing
+the latest checkpoint's results.
+
+Select multiple history rows with Ctrl/Shift-click and choose **Compare selected
+runs**. Available charts show validation metrics, score versus parameter count,
+results in date order, and learning curves. Export history as CSV and charts as
+SVG or PNG. The library assigns a best recorded score only when the selected runs
+share recorded dataset and validation provenance; other comparisons are labeled
+exploratory. Validation-selected scores are not independent test-set results.
+Parameter count describes model size, not measured inference speed or memory use.
+
+**Select checkpoint** shares that checkpoint with Model Training for continuation
+or inference, opening the training panel if needed. **Import checkpoint** adds an
+existing plugin checkpoint through the training loader. **Inspect loaded weights**
+shows tensor shapes, parameter counts, and bounded-sample statistics with CSV
+export. Inspection requires explicit weight loading; weight statistics do not
+measure prediction quality. Learning curves read existing in-memory history or
+JSON sidecars, and are reported unavailable when neither is present.
+
 ## Version 3.2.1
 
 - Selecting an existing model or loading a checkpoint now retains a compatible
@@ -142,7 +183,7 @@ The dock widget is organized into four workflow areas:
 
 ### Workspace
 
-Open **Plugins → napari-label-assistant → Label Assistant**, then use the first
+Open **Plugins → napari-label-assistant → Label Curation**, then use the first
 **Workspace** tab to create, open, and save a complete annotation workspace
 without SAM3 Assistant.
 
@@ -186,7 +227,7 @@ without SAM3 Assistant.
   stored; the plugin recreates them when needed.
 
 Existing `.sam3.json` projects created by SAM3 Assistant can be opened for
-migration. Use **Save As** to continue with the standalone Label Assistant
+migration. Use **Save As** to continue with the standalone `napari-label-assistant`
 format.
 
 ### Labels
@@ -279,7 +320,7 @@ training, prediction, or model loading is requested; other tools work without it
    and a same-size **Ground truth** Labels layer. Annotations must be complete:
    all nonzero label values become one target class and all zero pixels are
    negative examples.
-   The same panel can be opened directly from the plugin's **Quick Train** menu.
+   The same panel can be opened directly from the plugin's **Model Training** menu.
 2. Choose **Crop context**, **Training resolution**, and **Crop count**, then
    click **Prepare & Preview Crops**. Defaults use 32 crops, 512 × 512 source
    context, and 512 × 512 model inputs. Preparation scans the full-resolution
@@ -304,7 +345,7 @@ training, prediction, or model loading is requested; other tools work without it
    block is insufficient for validation: use a smaller context or a more
    representative image. The default 32 crops give 24 training and 8 validation
    patches. Patches within a split may overlap.
-5. Choose **Training steps** and **Compute**, then click **Quick Train**. Defaults
+5. Choose **Training steps** and **Compute**, then click **Train new model**. Defaults
    use 200 steps and automatic CUDA/CPU selection. Training uses the reviewed
    patches without resampling. Changing source layers, source pixels, crop
    context, resolution, or crop count invalidates the prepared dataset and
@@ -445,7 +486,7 @@ python -m pip install napari-label-assistant
 
 Start napari and open:
 
-**Plugins → napari-label-assistant → Label Assistant**
+**Plugins → napari-label-assistant → Label Curation**
 
 ## Development
 
@@ -464,7 +505,7 @@ Distributed under the terms of the MIT license.
 
 After training or loading a saved `.pt` model, prepare and review crops, then
 click **Continue training current model** to fine-tune its existing weights.
-**Quick Train** starts a new model. Each round uses a new AdamW optimizer;
+**Train new model** starts a new model. Each round uses a new AdamW optimizer;
 this is weight fine-tuning rather than exact optimizer-state resumption.
 Use a lower **Learning rate**, for example `0.0001`, for cautious fine-tuning.
 The model with the best validation Dice is retained, including the starting

@@ -210,6 +210,8 @@ def save_workspace(
             full["report_file"] = report["report_file"]
             saved_state["comparisons"][index] = full
     setattr(viewer, KEY, saved_state)
+    from .._model_project import notify_project
+    notify_project(viewer)
     for layer, array, reference in label_bindings:
         layer._label_assistant_library_rebinding = True
         try:

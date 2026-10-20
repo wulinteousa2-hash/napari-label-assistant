@@ -9,6 +9,21 @@ from uuid import uuid4
 KEY = "_label_assistant_model_project"
 RUNTIME = "_label_assistant_project_models"
 
+
+def model_project_events(viewer):
+    from napari.utils.events import EmitterGroup
+    events = getattr(viewer, "_label_assistant_model_events", None)
+    if events is None:
+        # The group lives on the viewer and does not need a source reference.
+        # This also supports lightweight, non-weakrefable project owners.
+        events = EmitterGroup(changed=None)
+        viewer._label_assistant_model_events = events
+    return events
+
+
+def notify_project(viewer):
+    model_project_events(viewer).changed()
+
 def project(viewer):
     state = getattr(viewer, KEY, None)
     if state is None:
@@ -38,6 +53,7 @@ def add_task(viewer, name, definition):
     task = {"id": uuid4().hex, "name": name.strip(), "target_definition": definition.strip(), "sources": {}}
     state["tasks"].append(task)
     state["current_task"] = task["id"]
+    notify_project(viewer)
     return task
 
 
@@ -74,7 +90,9 @@ def remember_model(viewer, model, *, task_id=None, path=None, select=True, name=
                metrics=dict(model.metrics), config=asdict(model.config), revision=revision,
                parameters=sum(p.numel() for p in model.network.parameters()) if model.network is not None else 0, history=[history_summary(h) for h in model.history])
     if model.history:
-        run = {"id": uuid4().hex, "revision": revision, "history": history_summary(model.history[-1])}
+        run = {"id": uuid4().hex, "revision": revision, "history": history_summary(model.history[-1]),
+               "spec": deepcopy(spec), "config": asdict(model.config),
+               "metrics": dict(model.metrics), "parameters": row["parameters"]}
         if path:
             run.update(checkpoint=str(Path(path).resolve()), saved_revision=revision)
         row["runs"].append(run)
@@ -86,6 +104,7 @@ def remember_model(viewer, model, *, task_id=None, path=None, select=True, name=
     if select:
         state["current_model"] = identifier
         state["current_checkpoint"] = revision
+    notify_project(viewer)
     return row
 
 
@@ -200,6 +219,7 @@ def restore_project(viewer, state, manifest):
         widget.refresh_layers()
         widget.models_panel.refresh()
         widget.restore_project_settings(restored.get("settings", {}))
+    notify_project(viewer)
 
 
 def resolve_references(state, manifest):

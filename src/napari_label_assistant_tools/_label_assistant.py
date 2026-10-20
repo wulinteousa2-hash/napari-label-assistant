@@ -14,7 +14,7 @@ from ._quick_train_widget import QuickTrainWidget
 
 
 def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
-    """Create the standalone label-assistant tool."""
+    """Edit, review, and organize segmentation labels."""
     if viewer is None:
         viewer = napari.current_viewer()
         if viewer is None:
@@ -24,6 +24,7 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     layout = QVBoxLayout(page)
     activity_header = _LayerActivityIndicator(page)
     activity_header.set_context_tooltip(
+        "Edit, review, and organize segmentation labels. "
         "Annotate full-resolution 2D images at 100,000 × 100,000-pixel scale "
         "without cropping. Inspect and curate connected components, then use "
         "reproducible grid addresses to report, correct, and re-review mask "
@@ -49,7 +50,7 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
             control.toggled.connect(workspace.mark_changed)
     tools.setTabToolTip(
         0,
-        "Create, open, save, and transfer complete Label Assistant workspaces.",
+        "Create, open, save, and transfer complete workspaces.",
     )
     tools.setTabToolTip(
         1,

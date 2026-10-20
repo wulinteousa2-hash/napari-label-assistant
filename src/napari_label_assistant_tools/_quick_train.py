@@ -373,7 +373,7 @@ def _torch():
         import torch
     except ImportError as error:
         raise RuntimeError(
-            "Quick Train requires PyTorch in napari's Python environment. "
+            "Model Training requires PyTorch in napari's Python environment. "
             "Install the optional dependency: pip install 'napari-label-assistant[train]'."
         ) from error
     return torch
@@ -629,7 +629,7 @@ def load_model(path):
     torch = _torch()
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2):
-        raise ValueError("Choose a model saved by Label Assistant Quick Train.")
+        raise ValueError("Choose a checkpoint saved by napari-label-assistant Model Training (formerly Quick Train).")
     config = QuickTrainConfig(**payload["config"])
     config.validate()
     crop_pixels = int(payload["crop_pixels"])

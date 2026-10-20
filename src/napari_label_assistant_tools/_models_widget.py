@@ -15,6 +15,10 @@ class ModelsWidget(QWidget):
         self.viewer = trainer.viewer
         self.candidates = []
         layout = QVBoxLayout(self)
+        self.library_button = QPushButton("Open Model Library →")
+        self.library_button.setToolTip("Browse all models, document runs, and compare recorded results.")
+        self.library_button.clicked.connect(lambda: trainer._safe(self._open_library))
+        layout.addWidget(self.library_button)
         task_group = QGroupBox("Biological task")
         form = QFormLayout(task_group)
         self.task_combo = QComboBox()
@@ -132,6 +136,16 @@ class ModelsWidget(QWidget):
     def task(self):
         return next((t for t in project(self.viewer)["tasks"] if t["id"] == self.task_combo.currentData()), None)
 
+    def _open_library(self):
+        from ._model_library_widget import model_library_widget
+        widget = getattr(self.viewer, "_label_assistant_model_library", None)
+        if widget is None or widget.closed:
+            widget = model_library_widget(self.viewer)
+            self.viewer.window.add_dock_widget(widget, name="Model Library")
+        widget.show()
+        widget.raise_()
+        widget.refresh()
+
     def ensure_task(self):
         task = self.task()
         if task is None:
@@ -160,6 +174,8 @@ class ModelsWidget(QWidget):
             raise ValueError("This task has trained models. Create another task to change its target definition.")
         task.update(name=self.task_name.text().strip(),target_definition=self.definition.text().strip())
         self.refresh()
+        from ._model_project import notify_project
+        notify_project(self.viewer)
 
     def _task_changed(self):
         task=self.task()
@@ -325,6 +341,8 @@ class ModelsWidget(QWidget):
             runtime[runtime_key] = model
             runtime[row["id"] + ":" + revision] = model
             self.refresh()
+            from ._model_project import notify_project
+            notify_project(self.viewer)
         if runtime_key in runtime:
             selected(runtime[runtime_key])
         elif entry.get("checkpoint"):

@@ -213,7 +213,7 @@ class QuickTrainWidget(QWidget):
         self.selected_objects_page = QWidget()
         self.selected_objects_layout = QVBoxLayout(self.selected_objects_page)
         self.selected_objects_layout.setContentsMargins(0, 0, 0, 0)
-        self.selected_objects_hint = QLabel("Open the main Label Assistant to select library objects for this dataset.")
+        self.selected_objects_hint = QLabel("Open Label Curation to select library objects for this dataset.")
         self.selected_objects_hint.setWordWrap(True)
         self.selected_objects_layout.addWidget(self.selected_objects_hint)
         self.annotation_tabs.addTab(self.reviewed_cells_page, "Reviewed cells")
@@ -792,7 +792,7 @@ class QuickTrainWidget(QWidget):
 
     def _start_worker(self, function, on_done, *args, **kwargs):
         if self.worker is not None:
-            raise ValueError("Wait for the current Quick Train operation to finish.")
+            raise ValueError("Wait for the current Model Training operation to finish.")
         self.cancel_event = Event()
         kwargs["cancel"] = self.cancel_event
         worker = create_worker(
@@ -836,15 +836,15 @@ class QuickTrainWidget(QWidget):
         if self.closed:
             return
         if self.cancel_event is not None and self.cancel_event.is_set():
-            self._status("Quick Train operation canceled. Existing layers and model are unchanged.")
+            self._status("Model Training operation canceled. Existing layers and model are unchanged.")
             return
         self._safe(lambda: on_done(result))
 
     def _on_error(self, error):
         if isinstance(error, QuickTrainCancelled):
-            self._status("Quick Train operation canceled. Existing layers and model are unchanged.")
+            self._status("Model Training operation canceled. Existing layers and model are unchanged.")
         else:
-            self._status(f"Quick Train failed: {error}")
+            self._status(f"Model Training failed: {error}")
 
     def _finished(self):
         self.worker = None
@@ -1331,8 +1331,8 @@ class QuickTrainWidget(QWidget):
             "quick_train_crops": {"image_source": image.name, "mask_source": truth.name,
                                   "tiles": atlas.locations, "read_only_preview": True},
         }
-        grid_image = self.viewer.add_image(atlas.image, name="Quick Train — crop images", contrast_limits=(0, 1), translate=translation, scale=scale, metadata=metadata.copy())
-        grid_mask = self.viewer.add_labels(atlas.mask, name="Quick Train — crop ground truth", translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.5)
+        grid_image = self.viewer.add_image(atlas.image, name="Model Training — crop images", contrast_limits=(0, 1), translate=translation, scale=scale, metadata=metadata.copy())
+        grid_mask = self.viewer.add_labels(atlas.mask, name="Model Training — crop ground truth", translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.5)
         grid_mask.editable = False
         rectangles, captions, colors = [], [], []
         for tile in atlas.locations:
@@ -1341,7 +1341,7 @@ class QuickTrainWidget(QWidget):
             captions.append(f"{tile['tile']:02d} {tile['split']} · {tile['kind']}\ny={tile['y0']}, x={tile['x0']}")
             colors.append("orange" if tile["split"] == "validation" else "cyan")
         frames = self.viewer.add_shapes(
-            rectangles, shape_type="rectangle", name="Quick Train — crop coordinates",
+            rectangles, shape_type="rectangle", name="Model Training — crop coordinates",
             features={"caption": captions}, edge_color=colors, edge_width=1,
             face_color="transparent", translate=translation, scale=scale, metadata=metadata.copy(),
             text={"string": "{caption}", "anchor": "upper_left", "color": "white",
@@ -1562,7 +1562,7 @@ class QuickTrainWidget(QWidget):
         affine[:2, 2] = origin
         mask = (prediction.probability >= threshold).astype(np.uint8)
         self.viewer.add_labels(
-            mask, name=f"Quick Train preview — {image_layer.name}", affine=affine,
+            mask, name=f"Model Training preview — {image_layer.name}", affine=affine,
             metadata={"quick_train": {"experimental": True, "source": image_layer.name,
                                       "origin_yx": list(prediction.origin), "threshold": threshold}},
         )
@@ -1571,7 +1571,7 @@ class QuickTrainWidget(QWidget):
     def _save(self):
         if self.model is None:
             raise ValueError("Train or load a model first.")
-        path, _ = QFileDialog.getSaveFileName(self, "Save Quick Train model", "quick-train.pt", "Quick Train model (*.pt)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save trained model", "model.pt", "Model checkpoint (*.pt)")
         if path:
             self._start_worker(self._save_task, lambda _result: self._model_saved(path), self.model, path)
 
@@ -1599,7 +1599,7 @@ class QuickTrainWidget(QWidget):
         return path
 
     def _load(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load Quick Train model", "", "Quick Train model (*.pt)")
+        path, _ = QFileDialog.getOpenFileName(self, "Load trained model", "", "Model checkpoint (*.pt)")
         if path:
             self._start_worker(self._load_task, lambda model: self._model_loaded(model, path), path)
 

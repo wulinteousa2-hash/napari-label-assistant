@@ -5,17 +5,22 @@ visibility: public
 contributions:
   commands:
     - id: napari-label-assistant.label_assistant
-      title: "Label Assistant"
+      title: "Label Curation"
       python_name: napari_label_assistant_tools._label_assistant:label_assistant_widget
     - id: napari-label-assistant.quick_train
-      title: "Quick Train"
+      title: "Model Training"
       python_name: napari_label_assistant_tools._quick_train_widget:quick_train_widget
+    - id: napari-label-assistant.model_library
+      title: "Model Library"
+      python_name: napari_label_assistant_tools._model_library_widget:model_library_widget
 
   widgets:
     - command: napari-label-assistant.label_assistant
-      display_name: "Label Assistant"
+      display_name: "Label Curation"
     - command: napari-label-assistant.quick_train
-      display_name: "Quick Train"
+      display_name: "Model Training"
+    - command: napari-label-assistant.model_library
+      display_name: "Model Library"
 
   submenus:
     - id: napari-label-assistant.main
@@ -29,4 +34,6 @@ contributions:
       - command: napari-label-assistant.label_assistant
         when: "True"
       - command: napari-label-assistant.quick_train
+        when: "True"
+      - command: napari-label-assistant.model_library
         when: "True"
