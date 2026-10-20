@@ -3,8 +3,8 @@ from pathlib import Path
 from contextlib import suppress
 import json
 
-from qtpy.QtCore import Qt, QByteArray, QRectF, QItemSelectionModel
-from qtpy.QtGui import QPainter, QImage
+from qtpy.QtCore import Qt, QByteArray, QRectF, QItemSelectionModel, QUrl
+from qtpy.QtGui import QPainter, QImage, QDesktopServices
 from qtpy.QtSvg import QSvgRenderer
 from qtpy.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QLineEdit, QPlainTextEdit, QCheckBox, QComboBox, QDoubleSpinBox,
@@ -50,19 +50,65 @@ class ModelLibraryWidget(QWidget):
         self.comparison_ids = []
         self._editing_key = None
         self.weight_worker = None
+        self.file_worker = None
         self.closed = False
         layout = QVBoxLayout(self)
-        note = QLabel("Browse all models and training runs in this workspace. Save the workspace to keep names, notes, tags, and checkpoints.")
+        note = QLabel("Search the current workspace's model catalog. Search does not scan folders or Recent workspaces. Save the workspace to keep file references and documentation.")
         note.setWordWrap(True)
         layout.addWidget(note)
+        self.scope_label = QLabel()
+        self.scope_label.setWordWrap(True)
+        self.scope_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.scope_label)
+        files_toggle = QCheckBox("Model files and workspace locations")
+        layout.addWidget(files_toggle)
+        files_group = QGroupBox("Workspace model files")
+        files_form = QFormLayout(files_group)
+        files_form.setSizeConstraint(QLayout.SetMinimumSize)
+        self.workspace_location = QLineEdit()
+        self.models_location = QLineEdit()
+        self.checkpoint_location = QLineEdit()
+        for field in (self.workspace_location, self.models_location, self.checkpoint_location):
+            field.setReadOnly(True)
+        self.file_summary = QLabel()
+        self.file_summary.setWordWrap(True)
+        self.selected_file_status = QLabel()
+        files_form.addRow("Workspace", self.workspace_location)
+        files_form.addRow("Models folder", self.models_location)
+        files_form.addRow("Selected file", self.checkpoint_location)
+        files_form.addRow("File status", self.selected_file_status)
+        files_form.addRow(self.file_summary)
+        file_actions = QHBoxLayout()
+        self.open_folder_button = QPushButton("Open models folder")
+        self.copy_file_button = QPushButton("Copy into workspace")
+        self.locate_file_button = QPushButton("Locate missing file…")
+        file_actions.addWidget(self.open_folder_button)
+        file_actions.addWidget(self.copy_file_button)
+        files_form.addRow(file_actions)
+        files_form.addRow(self.locate_file_button)
+        self.copy_file_button.setToolTip("Copy this saved external checkpoint and available reports into the workspace models folder. The original files are preserved. Save the workspace afterward.")
+        self.locate_file_button.setToolTip("Verify model identity, configuration, training history, and scores before repairing the selected run's file reference.")
+        files_scroll = QScrollArea()
+        files_scroll.setWidgetResizable(True)
+        files_scroll.setMinimumHeight(180)
+        files_scroll.setMaximumHeight(260)
+        files_scroll.setWidget(files_group)
+        layout.addWidget(files_scroll)
+        files_scroll.hide()
+        files_toggle.toggled.connect(files_scroll.setVisible)
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
         layout.addWidget(self.current_label)
         filters = QFormLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search model, architecture, dataset, tags, notes…")
+        self.search.setPlaceholderText("Search this workspace's models, runs, notes, file paths…")
+        self.search.setToolTip("Filters registered records in this workspace, including checkpoint paths and file status. Unregistered files and other workspaces are not searched.")
         self.task_filter = QComboBox()
         self.dataset_filter = QComboBox()
+        self.file_filter = QComboBox()
+        self.file_filter.addItem("All files", None)
+        for value in ("Managed", "Linked externally", "Missing", "Unsaved"):
+            self.file_filter.addItem(value, value)
         self.max_parameters = QDoubleSpinBox()
         self.max_parameters.setRange(0, 100000)
         self.max_parameters.setDecimals(3)
@@ -72,17 +118,18 @@ class ModelLibraryWidget(QWidget):
         self.favorites = QCheckBox("Favorites only")
         self.comparable = QCheckBox("Match selected dataset and split")
         self.comparable.setToolTip("Uses recorded dataset snapshot and validation settings. Unknown provenance is excluded.")
-        filters.addRow("Search", self.search)
+        filters.addRow("Search workspace", self.search)
         filters.addRow("Task", self.task_filter)
         filters.addRow("Dataset", self.dataset_filter)
         filters.addRow("Maximum parameters", self.max_parameters)
+        filters.addRow("File status", self.file_filter)
         filters.addRow(self.favorites)
         filters.addRow(self.comparable)
         layout.addLayout(filters)
         more_filters = QCheckBox("More filters")
         layout.addWidget(more_filters)
         def show_filters(visible):
-            for control in (self.max_parameters, self.favorites, self.comparable):
+            for control in (self.max_parameters, self.file_filter, self.favorites, self.comparable):
                 control.setVisible(visible)
                 label = filters.labelForField(control)
                 if label is not None:
@@ -95,7 +142,7 @@ class ModelLibraryWidget(QWidget):
 
         models_page = QWidget()
         model_layout = QVBoxLayout(models_page)
-        self.model_columns = ("model_name", "dice", "parameters", "dataset", "task", "dataset_id", "provider", "architecture", "run", "favorite", "status")
+        self.model_columns = ("model_name", "dice", "parameters", "file_status", "dataset", "task", "dataset_id", "provider", "architecture", "run", "favorite", "status")
         self.models = self._table(self.model_columns, multiple=False)
         self.models.sortItems(0, Qt.AscendingOrder)
         model_layout.addWidget(self.models, 1)
@@ -191,6 +238,7 @@ class ModelLibraryWidget(QWidget):
         self.search.textChanged.connect(self.render_tables)
         self.task_filter.currentIndexChanged.connect(self.render_tables)
         self.dataset_filter.currentIndexChanged.connect(self.render_tables)
+        self.file_filter.currentIndexChanged.connect(self.render_tables)
         self.max_parameters.valueChanged.connect(self.render_tables)
         self.favorites.toggled.connect(self.render_tables)
         self.comparable.toggled.connect(self._toggle_comparable)
@@ -206,6 +254,9 @@ class ModelLibraryWidget(QWidget):
         self.export_button.clicked.connect(lambda: self.run(self._export_csv))
         self.select_button.clicked.connect(lambda: self.run(self._select_checkpoint))
         self.import_button.clicked.connect(lambda: self.run(lambda: self._trainer()._load()))
+        self.copy_file_button.clicked.connect(lambda: self.run(self._copy_into_workspace))
+        self.locate_file_button.clicked.connect(lambda: self.run(self._locate_missing_file))
+        self.open_folder_button.clicked.connect(lambda: self.run(self._open_models_folder))
         self.inspect_button.clicked.connect(lambda: self.run(self._inspect_weights))
         self.refresh_button.clicked.connect(self.refresh)
         self.events = model_project_events(viewer)
@@ -237,6 +288,15 @@ class ModelLibraryWidget(QWidget):
             return
         self.rows = catalog(self.viewer)
         state = project(self.viewer)
+        from ._model_files import workspace_locations
+        manifest, folder = workspace_locations(self.viewer)
+        self.scope_label.setText(f"Search scope: {manifest.name}" if manifest else "Search scope: unsaved workspace (in-memory catalog)")
+        self.workspace_location.setText(str(manifest) if manifest else "Save the workspace to establish its catalog location")
+        self.models_location.setText(str(folder) if folder else "Created beside the workspace when models are saved")
+        counts = {key: sum(r["file_status"] == key for r in self.rows) for key in ("Managed", "Linked externally", "Missing", "Unsaved")}
+        self.file_summary.setText(" · ".join(f"{key}: {value}" for key, value in counts.items()) + ". Counts refer to recorded runs. Imported models may link to files outside this folder.")
+        self.open_folder_button.setEnabled(folder is not None and folder.is_dir())
+        self.open_folder_button.setToolTip(str(folder) if folder and folder.is_dir() else "The managed folder is created when model weights are saved or copied into this workspace.")
         current = next((r for r in self.rows if r["model_id"] == state.get("current_model") and r["revision"] == state.get("current_checkpoint")), None)
         self.current_label.setText(f"Current checkpoint: {current['model_name']} / run {current['run']}" if current else "No current checkpoint selected for training or inference.")
         for combo, entries in ((self.task_filter, [(t["name"], t["id"]) for t in state["tasks"]]),
@@ -260,6 +320,8 @@ class ModelLibraryWidget(QWidget):
             if self.task_filter.currentData() and row["task_id"] != self.task_filter.currentData():
                 continue
             if self.dataset_filter.currentData() and row["dataset_id"] != self.dataset_filter.currentData():
+                continue
+            if self.file_filter.currentData() and row["file_status"] != self.file_filter.currentData():
                 continue
             if self.favorites.isChecked() and not row["favorite"]:
                 continue
@@ -317,7 +379,7 @@ class ModelLibraryWidget(QWidget):
             self.run(self.draw_chart)
 
     def _columns(self, all_columns):
-        default = {"model_name", "run", "date", "task", "dataset", "dataset_id", "provider", "width", "parameters", "dice", "iou", "validation", "epochs", "seconds", "status"}
+        default = {"model_name", "run", "date", "task", "dataset", "dataset_id", "provider", "width", "parameters", "dice", "iou", "validation", "epochs", "seconds", "status", "file_status"}
         for index, key in enumerate(FIELDS):
             self.history.setColumnHidden(index, not all_columns and key not in default)
 
@@ -326,12 +388,13 @@ class ModelLibraryWidget(QWidget):
         row = selected[0] if selected else None
         for button in (self.save_notes, self.select_button, self.inspect_button):
             button.setEnabled(row is not None)
+        self._file_controls(selected)
         if row is None:
             self.details.setPlainText("No model selected. Train a model or import a checkpoint in Model Training to populate this workspace library.")
             self._editing_key = None
             return
         model = next(m for m in project(self.viewer)["models"] if m["id"] == row["model_id"])
-        self.details.setPlainText(json.dumps({"model": row["model_name"], "run": row["run"], "dataset_id": row["dataset_id"] or "Not recorded", "checkpoint": row["checkpoint"] or "Not saved", "status": row["status"], "history": row["history"]}, indent=2))
+        self.details.setPlainText(json.dumps({"model": row["model_name"], "run": row["run"], "dataset_id": row["dataset_id"] or "Not recorded", "checkpoint": row["checkpoint"] or "Not saved", "status": row["status"], "file_status": row["file_status"], "reports": row["reports"], "history": row["history"]}, indent=2))
         if self._editing_key != row["run_id"]:
             self._editing_key = row["run_id"]
             self.name.setText(row["model_name"])
@@ -424,6 +487,8 @@ class ModelLibraryWidget(QWidget):
         self.status.setText(f"Chart exported to {path}.")
 
     def _select_checkpoint(self):
+        if self.file_worker is not None:
+            raise ValueError("Wait for the file operation to finish before selecting a checkpoint.")
         rows = self.selected_rows()
         if len(rows) != 1:
             raise ValueError("Select one checkpoint to use for training or inference.")
@@ -438,6 +503,89 @@ class ModelLibraryWidget(QWidget):
         panel.run_combo.setCurrentIndex(max(0, panel.run_combo.findData(row["revision"])))
         panel.use_selected()
         self.status.setText("Checkpoint selection requested. Model Training reports loading progress and readiness.")
+
+    def _file_controls(self, selected=None):
+        from ._model_files import workspace_locations
+        selected = self.selected_rows() if selected is None else selected
+        row = selected[0] if len(selected) == 1 else None
+        manifest, _ = workspace_locations(self.viewer)
+        idle = self.file_worker is None
+        self.copy_file_button.setEnabled(bool(idle and row and row["file_status"] == "Linked externally" and manifest and manifest.is_file()))
+        self.locate_file_button.setEnabled(bool(idle and row and row["file_status"] == "Missing"))
+        self.checkpoint_location.setText(row["checkpoint"] if row and row["checkpoint"] else "No saved checkpoint selected")
+        self.selected_file_status.setText(row["file_status"] if row else "Select one run")
+
+    def _file_selection(self):
+        if self.file_worker is not None:
+            raise ValueError("Wait for the current model file operation to finish.")
+        trainer = getattr(self.viewer, "_label_assistant_training_widget", None)
+        if trainer is not None and trainer.worker is not None:
+            raise ValueError("Wait for training or checkpoint loading to finish before managing files.")
+        selected = self.selected_rows()
+        if len(selected) != 1:
+            raise ValueError("Select one checkpoint to manage its files.")
+        return selected[0]
+
+    def _copy_into_workspace(self):
+        from ._model_files import workspace_locations, copy_checkpoint_bundle
+        row = self._file_selection()
+        manifest, folder = workspace_locations(self.viewer)
+        if manifest is None or not manifest.is_file():
+            raise ValueError("Save or open the workspace before copying model files into it.")
+        if row["file_status"] != "Linked externally":
+            raise ValueError("Select a saved external checkpoint. Save unsaved weights or locate a missing file first.")
+        self._start_file_operation(copy_checkpoint_bundle, row, "Copied checkpoint and available reports into the workspace", row["checkpoint"], folder, row["model_id"], row["revision"])
+
+    def _locate_missing_file(self):
+        from copy import deepcopy
+        from ._model_files import entry_for, verify_relocated_checkpoint
+        row = self._file_selection()
+        if row["file_status"] != "Missing":
+            raise ValueError("Select a missing checkpoint to repair its file reference.")
+        model, entry = entry_for(self.viewer, row)
+        config = entry.get("config") or entry.get("history", {}).get("config") or (model.get("config") if model["revision"] == row["revision"] else None)
+        path, _ = QFileDialog.getOpenFileName(self, "Locate the matching checkpoint revision", row["checkpoint"], "Model checkpoint (*.pt)")
+        if path:
+            self._start_file_operation(verify_relocated_checkpoint, row, "Verified and repaired the checkpoint reference", path, row, deepcopy(config))
+
+    def _start_file_operation(self, function, row, message, *args):
+        from superqt.utils import create_worker
+        from ._model_files import workspace_locations, update_reference
+        state = project(self.viewer)
+        manifest = workspace_locations(self.viewer)[0]
+        def returned(path):
+            try:
+                update_reference(self.viewer, row, path, expected_state=state, expected_workspace=manifest)
+            except Exception as error:
+                if not self.closed:
+                    self.status.setText(str(error))
+                return
+            if not self.closed:
+                self.status.setText(f"{message}. Save the workspace to keep the updated reference. Original files were not moved.")
+        def finished():
+            self.file_worker = None
+            if not self.closed:
+                self._file_controls()
+        worker = create_worker(function, *args, _start_thread=False,
+                               _connect={"errored": lambda error: self.status.setText(str(error)) if not self.closed else None})
+        self.file_worker = worker
+        worker.returned.connect(returned)
+        worker.finished.connect(finished)
+        self._file_controls()
+        self.status.setText("Managing checkpoint files…")
+        try:
+            worker.start()
+        except Exception:
+            finished()
+            raise
+
+    def _open_models_folder(self):
+        from ._model_files import workspace_locations
+        folder = workspace_locations(self.viewer)[1]
+        if folder is None or not folder.is_dir():
+            raise ValueError("No managed models folder exists yet. Save the workspace with model weights first.")
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            raise ValueError(f"Could not open the file manager. Models folder: {folder}")
 
     def _trainer(self):
         trainer = getattr(self.viewer, "_label_assistant_training_widget", None)

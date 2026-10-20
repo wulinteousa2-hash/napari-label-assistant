@@ -3,10 +3,21 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [3.3.0] - 2026-10-20
 
 ### Added
 
+- Made model search explicitly workspace-scoped, with active-catalog and managed
+  folder locations, selected-checkpoint paths, report availability, and Managed,
+  Linked externally, Missing, and Unsaved file classifications.
+- Added background **Copy into workspace** and metadata-verified **Locate missing
+  file** actions. Copies preserve original bundles and avoid overwriting existing
+  files; relinking preserves model/run identities, notes, and training history.
+- Added a Workspace-panel model-catalog summary and **Open Model Library** shortcut.
+- Centralized managed-model folder derivation and active workspace association
+  for successful Save/Open/Save As, including direct workspace-service calls.
+- Added regression coverage for copy failures, mismatched checkpoint rejection,
+  workspace-change protection, managed/portable model bundles, and path search.
 - Added **Model Library** as a separate plugin menu entry alongside Label
   Curation and Model Training, plus a shortcut from the training Models page.
 - Added workspace-wide Models and Training History tables with per-run metrics,

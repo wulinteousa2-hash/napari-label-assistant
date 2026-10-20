@@ -62,7 +62,7 @@ class WorkspaceManagerWidget(QWidget):
         current_layer_ids = {
             id(layer) for layer in list(getattr(self.viewer, "layers", ()))
         }
-        if active_path and active_layer_ids.intersection(current_layer_ids):
+        if active_path and (active_layer_ids.intersection(current_layer_ids) or not current_layer_ids):
             self.workspace_path: Path | None = Path(active_path).expanduser()
             self._project_layer_ids = active_layer_ids
         else:
@@ -81,6 +81,11 @@ class WorkspaceManagerWidget(QWidget):
         self.status_label.setWordWrap(True)
         self.save_state_label = QLabel("Workspace has not been saved in this session.")
         self.save_state_label.setWordWrap(True)
+        self.model_catalog_label = QLabel()
+        self.model_catalog_label.setWordWrap(True)
+        self.model_library_button = QPushButton("Open Model Library")
+        self.model_library_button.setToolTip("Search models and runs registered in this workspace; inspect managed, external, and missing checkpoint files.")
+        self.model_library_button.clicked.connect(self._open_model_library)
         self.optimize_images_check = QCheckBox(
             "Optimize large images"
         )
@@ -179,6 +184,10 @@ class WorkspaceManagerWidget(QWidget):
         layout.addWidget(self.storage_state_label)
         layout.addWidget(self.save_state_label)
         layout.addLayout(first_row)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.model_catalog_label, 1)
+        model_row.addWidget(self.model_library_button)
+        layout.addLayout(model_row)
         layout.addWidget(QLabel("Data storage for next save"))
         layout.addWidget(self.storage_mode_combo)
         layout.addWidget(self.package_note)
@@ -203,7 +212,7 @@ class WorkspaceManagerWidget(QWidget):
         self._watched_layers = set()
         self._layer_connections = {}
         from ._model_project import model_project_events
-        self._watch_changes(model_project_events(self.viewer).changed, self.mark_changed)
+        self._watch_changes(model_project_events(self.viewer).changed, self._workspace_project_changed)
         self._watch_changes(self.viewer.layers.events.inserted, self._layer_inserted)
         self._watch_changes(self.viewer.layers.events.removed, self._layer_removed)
         for name in ("center", "zoom"):
@@ -245,6 +254,25 @@ class WorkspaceManagerWidget(QWidget):
 
     def mark_changed(self, *_args):
         self.save_state_label.setText("Workspace changed since last save. Mask edits may already be applied; save to preserve project settings.")
+
+    def _workspace_project_changed(self, *_args):
+        path = str(getattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, "") or "")
+        ids = set(getattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, ()) or ())
+        current = {id(layer) for layer in self.viewer.layers}
+        self.workspace_path = Path(path) if path and (not current or ids.intersection(current)) else None
+        self._project_layer_ids = ids if self.workspace_path is not None else set()
+        self._refresh_current_label()
+        self.mark_changed()
+
+    def _open_model_library(self):
+        from ._model_library_widget import model_library_widget
+        widget = getattr(self.viewer, "_label_assistant_model_library", None)
+        if widget is None or widget.closed:
+            widget = model_library_widget(self.viewer)
+            self.viewer.window.add_dock_widget(widget, name="Model Library")
+        widget.show()
+        widget.raise_()
+        widget.refresh()
 
     def _disconnect_changes(self, *_args):
         from contextlib import suppress
@@ -553,6 +581,8 @@ class WorkspaceManagerWidget(QWidget):
             set(self._project_layer_ids),
         )
         self._remember(self.workspace_path)
+        from ._model_project import notify_project
+        notify_project(self.viewer)
 
     def _disassociate_workspace(self) -> None:
         self.workspace_path = None
@@ -562,6 +592,8 @@ class WorkspaceManagerWidget(QWidget):
         self._project_layer_ids = set()
         setattr(self.viewer, VIEWER_WORKSPACE_PATH_ATTR, "")
         setattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, set())
+        from ._model_project import notify_project
+        notify_project(self.viewer)
 
     def _has_project_layer(self) -> bool:
         return any(
@@ -637,6 +669,13 @@ class WorkspaceManagerWidget(QWidget):
         )
         self.current_label.setText(f"Current workspace: {self.workspace_path.name if self.workspace_path else text}")
         self.current_label.setToolTip(text)
+        from ._model_project import project
+        from ._model_files import workspace_locations
+        models = project(self.viewer)["models"]
+        runs = sum(len(model.get("runs", [])) or 1 for model in models)
+        self.model_catalog_label.setText(f"Model catalog: {len(models)} models · {runs} checkpoints")
+        manifest, folder = workspace_locations(self.viewer)
+        self.model_catalog_label.setToolTip(f"Search scope: {manifest}\nManaged models folder: {folder}" if manifest else "Unsaved workspace catalog. Save the workspace to establish managed model storage.")
         missing = getattr(self.viewer, "_label_assistant_missing_workspace_layers", ())
         state = getattr(self.viewer, "_label_assistant_workspace_storage_state", None)
         if missing:

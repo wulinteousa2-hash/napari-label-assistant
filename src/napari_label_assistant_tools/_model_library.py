@@ -14,7 +14,7 @@ FIELDS = ("model_name", "run", "date", "task", "dataset", "provider", "architect
           "epochs", "learning_rate", "batch_size", "crop_pixels", "input_pixels",
           "image", "annotations", "coverage", "training_patches", "validation_patches", "steps", "augmentation",
           "seconds", "device", "mode", "favorite", "tags", "notes", "status",
-          "model_id", "run_id", "revision", "dataset_id", "checkpoint")
+          "model_id", "run_id", "revision", "dataset_id", "checkpoint", "file_status", "reports")
 
 
 def number(value):
@@ -27,6 +27,8 @@ def catalog(viewer):
     tasks = {t["id"]: t["name"] for t in state["tasks"]}
     datasets = {d["id"]: d for d in state["datasets"]}
     runtime = getattr(viewer, RUNTIME, {})
+    from ._model_files import workspace_locations, file_status
+    models_folder = workspace_locations(viewer)[1]
     rows = []
     for model in state["models"]:
         runs = model.get("runs") or [{"id": model["id"], "revision": model["revision"],
@@ -53,6 +55,8 @@ def catalog(viewer):
                 status = "Saved" if Path(checkpoint).is_file() else "Missing checkpoint"
             if run.get("saved_revision", model.get("saved_revision") if latest else None) != run["revision"]:
                 status += " · unsaved weights"
+            dirty = run.get("saved_revision", model.get("saved_revision") if latest else None) != run["revision"]
+            storage = file_status(checkpoint, dirty=dirty, models_folder=models_folder)
             row = {"model_id": model["id"], "model_name": model["name"], "run_id": run["id"],
                    "revision": run["revision"], "run": index, "date": history.get("started_at_utc", ""),
                    "task": tasks.get(model.get("task_id"), "Unassigned"), "task_id": model.get("task_id"),
@@ -68,6 +72,7 @@ def catalog(viewer):
                    "device": history.get("device", ""), "mode": history.get("mode", "unknown"),
                    "favorite": bool(model.get("favorite")), "tags": ", ".join(model.get("tags", [])),
                    "notes": run.get("notes", ""), "status": status, "checkpoint": checkpoint,
+                   "file_status": storage, "reports": ", ".join(suffix for suffix in (".history.json", ".metrics.csv", ".learning.svg", ".loss.svg") if checkpoint and Path(checkpoint).with_suffix(suffix).is_file()),
                    "history": deepcopy(history)}
             summary = history.get("dataset_summary", history.get("crop_summary", {}))
             total = history.get("total_pixels", 0)

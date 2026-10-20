@@ -120,7 +120,7 @@ def save_workspace(
     _commit_pending_local_edits(viewer)
     path = _manifest_path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data_root = path.with_name(f"{_workspace_stem(path)}_label_assistant_data")
+    data_root = workspace_data_root(path)
     label_bindings: list[tuple[Any, Any, dict[str, Any]]] = []
     library_bindings: list[tuple[Any, dict[str, Any]]] = []
     records: list[dict[str, Any]] = []
@@ -210,8 +210,6 @@ def save_workspace(
             full["report_file"] = report["report_file"]
             saved_state["comparisons"][index] = full
     setattr(viewer, KEY, saved_state)
-    from .._model_project import notify_project
-    notify_project(viewer)
     for layer, array, reference in label_bindings:
         layer._label_assistant_library_rebinding = True
         try:
@@ -228,6 +226,10 @@ def save_workspace(
         widget.models_panel._details()
         if widget.model is not None:
             widget.model_state_label.setText(f"Model weights saved with workspace: {path}")
+    from .._model_files import associate_workspace
+    from .._model_project import notify_project
+    associate_workspace(viewer, path)
+    notify_project(viewer)
     return {
         "storage_state": storage_state,
         "path": str(path),
@@ -322,6 +324,8 @@ def load_workspace(
         if str(record.get("name") or "layer") in {item["name"] for item in skipped}
     ]
     from .._model_project import restore_project
+    from .._model_files import associate_workspace
+    associate_workspace(viewer, path)
     restore_project(viewer, payload.get("model_project"), path)
     storage_state = _workspace_storage_state(load_records, path)
     viewer._label_assistant_workspace_storage_state = storage_state
@@ -1362,6 +1366,12 @@ def _manifest_path(value: str | Path) -> Path:
     if not path.exists() and path.suffix.lower() != ".json":
         path = path.with_suffix(".label-assistant.json")
     return path
+
+
+def workspace_data_root(path: Path) -> Path:
+    """The one companion-data location shared by workspace and model storage."""
+    path = Path(path)
+    return path.with_name(f"{_workspace_stem(path)}_label_assistant_data")
 
 
 def _workspace_stem(path: Path) -> str:

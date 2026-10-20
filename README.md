@@ -13,7 +13,7 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## In development: Model Library
+## Version 3.3.0: Model Library and workspace file management
 
 The plugin menu now provides three separate panels:
 
@@ -53,6 +53,49 @@ shows tensor shapes, parameter counts, and bounded-sample statistics with CSV
 export. Inspection requires explicit weight loading; weight statistics do not
 measure prediction quality. Learning curves read existing in-memory history or
 JSON sidecars, and are reported unavailable when neither is present.
+
+### Workspace-owned model files
+
+The workspace is the catalog for its images, annotations, models, and results.
+**Search workspace** filters registered model/run records, including checkpoint
+paths and file status. It does not scan folders, discover unregistered `.pt`
+files, or search the **Recent workspaces** list. Open the relevant workspace
+first; its model records are restored without loading networks.
+
+In Model Library, expand **Model files and workspace locations** to see the
+workspace manifest, managed-model folder, selected checkpoint path, and counts
+of **Managed**, **Linked externally**, **Missing**, and **Unsaved** checkpoints.
+Use **More filters → File status** to find missing or externally linked files.
+The Workspace panel's **Open Model Library** shortcut opens this same catalog.
+
+```text
+MyProject/
+├── MyProject.label-assistant.json
+└── MyProject_label_assistant_data/
+    ├── models/       # checkpoints, histories, metrics, and learning charts
+    ├── comparisons/  # saved comparison reports
+    └── …             # managed image/annotation assets
+```
+
+- **Managed** files are saved inside this workspace's models folder.
+- **Linked externally** files remain at their recorded external locations.
+  **Copy into workspace** copies a selected checkpoint and its available history,
+  metrics, and chart files into managed storage while preserving the originals.
+  Existing bundles are not overwritten; copying runs in the background.
+- **Missing** files can be repaired with **Locate missing file**. The selected
+  file is checked against the model identity, configuration, recorded training
+  history, and scores before the run reference is changed. A different model or
+  checkpoint revision must be imported separately.
+- **Unsaved** weights must be persisted with Workspace Save before copying.
+
+**Save the workspace after copying or locating a file** to persist its updated
+references. These actions preserve model/run identities, notes, and history;
+they do not add another training run or move source files. A workspace change
+during an operation prevents its result from modifying the newly opened catalog.
+**Open models folder** opens the managed folder in the desktop file manager.
+Images may remain linked externally; making model files managed does not copy
+large image datasets or make the entire workspace portable. Use **Include all
+data (portable)** when the entire workspace needs to move between computers.
 
 ## Version 3.2.1
 
