@@ -1,5 +1,5 @@
-"""Lazy model providers sharing the grayscale binary-logit contract."""
-from dataclasses import asdict, dataclass
+"""Lazy model providers sharing grayscale inputs and task-specific logits."""
+from dataclasses import asdict, dataclass, replace
 from importlib.util import find_spec
 
 _REGISTERED_PROVIDERS = {}
@@ -19,8 +19,11 @@ class ModelSpec:
     initialization: str = "random"
     width: int = 8
     preprocessing: str = "percentile_1_99"
+    output_channels: int = 1
 
     def validate(self):
+        if not 1 <= self.output_channels <= 255:
+            raise ValueError("Unsupported number of model output channels.")
         if self.provider not in ("custom", "standard", "smp") and self.provider not in _REGISTERED_PROVIDERS:
             raise ValueError(f"Model provider {self.provider!r} is unavailable. Enable or register its provider code before loading weights.")
         if self.initialization not in ("random", "imagenet"):
@@ -52,7 +55,8 @@ class ModelSpec:
 
 
 def spec_for(config):
-    return ModelSpec(**config.model_spec) if config.model_spec else ModelSpec(width=config.base_channels)
+    spec = ModelSpec(**config.model_spec) if config.model_spec else ModelSpec(width=config.base_channels)
+    return replace(spec, output_channels=config.output_channels)
 
 
 def provider_available(provider):
@@ -71,13 +75,13 @@ def build_model(config, *, initialize=True):
             raise TypeError("Model provider must return a PyTorch nn.Module.")
         return network
     if spec.provider == "custom":
-        return build_unet(spec.width)
+        return build_unet(spec.width, output_channels=spec.output_channels)
     if spec.provider == "smp":
         smp = require_smp()
         constructors = {"unet": smp.Unet, "unetplusplus": smp.UnetPlusPlus, "deeplabv3plus": smp.DeepLabV3Plus}
         return constructors[spec.architecture](encoder_name=spec.encoder,
             encoder_weights="imagenet" if initialize and spec.initialization == "imagenet" else None,
-            in_channels=1, classes=1, activation=None)
+            in_channels=1, classes=spec.output_channels, activation=None)
     torch = _torch()
     nn = torch.nn
     class Block(nn.Sequential):
@@ -91,7 +95,7 @@ def build_model(config, *, initialize=True):
             self.down = nn.ModuleList(Block(1 if i == 0 else widths[i-1], w) for i,w in enumerate(widths))
             self.transpose = nn.ModuleList(nn.ConvTranspose2d(widths[i+1], widths[i], 2, stride=2) for i in range(2,-1,-1))
             self.up = nn.ModuleList(Block(2*widths[i], widths[i]) for i in range(2,-1,-1))
-            self.output = nn.Conv2d(widths[0],1,1)
+            self.output = nn.Conv2d(widths[0],spec.output_channels,1)
         def forward(self, x):
             skips=[]
             for i,block in enumerate(self.down):

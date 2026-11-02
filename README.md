@@ -13,7 +13,32 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 3.3.0: Model Library and workspace file management
+## Version 4.3.0: Multiple-image datasets, multiclass training, and tiled inference
+
+- **Train across image–label pairs:** in **1. Dataset**, choose **Multiple pairs**
+  and open **Manage pairs…**. Select pairs, configure annotation coverage per
+  image, and keep related images in the same specimen/split group. The table
+  opens separately, and review controls remain collapsed until needed.
+- **Learn separate tissue classes:** define foreground classes such as
+  `axon, myelin` on a new biological task. Labels use `0` for background and
+  `1`, `2`, … for the named classes, up to 254 foreground classes. Class names
+  persist with checkpoints, and validation reports per-class Dice/IoU. Empty
+  class definitions preserve binary foreground/background training.
+- **Predict more than one crop:** **4. Inference** offers **Current area**,
+  **Entire image**, and **Drawn box**, with overlapping tiled prediction,
+  progress, and cancellation for larger regions.
+- **Save replaced labels reliably:** saving a NumPy replacement of a previously
+  Zarr-backed Labels layer persists its current pixels instead of failing on a
+  stale storage reference. Prediction class metadata also survives workspace saves.
+
+Pair selections use stable layer IDs and persist in the workspace. Suggested
+pairs require explicit inclusion; predictions require review confirmation before
+being used as ground truth. Existing single-pair datasets, binary checkpoints,
+biological tasks, and Model Library records remain supported. See the
+[changelog](CHANGELOG.md) for release details and the training guide below for
+the complete workflow.
+
+## Model Library and workspace file management
 
 The plugin menu now provides three separate panels:
 
@@ -97,7 +122,7 @@ Images may remain linked externally; making model files managed does not copy
 large image datasets or make the entire workspace portable. Use **Include all
 data (portable)** when the entire workspace needs to move between computers.
 
-## Version 3.2.1
+## Prepared datasets and checkpoint selection
 
 - Selecting an existing model or loading a checkpoint now retains a compatible
   prepared dataset, so **Train new model** remains available without repeating
@@ -108,7 +133,7 @@ data (portable)** when the entire workspace needs to move between computers.
   dataset → train** are supported. After changing annotations, sources, or dataset
   settings, prepare the dataset again.
 
-### Version 3.2.0 workflow improvements
+### Annotation and review workflow
 
 - Finish a cell with **Mark reviewed & next** directly in Local Editing; move
   to the next unreviewed cell without switching to Training.
@@ -120,8 +145,7 @@ data (portable)** when the entire workspace needs to move between computers.
 - Distinguish applied mask edits from saved workspace settings, with visible
   change tracking and successful save/open timestamps.
 
-The training and model-management capabilities introduced during 3.1 development
-are also included:
+Training and model management also support these workflows:
 
 - Follow five Training pages: **Dataset**, **Models**, **Train**, **Inference**,
   and **Advanced**. Prepare datasets separately from optional patch previews.
@@ -359,63 +383,106 @@ Restart napari from that same environment after installation. See
 for environment checks and dependency errors. PyTorch is loaded only when
 training, prediction, or model loading is requested; other tools work without it.
 
-1. Open **Training**, select a single-channel 2D **Training image**
-   and a same-size **Ground truth** Labels layer. Annotations must be complete:
-   all nonzero label values become one target class and all zero pixels are
-   negative examples.
-   The same panel can be opened directly from the plugin's **Model Training** menu.
-2. Choose **Crop context**, **Training resolution**, and **Crop count**, then
-   click **Prepare & Preview Crops**. Defaults use 32 crops, 512 × 512 source
-   context, and 512 × 512 model inputs. Preparation scans the full-resolution
-   ground truth in bounded tiles to discover sparse annotations across the
-   entire image; a huge mask can take time to scan. The ground-truth layer is
-   temporarily locked for editing and preparation can be canceled.
-3. Inspect the aligned **crop images** and **crop ground truth** layers, arranged
-   in a grid of the actual normalized model inputs. Tile headers show source
-   coordinates, sampling type, and training/validation split; cyan frames mark
-   training and orange frames mark validation. Click a tile for original/model
-   foreground pixel counts, or double-click to locate its source region.
-   The read-only gallery is placed beside the source image. It is temporary,
-   excluded from source selectors and workspace saves, and replaced on successful
-   re-preparation.
-4. Check the actual positive/background counts. Half the crop slots are centered
-   near discovered annotation locations and guaranteed to retain foreground.
-   Other slots seek nearby background and ordinary background. If no completely
-   negative crop can be found after bounded attempts, a mixed-context crop is
-   retained and reported as positive; counts reflect what is actually included.
-   Training and validation use separate, non-overlapping spatial blocks across
-   the image, with annotated blocks reserved for both splits. Only one annotated
-   block is insufficient for validation: use a smaller context or a more
-   representative image. The default 32 crops give 24 training and 8 validation
-   patches. Patches within a split may overlap.
-5. Choose **Training steps** and **Compute**, then click **Train new model**. Defaults
-   use 200 steps and automatic CUDA/CPU selection. Training uses the reviewed
-   patches without resampling. Changing source layers, source pixels, crop
-   context, resolution, or crop count invalidates the prepared dataset and
-   requires another preparation; changing steps or compute does not.
+1. Open **Training → 1. Dataset**, or the plugin's **Model Training** panel.
+   Choose **Current pair** for one single-channel 2D image and its aligned
+   ground-truth Labels layer, or **Multiple pairs → Manage pairs…** for several.
+   Use complete coverage only when the entire image is annotated; partial
+   annotations require associated reviewed regions and/or selected objects.
+2. In **2. Models**, choose a biological task and architecture. Leave
+   **Foreground classes** empty for binary training, or define semantic classes
+   and use their numeric IDs consistently in every included Labels layer.
+3. Return to **1. Dataset** and click **Prepare dataset**. The default
+   **All patches** workflow indexes eligible patches and streams them during
+   training. Set source patch and model input sizes in **5. Advanced**;
+   defaults are 512 × 512 pixels. Preparation locks included annotations,
+   supports cancellation, and does not open a gallery automatically.
+4. Optionally click **Show patch preview**. Cyan frames mark training patches
+   and orange frames mark validation. Double-click a tile to locate it in its
+   source image. **Return to image** hides the read-only gallery. Single-pair
+   datasets reserve spatial blocks; multiple-pair datasets reserve entire
+   image/specimen groups. Review the indexed counts and validation settings.
+   **Sample patches** remains available for complete single-pair annotations;
+   its crop count applies to a fixed sample rather than full coverage.
+5. In **3. Train**, choose epochs for **All patches** or steps for **Sample
+   patches**, then click **Train new model**. Device selection is in Advanced;
    Automatic falls back to CPU when CUDA is unavailable or lacks memory.
-   Check validation Dice, IoU, precision, and recall. These scores describe the
-   source image, not accuracy on a new image.
-6. Select a **Prediction image**, pan to the area of interest, set the threshold,
-   and click **Predict current area**. A new experimental Labels layer covers
-   just one crop, with its position and image transforms preserved. Review the
-   prediction before using or copying it.
-7. Use **Save model…** and **Load model…** to reuse the model in later sessions.
+   Changed source pixels, pair selections, class definitions, patch sizes, or
+   validation settings require preparation again. Inspect validation Dice, IoU,
+   precision, and recall; multiclass models also show per-class results.
+   These validation-selected scores are not independent test-set accuracy.
+6. In **4. Inference**, select a **Prediction image** and choose **Current area**,
+   **Entire image**, or **Drawn box**. Current area predicts one crop; the other
+   modes blend overlapping tiles with progress and cancellation. Each run adds a
+   Labels layer with the image transforms preserved. Review the prediction.
+7. Save the workspace to persist datasets, annotations, model/run records, and
+   managed checkpoints. Use **Export current model…** to export a checkpoint,
+   and **Load model…** or Model Library to reuse it in later sessions.
 
-The model is a five-level U-Net with 8, 16, 32, 64, and 128 feature channels,
-GroupNorm, skip connections, and binary cross-entropy plus Dice loss. Select
+The default custom model is a five-level U-Net with 8, 16, 32, 64, and 128 feature
+channels, GroupNorm, and skip connections. Standard U-Net and optional SMP models
+are also available. Binary models use binary cross-entropy plus Dice loss;
+multiclass models use cross-entropy plus foreground Dice loss. Select
 256 × 256 inputs for speed or 512 × 512 for more detail. At the default 512-pixel
 context/resolution no downsampling is needed. Larger contexts sacrifice boundary
 detail; image area averaging and foreground-preserving mask pooling retain small
 targets when reducing resolution. Inspect the gallery to assess this tradeoff.
-Small images automatically use smaller contexts to retain separate validation
-areas. This is a quick feasibility workflow, not a trained
-general-purpose model or a full-image segmentation command.
+Sampled single-pair training reduces context for small images to retain separate
+validation areas. Single-pair coverage needs two source patches on each axis;
+reduce patch size if preparation reports insufficient spatial coverage. Models
+learn from the selected annotations and require evaluation on representative new
+images before relying on their predictions.
+
+For multiple tissue features, create a new biological task in **2. Models** and
+enter comma-separated **Foreground classes**, for example `axon, myelin`.
+The semantic ground-truth Labels layer must use `0 = background`, `1 = axon`,
+and `2 = myelin`. These IDs represent tissue types, not individual objects.
+All axons share ID 1, and all myelin pixels share ID 2. If annotations are in
+separate layers, **Combine → compose layers as distinct classes** can prepare a
+semantic layer; check class order and overlaps before training. Existing object
+IDs are never automatically reinterpreted or converted.
+
+Leave the class field empty to retain binary training (all nonzero IDs become
+foreground). Class definitions are stored per task and checkpoint. A task with
+trained models cannot change its class meanings; create another task instead.
+Prepare the dataset again after changing classes. Both coverage and sampled
+training support multiclass supervision. Each class needs examples in training
+and validation regions. Partial annotations still require reviewed coverage;
+unreviewed pixels and padding do not contribute to loss.
+
+Multiclass models use cross-entropy plus foreground Dice loss and predict the
+highest-probability class, including background. The binary threshold is disabled.
+Validation shows foreground macro-average scores and per-class Dice/IoU.
+Class masks use nearest-neighbor resizing; if a class disappears during input
+downsampling, preparation asks for matching patch and input sizes. Train a new
+multiclass model; existing binary checkpoints retain their original output.
 
 Training and prediction run in background workers. **Cancel** stops after the
 current crop or training step, restores editing, and keeps the existing model.
 Huge NumPy/memmap, Zarr, and other sliceable sources are accessed by small
 regions; the full arrays are never converted to in-memory training copies.
+
+To train across several images, choose **Dataset sources → Multiple pairs** in
+**1. Dataset**, then open **Manage pairs…**. The pair table stays in a separate
+dialog to keep the Dataset panel compact. Suggested associations are not included
+automatically. Check each image–label pair, choose complete annotations or its
+associated reviewed-region mask, and confirm reviewed/corrected model predictions
+with **Labels reviewed**. Click **Apply**, then **Prepare dataset** and train as
+usual. The existing **Current pair** mode remains available.
+
+Multiple-pair mode streams all eligible patches using the **All patches** workflow.
+Each image/specimen group stays entirely in training or validation; set the same
+**Specimen / split group** for related images, duplicated acquisitions, or images
+from one animal. Holdout requires at least two independent groups; k-fold needs
+at least as many suitable groups as folds. Each split needs targets and background,
+and multiclass datasets need each foreground class in both splits. Images can have
+different dimensions, but each pair's shapes/transforms must align and image
+scales should be comparable. Patch previews retain their source image identities.
+
+Pair inclusion, coverage, confirmations, and split groups are saved in the
+workspace using stable layer IDs, so renaming layers does not break the pairing.
+Missing layers are reported for repair in Manage pairs. **Review selected pair**
+opens the normal review controls when needed; those controls stay collapsed in
+multiple-pair mode. Training history records every included source.
 
 ### Grid registration and QC traceability
 
@@ -547,16 +614,17 @@ Distributed under the terms of the MIT license.
 ### Continue training a large-image model
 
 After training or loading a saved `.pt` model, prepare and review crops, then
-click **Continue training current model** to fine-tune its existing weights.
+click **Continue training** to fine-tune its existing weights.
 **Train new model** starts a new model. Each round uses a new AdamW optimizer;
 this is weight fine-tuning rather than exact optimizer-state resumption.
 Use a lower **Learning rate**, for example `0.0001`, for cautious fine-tuning.
 The model with the best validation Dice is retained, including the starting
 model if every checkpoint scores worse. Ties retain the latest checkpoint. Cancellation preserves the current model.
 
-For scattered targets in a huge image, increase crop count and change
-**Crop sampling seed** between rounds to review different training locations.
-The spatial holdout blocks stay fixed for the same ground truth and crop context.
+In **Sample patches** mode, increase crop count or change the sampling seed to
+inspect different training locations. **All patches** visits every eligible
+training patch each epoch. Spatial holdouts stay fixed for compatible single-pair
+settings; multiple-pair holdouts keep entire image/specimen groups together.
 Changing context, labels, or source changes the validation setup; scores from
 such rounds are not directly comparable and may include previously trained areas.
 Keep representative earlier examples in later rounds to reduce forgetting.

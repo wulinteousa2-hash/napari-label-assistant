@@ -1,7 +1,11 @@
 # Training large images
 
-The Training tab trains a binary segmentation model: all nonzero ground-truth
-labels are targets. Individual object IDs are not learned as separate classes.
+The Training tab supports binary and semantic multiclass segmentation. With
+**Foreground classes** empty, all nonzero ground-truth labels are foreground;
+individual object IDs are not learned separately. Define names such as
+`axon, myelin` in **Models** for semantic IDs `0 = background`, `1 = axon`,
+`2 = myelin`. Up to 254 foreground classes are supported. Class definitions
+persist per task/checkpoint; trained tasks require a new task to change meanings.
 
 Training has five pages: **Dataset**, **Models**, **Train**, **Inference**, and **Advanced**.
 Choose annotations and prepare the dataset in Dataset; patch preview is optional. Select a biological task and
@@ -19,6 +23,19 @@ napari from the same environment before training. See
 for commands and how to distinguish missing SMP from a broken dependency import.
 
 ## Two ways to include annotations
+
+These annotation workflows apply to **Current pair** mode. For several images,
+choose **Dataset sources → Multiple pairs → Manage pairs…**. Select pairs,
+configure coverage and reviewed masks separately, and confirm corrected model
+predictions before using them as ground truth. Pair definitions persist by layer
+ID in the workspace. The dialog's **Review selected pair** opens the regular
+review controls; those controls stay collapsed otherwise.
+
+Multiple-pair preparation streams eligible patches across all included images.
+Holdout and k-fold validation reserve entire image/specimen groups. Give related
+images the same split group, and use comparable image scales. Each split needs
+targets and background; semantic classes need examples in both splits. The
+single-pair workflow continues to reserve spatial regions within its image.
 
 Keep **Partial — reviewed cells + selected objects** when Curated contains only some targets.
 Zero pixels may contain missing objects, so they must not automatically become
@@ -82,8 +99,10 @@ were changed externally, click **Build / update library** to check the saved
 index against source pixels. Training refuses stale library data. Cancel stops
 automatic scan retries until Build / update is requested again.
 
-Model weights remain separate: use **Save model…**, then **Load model…** before
-continuing a saved model after restarting napari.
+Workspace saves include managed model checkpoints and training history.
+After restarting napari, open the workspace and select its checkpoint in Model
+Library before continuing. **Export current model…** and **Load model…** also
+support standalone checkpoint files.
 
 No reviewed mask is needed when every target is annotated across the image;
 choose **Complete — whole image** explicitly in that case.
@@ -146,7 +165,7 @@ or targets disappear at the selected input size, preparation reports an error;
 use matching patch/input sizes or fully review a larger region.
 
 After indexing, set epochs, batch size, and compute device, then **Train new model**
-or **Continue training current model**. You do not need to change the crop seed
+or **Continue training**. You do not need to change the crop seed
 or rebuild the index between epochs or continuation rounds. Changing the shuffle
 seed changes patch order without requiring reindexing. Apply annotation corrections
 and index again when the image, ground truth, reviewed mask, or patch size changes.
@@ -165,18 +184,23 @@ A continuation round uses a fresh optimizer. Cancel preserves the previous model
 
 ## Saving and reviewing the model
 
-Training updates the model **in memory**. Click **Save model…** to write the weights
-and training history to disk; saving a workspace does not save the model. The
-panel reports whether the model was updated in memory, loaded, or saved.
+Training updates the model **in memory**. Save the workspace to persist managed
+checkpoints, training history, and pair definitions. **Export current model…**
+writes a standalone checkpoint and companion reports. Model Library selects
+saved checkpoints for continuation or inference. The panel reports whether the
+model was updated in memory, loaded, or saved.
 
-Use **Predict current area** to inspect a bounded region, then correct annotation
-errors and add fully reviewed regions to the dataset. Validation within one image
+In **Inference**, choose **Current area**, **Entire image**, or **Drawn box**.
+The latter modes blend overlapping tiles with progress and Cancel. Predictions
+create a separate Labels layer; review and correct them before training on them.
+Multiclass predictions choose the most probable class including background, and
+the binary threshold is disabled. Validation within one image
 does not establish performance on a different image or specimen. Keep a separate
 image for final evaluation when possible.
 
 ## Sampled crops
 
-**Sampled crops (quick experiment)** retains the smaller, fixed-crop workflow for
+**Sample patches** retains the smaller, fixed-crop workflow for
 complete annotations. It trains by steps and reuses the prepared crop sample.
 Change the sampling seed and prepare again to use different sampled locations.
 Partial annotations require coverage training with a reviewed-region mask.
@@ -262,14 +286,15 @@ using their validation fold, so these are not independent test-set measurements.
 
 **Save fold models and validation report…** creates a new result folder with each
 fold's weights and history, exact spatial/patch assignments, aggregate scores, and
-an SVG learning chart. Fold models stay in memory until exported; the current
-prediction model is retained throughout evaluation.
+an SVG learning chart. Workspace saves also persist registered fold checkpoints;
+the current prediction model is retained throughout evaluation.
 
 After k-fold evaluation, **Train final model on all reviewed regions** starts a
 fresh model and visits all eligible patches. It has no held-out validation data;
 validation plateau stopping is therefore inactive. Its history retains the earlier
 cross-validation report, and its weights are retained from the last requested epoch.
-Use **Save model…** to persist the final model. Model saves now also write a
+Save the workspace or use **Export current model…** to persist the final model.
+Standalone model exports also write a
 `.learning.svg` beside the model and `.history.json`.
 
 ### Validation loss, CSV, and activity log

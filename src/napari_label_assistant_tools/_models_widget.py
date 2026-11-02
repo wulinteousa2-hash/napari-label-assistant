@@ -26,9 +26,16 @@ class ModelsWidget(QWidget):
         self.task_name.setPlaceholderText("e.g. Myelin segmentation")
         self.definition = QLineEdit()
         self.definition.setPlaceholderText("e.g. Myelin sheath pixels; exclude axon interiors")
+        self.class_names_edit = QLineEdit()
+        self.class_names_edit.setPlaceholderText("Leave empty for binary; e.g. axon, myelin")
+        self.class_names_edit.setToolTip("Comma-separated semantic classes in label-ID order: 1, 2, … . Label 0 is background. These are tissue classes, not individual object IDs.")
         form.addRow("Task", self.task_combo)
         form.addRow("Name", self.task_name)
         form.addRow("Target definition", self.definition)
+        form.addRow("Foreground classes", self.class_names_edit)
+        class_note = QLabel("Binary: leave classes empty; all nonzero IDs are foreground. Multiclass example: axon, myelin → 0 background, 1 axon, 2 myelin. Use a semantic Labels layer with these IDs; existing instance labels are not converted.")
+        class_note.setWordWrap(True)
+        form.addRow(class_note)
         row = QHBoxLayout()
         self.add_task_button = QPushButton("Create task")
         self.update_task_button = QPushButton("Update task")
@@ -136,6 +143,13 @@ class ModelsWidget(QWidget):
     def task(self):
         return next((t for t in project(self.viewer)["tasks"] if t["id"] == self.task_combo.currentData()), None)
 
+    def class_names(self):
+        text = self.class_names_edit.text().strip()
+        names = tuple(part.strip() for part in text.split(",")) if text else ()
+        from ._quick_train import QuickTrainConfig
+        QuickTrainConfig(class_names=names).validate()
+        return names
+
     def _open_library(self):
         from ._model_library_widget import model_library_widget
         widget = getattr(self.viewer, "_label_assistant_model_library", None)
@@ -149,18 +163,21 @@ class ModelsWidget(QWidget):
     def ensure_task(self):
         task = self.task()
         if task is None:
-            task = add_task(self.viewer, "Foreground segmentation", "Nonzero ground-truth pixels are foreground; reviewed zero pixels are background.")
+            names = self.class_names()
+            task = add_task(self.viewer, " / ".join(names) + " segmentation" if names else "Foreground segmentation", "Semantic classes in label-ID order: " + ", ".join(names) if names else "Nonzero ground-truth pixels are foreground; reviewed zero pixels are background.", class_names=names)
             self.refresh()
         return task
 
     def bind_sources(self):
         task=self.ensure_task()
+        if tuple(task.get("class_names", ())) != self.class_names():
+            raise ValueError("Class definitions differ from the selected task. Update this task, or create a new task to keep existing models unchanged.")
         sources={name: layer_id(combo.currentData()) for name,combo in (("image",self.trainer.image_combo),("ground_truth",self.trainer.truth_combo),("reviewed",self.trainer.reviewed_combo))}
         task["sources"]=sources
-        return {"task_id":task["id"], "task_name":task["name"], "target_definition":task["target_definition"], "source_ids":sources, "image_id": sources["image"], "ground_truth_id": sources["ground_truth"]}
+        return {"task_id":task["id"], "task_name":task["name"], "target_definition":task["target_definition"], "class_names": list(task.get("class_names", ())), "source_ids":sources, "image_id": sources["image"], "ground_truth_id": sources["ground_truth"]}
 
     def _add_task(self):
-        add_task(self.viewer,self.task_name.text(),self.definition.text())
+        add_task(self.viewer,self.task_name.text(),self.definition.text(), class_names=self.class_names())
         self.refresh()
 
     def _update_task(self):
@@ -170,9 +187,10 @@ class ModelsWidget(QWidget):
         if not self.task_name.text().strip() or not self.definition.text().strip():
             raise ValueError("Give the task a name and target definition.")
         # Changing semantic meaning should create another task, not rewrite old runs.
-        if any(r.get("task_id") == task["id"] for r in project(self.viewer)["models"]) and task["target_definition"] != self.definition.text().strip():
+        names = self.class_names()
+        if any(r.get("task_id") == task["id"] for r in project(self.viewer)["models"]) and (task["target_definition"] != self.definition.text().strip() or tuple(task.get("class_names", ())) != names):
             raise ValueError("This task has trained models. Create another task to change its target definition.")
-        task.update(name=self.task_name.text().strip(),target_definition=self.definition.text().strip())
+        task.update(name=self.task_name.text().strip(),target_definition=self.definition.text().strip(), class_names=list(names))
         self.refresh()
         from ._model_project import notify_project
         notify_project(self.viewer)
@@ -182,6 +200,7 @@ class ModelsWidget(QWidget):
         project(self.viewer)["current_task"]=task["id"] if task else None
         self.task_name.setText(task["name"] if task else "")
         self.definition.setText(task["target_definition"] if task else "")
+        self.class_names_edit.setText(", ".join(task.get("class_names", ())) if task else "")
         if task:
             for name,combo in (("image",self.trainer.image_combo),("ground_truth",self.trainer.truth_combo),("reviewed",self.trainer.reviewed_combo)):
                 identifier=task.get("sources",{}).get(name)
@@ -215,7 +234,7 @@ class ModelsWidget(QWidget):
         self.width.setEnabled(provider!="smp")
         self.width.setVisible(provider!="smp")
         self.configuration_form.labelForField(self.width).setVisible(provider!="smp")
-        self.availability.setText("Install in the napari environment: python -m pip install segmentation-models-pytorch" if not provider_available(provider) else "Grayscale image → foreground segmentation.")
+        self.availability.setText("Install in the napari environment: python -m pip install segmentation-models-pytorch" if not provider_available(provider) else "Grayscale image → binary or semantic class segmentation, as defined by the task.")
         self.availability.setToolTip("Inputs use per-patch 1st–99th percentile normalization. SMP pretrained encoder weights are adapted to one input channel; saved checkpoints retain this preprocessing specification.")
 
     def spec(self):
@@ -387,7 +406,7 @@ class ModelsWidget(QWidget):
             self.trainer._status("Comparison exported to "+path)
 
     def set_busy(self,busy):
-        for widget in (self.task_combo,self.task_name,self.definition,self.add_task_button,self.update_task_button,
+        for widget in (self.task_combo,self.task_name,self.definition,self.class_names_edit,self.add_task_button,self.update_task_button,
             self.name,self.provider,self.architecture,self.initialization,self.models,self.run_combo,self.use_button,self.configuration_button,
             self.add_candidate,self.remove_candidate,self.compare_button,self.to_train):
             widget.setEnabled(not busy)

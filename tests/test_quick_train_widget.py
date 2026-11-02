@@ -142,6 +142,36 @@ def test_prediction_worker_adds_only_one_bounded_preview(
     assert "Only this area was segmented" in widget.status_label.text()
 
 
+@pytest.mark.parametrize("scope", ["image", "box"])
+def test_region_prediction_controls_and_alignment(make_napari_viewer, qtbot, monkeypatch, scope):
+    viewer, image, _, widget = setup_widget(make_napari_viewer, qtbot)
+    widget.model = SimpleNamespace()
+    image.scale = (2, 3)
+    image.translate = (7, 11)
+    widget.prediction_scope.setCurrentIndex(widget.prediction_scope.findData(scope))
+    if scope == "box":
+        widget.draw_prediction_box_button.click()
+        box = widget.prediction_box_layer
+        corners = np.array([image.data_to_world(p) for p in ((10, 20), (10, 70), (60, 70), (60, 20))])
+        box.add_rectangles(corners)
+
+    def fake_predict(model, data, bounds, *, device, cancel):
+        assert bounds == ((10, 20, 60, 70) if scope == "box" else None)
+        origin = (10, 20) if scope == "box" else (0, 0)
+        return QuickTrainPrediction(np.ones((50, 50), dtype=np.float32), origin)
+
+    monkeypatch.setattr(widget_module, "predict_region", fake_predict)
+    widget._update_controls()
+    widget.predict_button.click()
+    qtbot.waitUntil(lambda: widget.worker is None)
+    prediction = viewer.layers[-1]
+    assert "quick_train" in prediction.metadata, widget.status_label.text()
+    assert prediction.metadata["quick_train"]["scope"] == scope
+    origin = (10, 20) if scope == "box" else (0, 0)
+    np.testing.assert_allclose(prediction.data_to_world((0, 0)), image.data_to_world(origin))
+    assert "was segmented" in widget.status_label.text()
+
+
 def test_real_training_and_prediction_through_panel_buttons(
     make_napari_viewer, qtbot, monkeypatch
 ):

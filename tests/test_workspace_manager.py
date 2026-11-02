@@ -121,6 +121,26 @@ def test_workspace_round_trip_uses_writable_zarr_and_restores_grid(tmp_path):
     assert int(stored[0, 0]) == 9
 
 
+def test_save_persists_numpy_replacement_of_loaded_labels(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    path = tmp_path / "case.label-assistant.json"
+    layer = Labels(np.zeros((8, 8), dtype=np.uint32))
+    save_workspace(FakeViewer([layer]), path)
+    original_storage = json.loads(path.read_text())["layers"][0]["storage"]
+
+    viewer = FakeViewer()
+    load_workspace(viewer, path)
+    restored = viewer.layers[0]
+    restored.data = np.full((8, 8), 7, dtype=np.uint32)
+    save_workspace(viewer, path)
+
+    storage = json.loads(path.read_text())["layers"][0]["storage"]
+    saved = zarr.open_array(str(tmp_path / storage["path"] / storage["array_path"]), mode="r")
+    np.testing.assert_array_equal(saved[:], np.full((8, 8), 7, dtype=np.uint32))
+    assert storage["path"] != original_storage["path"]
+    assert hasattr(restored.data, "chunks")
+
+
 def test_save_commits_pending_local_edits_before_serializing(tmp_path):
     pytest.importorskip("zarr")
     layer = Labels(np.zeros((8, 8), dtype=np.uint8), "mask")

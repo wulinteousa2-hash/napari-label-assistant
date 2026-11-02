@@ -3,6 +3,54 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] - 2026-11-02
+
+### Added
+
+- Added **Current pair / Multiple pairs** source modes and a separate
+  **Manage pairs…** dialog with suggested associations, explicit inclusion,
+  per-pair coverage and reviewed-mask selection, prediction-review confirmation,
+  and specimen/split groups. Review controls collapse in multiple-pair mode.
+- Added bounded-memory pooled patch preparation and training across image–label
+  pairs of different dimensions. Entire image/specimen groups stay together in
+  holdout and k-fold validation; final training and model comparisons share the
+  pooled index. Patch previews retain the source image for navigation.
+- Persist pair definitions by stable layer IDs, including coverage, inclusion,
+  confirmations, and split groups. Report missing layers and invalidate datasets
+  when any included annotation source changes. Record all sources in checkpoints.
+- Added optional semantic multiclass tasks with 2–254 named foreground classes
+  plus background. Both sampled and coverage training preserve semantic IDs and
+  use masked cross-entropy plus foreground Dice loss. Report foreground macro
+  metrics and per-class scores; validate class coverage and downsampling loss.
+- Added multiclass heads for built-in and SMP model configurations, persisted
+  class definitions in checkpoints, and class-aware workspace metadata. Binary
+  tasks/checkpoints retain their existing behavior; multiclass checkpoints use
+  checkpoint format version 3, including Model Library relocation support.
+- Added **Entire image** and **Drawn box** inference alongside **Current area**.
+  Overlapping tiles blend probabilities with progress and cancellation, preserve
+  source alignment, and create a separate Labels layer. Multiclass inference
+  uses the highest-probability class and disables the binary threshold.
+
+### Fixed
+
+- Persist NumPy replacement pixels when a Labels layer still carries an old
+  Zarr storage reference, preventing the missing `chunks` attribute save failure.
+- Preserve prediction metadata, class names, and source identities through
+  workspace save/load, and correct floating-point rounding of drawn-box bounds.
+- Preserve shared Spectral Assistant project metadata and analysis-database
+  references when saving or reopening a Label Assistant workspace.
+- Prevent continuation with changed class meanings or previously trained images
+  in a reserved multi-image holdout. Existing trained task definitions remain
+  protected when importing models with different classes.
+
+### Documentation and validation
+
+- Updated the README with compact dataset management, per-pair review, grouped
+  validation, multiclass label preparation, and tiled inference instructions.
+- Added regression coverage for multi-image streaming, review-mask isolation,
+  binary/multiclass optimization, grouped validation, model comparisons,
+  checkpoint compatibility, workspace round trips, and review navigation.
+
 ## [3.3.0] - 2026-10-20
 
 ### Added

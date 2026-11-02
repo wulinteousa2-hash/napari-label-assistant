@@ -197,7 +197,13 @@ def save_workspace(
     }
     from .._model_project import save_project
     payload["model_project"] = save_project(viewer, path, data_root, complete_package)
+    spectral_state = _spectral_project_state(viewer, path, data_root)
+    if spectral_state is not None:
+        payload["spectral_project"] = spectral_state
     _atomic_write_json(path, payload)
+    if spectral_state is not None:
+        viewer._spectral_assistant_project = spectral_state
+        viewer._spectral_assistant_manifest_path = str(path)
     # Commit references only after the entire manifest has been written safely.
     from copy import deepcopy
     from .._model_project import KEY, resolve_references
@@ -326,6 +332,8 @@ def load_workspace(
     from .._model_project import restore_project
     from .._model_files import associate_workspace
     associate_workspace(viewer, path)
+    viewer._spectral_assistant_project = payload.get("spectral_project")
+    viewer._spectral_assistant_manifest_path = str(path)
     restore_project(viewer, payload.get("model_project"), path)
     storage_state = _workspace_storage_state(load_records, path)
     viewer._label_assistant_workspace_storage_state = storage_state
@@ -1134,6 +1142,10 @@ def _ensure_writable_zarr_layer(layer: Any, reference: dict[str, Any]) -> None:
 
 
 def _zarr_reference(layer: Any) -> dict[str, Any] | None:
+    # Replacing a loaded layer's pixels can leave its old storage metadata in
+    # place. In-memory pixels must be persisted again, not treated as that store.
+    if isinstance(getattr(layer, "data", None), np.ndarray):
+        return None
     metadata = getattr(layer, "metadata", {}) or {}
     remembered = metadata.get(LABEL_ASSISTANT_STORAGE_METADATA_KEY) if isinstance(metadata, dict) else None
     if isinstance(remembered, dict) and remembered.get("path"):
@@ -1197,6 +1209,11 @@ def _common_record(layer: Any, layer_type: str) -> dict[str, Any]:
         ],
     }
     metadata = getattr(layer, "metadata", {}) or {}
+    # Preserve spectral cube links and wavelengths across shared workspace saves.
+    if isinstance(metadata, dict) and isinstance(metadata.get("spectral_assistant"), dict):
+        record["spectral_assistant"] = _json_ready(metadata["spectral_assistant"])
+    if isinstance(metadata, dict) and isinstance(metadata.get("quick_train"), dict):
+        record["quick_train"] = _json_ready(metadata["quick_train"])
     if isinstance(metadata, dict) and isinstance(
         metadata.get("label_assistant_grid"), dict
     ):
@@ -1221,6 +1238,10 @@ def _image_state(layer: Any) -> dict[str, Any]:
 
 
 def _apply_common_state(layer: Any, record: dict[str, Any], *, manifest_path=None) -> None:
+    if isinstance(record.get("spectral_assistant"), dict):
+        layer.metadata = {**getattr(layer, "metadata", {}), "spectral_assistant": record["spectral_assistant"]}
+    if isinstance(record.get("quick_train"), dict):
+        layer.metadata = {**getattr(layer, "metadata", {}), "quick_train": record["quick_train"]}
     for attribute in ("name", "visible", "opacity", "blending"):
         if attribute in record:
             try:
@@ -1366,6 +1387,26 @@ def _manifest_path(value: str | Path) -> Path:
     if not path.exists() and path.suffix.lower() != ".json":
         path = path.with_suffix(".label-assistant.json")
     return path
+
+
+def _spectral_project_state(viewer, path, data_root):
+    """Keep shared spectral project metadata/cache when Label Assistant resaves."""
+    from copy import deepcopy
+    state = getattr(viewer, "_spectral_assistant_project", None)
+    if not isinstance(state, dict):
+        return None
+    state = deepcopy(state)
+    previous = Path(getattr(viewer, "_spectral_assistant_manifest_path", None) or path)
+    reference = state.get("analysis_database")
+    if reference:
+        original = _resolve_path(reference, previous.parent)
+        if original.is_file() and previous.resolve() != path.resolve():
+            data_root.mkdir(parents=True, exist_ok=True)
+            target = data_root / "analysis.sqlite"
+            if target.resolve() != original.resolve():
+                _copy_library(original, target)
+            state["analysis_database"] = _encode_path(target, path.parent)
+    return state
 
 
 def workspace_data_root(path: Path) -> Path:

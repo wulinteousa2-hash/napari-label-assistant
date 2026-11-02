@@ -2,10 +2,10 @@
 
 ## Workflow
 
-1. **Dataset:** Select the image, Curated ground truth, annotation coverage, and reviewed regions. Click **Prepare dataset** to index the patches and validation partitions. Preparation is required for training; **Show patch preview** is optional and leaves the prepared dataset unchanged. The existing reviewed-cell and selected-object workflows remain available.
-2. **Models:** Create a biological task such as *Myelin segmentation*. Define exactly which pixels are foreground, for example *myelin sheath pixels, excluding axon interiors*. Choose a new architecture or select a saved checkpoint.
+1. **Dataset:** Choose **Current pair** or **Multiple pairs → Manage pairs…**. Configure image/ground-truth associations and coverage per pair. Click **Prepare dataset** to index patches and validation partitions. Preparation is required for training; **Show patch preview** is optional. Multiple-pair datasets keep whole image/specimen groups together in validation. Review controls open on demand.
+2. **Models:** Create a biological task such as *Myelin segmentation*. Leave **Foreground classes** empty for binary foreground/background, or enter semantic names such as `axon, myelin` for labels 1 and 2, with background 0. Define class meanings consistently across all pairs. Choose a new architecture or select a saved checkpoint.
 3. **Train:** Start fresh training or continue the current model. A new model uses the configuration in Models; continuation always uses the current checkpoint's architecture. Reprepare patches when data or spatial settings change.
-4. **Inference:** Predict with the current model. Predictions still require review and correction in Curated.
+4. **Inference:** Predict the current crop, entire image, or a drawn box. Larger regions use overlapping tiles with progress and cancellation. Predictions require review and correction in Curated; class names persist in their workspace metadata.
 5. **Advanced:** Adjust source context, model input size, augmentation, compute, batch size, optimizer settings, and optional plateau control.
 
 A biological task describes the annotation meaning, not a pretrained biological model. ImageNet initialization supplies an encoder initialization; it does not provide trained myelin or Remak bundle segmentation weights. Tasks with trained models cannot change their target definition; create another task for a different target meaning. Task names can be updated.
@@ -78,7 +78,7 @@ Keep the traceback and Python executable path when reporting the problem. A succ
 
 SMP is optional. Missing providers do not prevent access to workspace annotations or stored model summaries. Constructing a new pretrained encoder may download weights; loading a saved checkpoint reconstructs the architecture without fetching pretrained weights.
 
-All providers initially use one grayscale input channel and one foreground output logit. Training and inference use per-patch 1st–99th percentile normalization to [0, 1], recorded in the model specification. This shared normalization also applies to pretrained encoders; it is not ImageNet RGB normalization. Model input size must be a multiple of 32 for SMP. Single-patch training batches use running BatchNorm statistics, allowing pooled heads and small final batches to remain usable.
+Providers use one grayscale input channel. Binary tasks use one foreground output logit; multiclass tasks use one logit per semantic class including background. `ModelSpec.output_channels` records the effective head size. Training and inference use per-patch 1st–99th percentile normalization to [0, 1], recorded in the model specification. This shared normalization also applies to pretrained encoders; it is not ImageNet RGB normalization. Model input size must be a multiple of 32 for SMP. Single-patch training batches use running BatchNorm statistics, allowing pooled heads and small final batches to remain usable.
 
 ## Checkpoints and history
 
@@ -111,10 +111,10 @@ from napari_label_assistant_tools._model_providers import register_model_provide
 
 register_model_provider(
     "my_unet",
-    lambda spec, initialize: MyUNet(base_channels=spec.width),
+    lambda spec, initialize: MyUNet(base_channels=spec.width, output_channels=spec.output_channels),
 )
 ```
 
-The builder receives `ModelSpec` and `initialize`, and must return a PyTorch `nn.Module` accepting `N × 1 × H × W` inputs and returning same-sized raw foreground logits. An optional `validator(spec)` can reject unsupported settings. The registered provider appears in Models; the architecture name is editable for custom providers. Extend the provider's trusted code for additional custom options. Provider code must be registered again before reloading its checkpoints; executable code is never imported from a checkpoint.
+The builder receives `ModelSpec` and `initialize`, and must return a PyTorch `nn.Module` accepting `N × 1 × H × W` inputs and returning raw logits of shape `N × spec.output_channels × H × W`. Adapt constructor parameter names to your model implementation. An optional `validator(spec)` can reject unsupported settings. The registered provider appears in Models; the architecture name is editable for custom providers. Extend the provider's trusted code for additional custom options. Provider code must be registered again before reloading its checkpoints; executable code is never imported from a checkpoint.
 
 The SMP adapter follows the [official model constructor interface](https://smp.readthedocs.io/en/latest/models.html).

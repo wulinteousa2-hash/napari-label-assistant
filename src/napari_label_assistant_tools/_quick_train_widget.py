@@ -21,11 +21,11 @@ from superqt.utils import create_worker
 from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY, is_internal_layer
 from ._quick_train import (
     QuickTrainCancelled, QuickTrainConfig, array_2d, build_crop_atlas, crop_summary,
-    load_model, predict_area, prepare_crops, save_model, train_prepared_unet,
+    load_model, predict_area, predict_region, prediction_labels, prepare_crops, save_model, train_prepared_unet,
 )
 
 
-from ._coverage_train import IndexedPatches, index_patches, preview_index, train_indexed, train_kfold, train_final
+from ._coverage_train import IndexedPatches, index_patches, index_pairs, preview_index, train_indexed, train_kfold, train_final
 
 
 class QuickTrainWorkerError(Exception):
@@ -65,6 +65,7 @@ class QuickTrainWidget(QWidget):
         self._locked_layer = None
         self._locked_extra_layers = []
         self._coverage_splits = {}
+        self.dataset_pairs = []
         self.model_state_label = QLabel("No model in memory.")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -84,6 +85,7 @@ class QuickTrainWidget(QWidget):
         outer.addWidget(self.source_context)
         outer.addWidget(self.workflow_tabs)
         layout = QVBoxLayout(body)
+        self.dataset_source_layout = layout
         layout.setContentsMargins(0, 6, 0, 0)
         note = QLabel(
             "Choose annotations and prepare the dataset. Patch preview is optional."
@@ -98,6 +100,18 @@ class QuickTrainWidget(QWidget):
         form = QFormLayout(group)
         self.image_combo = QComboBox()
         self.truth_combo = QComboBox()
+        self.dataset_source_mode = QComboBox()
+        self.dataset_source_mode.addItem('Current pair', 'current')
+        self.dataset_source_mode.addItem('Multiple pairs', 'multiple')
+        self.manage_pairs_button = QPushButton('Manage pairs…')
+        self.manage_pairs_button.clicked.connect(lambda: self._safe(self._manage_pairs))
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.dataset_source_mode, 1)
+        source_row.addWidget(self.manage_pairs_button)
+        form.addRow('Dataset sources', source_row)
+        self.pairs_summary = QLabel()
+        self.pairs_summary.setWordWrap(True)
+        form.addRow(self.pairs_summary)
         self.reviewed_combo = QComboBox()
         self.reviewed_combo.setToolTip(
             "Choose a separate Labels layer marking fully reviewed regions with nonzero pixels. "
@@ -218,7 +232,13 @@ class QuickTrainWidget(QWidget):
         self.selected_objects_layout.addWidget(self.selected_objects_hint)
         self.annotation_tabs.addTab(self.reviewed_cells_page, "Reviewed cells")
         self.annotation_tabs.addTab(self.selected_objects_page, "Selected objects")
+        self.review_pair_toggle = QToolButton()
+        self.review_pair_toggle.setText('Review selected pair')
+        self.review_pair_toggle.setCheckable(True)
+        self.review_pair_toggle.toggled.connect(self._update_source_mode_visibility)
+        layout.addWidget(self.review_pair_toggle)
         layout.addWidget(self.annotation_tabs, 1)
+        layout.addStretch(0)
         prepare_layout.insertWidget(0, self.annotation_note)
         dataset_layout.addWidget(prepare_group)
         self.reviewed_area_widget = None
@@ -417,15 +437,26 @@ class QuickTrainWidget(QWidget):
         self.inference_model_label = QLabel()
         self.inference_model_label.setWordWrap(True)
         inference_layout.addWidget(self.inference_model_label)
-        inference_intro = QLabel("Train or load a model, choose an image, then pan to the area to predict.")
+        inference_intro = QLabel("Train or load a model, choose an image, then predict a current area, the entire image, or a drawn box.")
         inference_intro.setWordWrap(True)
         inference_layout.addWidget(inference_intro)
+        self.inference_classes_label = QLabel()
+        self.inference_classes_label.setWordWrap(True)
+        inference_layout.addWidget(self.inference_classes_label)
         self.inference_load_button = QPushButton("Load model…")
         self.inference_load_button.clicked.connect(lambda: self._safe(self._load))
         inference_layout.addWidget(self.inference_load_button)
-        preview_group = QGroupBox("Predict an area")
+        preview_group = QGroupBox("Predict")
         preview_form = QFormLayout(preview_group)
         self.prediction_combo = QComboBox()
+        self.prediction_scope = QComboBox()
+        self.prediction_scope.addItem("Current area (one crop)", "area")
+        self.prediction_scope.addItem("Entire image", "image")
+        self.prediction_scope.addItem("Drawn box", "box")
+        self.prediction_scope.currentIndexChanged.connect(self._update_prediction_scope)
+        self.prediction_box_layer = None
+        self.draw_prediction_box_button = QPushButton("Draw prediction box")
+        self.draw_prediction_box_button.clicked.connect(lambda: self._safe(self._draw_prediction_box))
         self.threshold_spin = QDoubleSpinBox()
         self.threshold_spin.setRange(0.05, 0.95)
         self.threshold_spin.setSingleStep(0.05)
@@ -437,14 +468,19 @@ class QuickTrainWidget(QWidget):
             "position. Only one crop is read; the full image is not segmented."
         )
         preview_form.addRow("Prediction image", self.prediction_combo)
+        preview_form.addRow("Predict", self.prediction_scope)
+        preview_form.addRow(self.draw_prediction_box_button)
         preview_form.addRow("Threshold", self.threshold_spin)
         preview_form.addRow(self.predict_button)
         preview_note = QLabel(
-            "Pan to an area of interest, then predict. The new Labels layer covers "
-            "only that area. Review its boundaries and false positives."
+            "Current area predicts one crop at the canvas center. Entire image and "
+            "drawn box use overlapping tiles with progress and Cancel. Each run adds "
+            "a new Labels layer for review. A box limits the region; it does not "
+            "teach this model which object to segment."
         )
         preview_note.setWordWrap(True)
         preview_form.addRow(preview_note)
+        self._update_prediction_scope()
         inference_layout.addWidget(preview_group)
         inference_layout.addStretch(1)
         self.workflow_tabs.removeTab(self.workflow_tabs.indexOf(advanced_scroll))
@@ -504,11 +540,13 @@ class QuickTrainWidget(QWidget):
         self.continue_button.clicked.connect(lambda: self._safe(lambda: self._start_training(continue_training=True)))
         self.seed_spin.valueChanged.connect(lambda *_args: self._invalidate_crops() if self.workflow_combo.currentData() == "sampled" else None)
         self.samples_spin.valueChanged.connect(self._invalidate_crops)
+        self.models_panel.class_names_edit.textChanged.connect(self._invalidate_crops)
         for control in (self.epochs_spin, self.batch_spin, self.extra_targets_spin):
             control.valueChanged.connect(self._update_workload)
         self.workflow_combo.currentIndexChanged.connect(self._workflow_changed)
         self.annotation_combo.currentIndexChanged.connect(self._annotation_changed)
         self.reviewed_combo.currentIndexChanged.connect(self._sources_changed)
+        self.dataset_source_mode.currentIndexChanged.connect(self._dataset_mode_changed)
         self.image_combo.currentIndexChanged.connect(self._sources_changed)
         self.truth_combo.currentIndexChanged.connect(self._sources_changed)
         self.destroyed.connect(lambda *_args: self.shutdown())
@@ -526,7 +564,7 @@ class QuickTrainWidget(QWidget):
             self.restore_project_settings(settings)
 
     def project_settings(self):
-        combo_names = ("workflow_combo", "annotation_combo", "crop_combo", "resolution_combo", "device_combo", "validation_method_combo")
+        combo_names = ("workflow_combo", "annotation_combo", "crop_combo", "resolution_combo", "device_combo", "validation_method_combo", "dataset_source_mode")
         spin_names = ("samples_spin", "steps_spin", "seed_spin", "epochs_spin", "batch_spin", "extra_targets_spin", "learning_rate_spin", "holdout_spin", "fold_spin", "validation_seed_spin", "contrast_spin", "brightness_spin", "reduce_patience_spin", "stop_patience_spin", "lr_factor_spin", "min_delta_spin")
         check_names = ("rotation_check", "flip_check", "intensity_check", "plateau_group")
         from ._model_project import layer_id
@@ -535,9 +573,12 @@ class QuickTrainWidget(QWidget):
                 "checks": {name: getattr(self,name).isChecked() for name in check_names},
                 "sources": {name: layer_id(getattr(self,name).currentData()) for name in ("image_combo", "truth_combo", "reviewed_combo", "prediction_combo")},
                 "new_model": self.models_panel.spec().to_dict(), "model_name": self.models_panel.name.text(),
+                "class_names_text": self.models_panel.class_names_edit.text(),
+                "dataset_pairs": self.dataset_pairs,
                 "comparison_candidates": self.models_panel.candidates}
 
     def restore_project_settings(self, settings):
+        self.dataset_pairs = list(settings.get('dataset_pairs', []))
         combos = settings.get("combos", {})
         # Coverage determines whether sampled workflow is eligible. Restore it first.
         ordered = [name for name in ("annotation_combo", "workflow_combo") if name in combos]
@@ -578,6 +619,8 @@ class QuickTrainWidget(QWidget):
             if width_index >= 0:
                 panel.width.setCurrentIndex(width_index)
         panel.name.setText(settings.get("model_name",""))
+        if "class_names_text" in settings:
+            panel.class_names_edit.setText(settings["class_names_text"])
         panel.candidates=list(settings.get("comparison_candidates",[]))
         panel.candidate_list.clear()
         from ._model_providers import ModelSpec
@@ -585,6 +628,65 @@ class QuickTrainWidget(QWidget):
             panel.candidate_list.addItem(ModelSpec(**spec).label())
         self.model_state_label.setText("Workspace restored. Select its saved model in Models to continue or predict.")
         self._update_controls()
+
+    def _multiple_pairs(self):
+        return self.dataset_source_mode.currentData() == 'multiple'
+
+    def _dataset_mode_changed(self, *_args):
+        self._workflow_changed()
+        self._sources_changed()
+
+    def _update_source_mode_visibility(self, *_args):
+        multiple = self._multiple_pairs()
+        reviewing = not multiple or self.review_pair_toggle.isChecked()
+        self.review_pair_toggle.setVisible(multiple)
+        self.annotation_tabs.setVisible(reviewing)
+        self.dataset_source_layout.setStretch(self.dataset_source_layout.count() - 1, 0 if reviewing else 1)
+        for control in (self.image_combo, self.truth_combo, self.annotation_combo):
+            control.setVisible(reviewing)
+            self.dataset_form.labelForField(control).setVisible(reviewing)
+        self.pairs_summary.setVisible(multiple)
+        included = [row for row in self.dataset_pairs if row.get('included')]
+        from ._dataset_pairs import resolve_pairs
+        issues = []
+        for row in included:
+            try:
+                resolve_pairs(self.viewer, [row], minimum=1)
+            except ValueError as error:
+                issues.append(str(error))
+        detail = f'{len(issues)} need attention' if issues else 'Ready to prepare' if len(included) >= 2 else 'Choose at least two pairs'
+        self.pairs_summary.setText(f'{len(included)} pairs selected · {detail}')
+        self.pairs_summary.setToolTip('\n'.join(issues))
+        self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+        self.dataset_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+
+    def _manage_pairs(self):
+        from ._dataset_pairs import DatasetPairsDialog
+        dialog = DatasetPairsDialog(self.viewer, self.dataset_pairs, self)
+        if not dialog.exec_():
+            return
+        self.dataset_pairs = dialog.pairs()
+        self.dataset_source_mode.setCurrentIndex(self.dataset_source_mode.findData('multiple'))
+        if dialog.review_pair is not None:
+            row = dialog.review_pair
+            self.annotation_combo.setCurrentIndex(self.annotation_combo.findData(row['coverage']))
+            from ._model_project import layer_id
+            for combo, key in ((self.image_combo, 'image_id'), (self.truth_combo, 'truth_id'), (self.reviewed_combo, 'reviewed_id')):
+                for i in range(combo.count()):
+                    layer = combo.itemData(i)
+                    if layer is not None and layer_id(layer) == row.get(key):
+                        combo.setCurrentIndex(i)
+                        break
+            self.review_pair_toggle.setChecked(True)
+        self._sources_changed()
+
+    def _pair_layers(self):
+        """Watch every included source, including unresolved rows, for removal/edits."""
+        if not self._multiple_pairs():
+            return [layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()) if layer is not None]
+        identifiers = {row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id')}
+        from ._model_project import layer_id
+        return [layer for layer in self.viewer.layers if layer_id(layer) in identifiers]
 
     def _update_model_summary(self, *_args):
         from ._model_providers import spec_for
@@ -661,7 +763,8 @@ class QuickTrainWidget(QWidget):
             self._update_controls()
 
     def _source_removed(self, event):
-        if any(event.value is layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())):
+        from ._model_project import layer_id
+        if any(event.value is layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())) or (self._multiple_pairs() and any(layer_id(event.value) == row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id'))):
             self._invalidate_crops()
 
     def _select_associated_reviewed_mask(self):
@@ -689,12 +792,12 @@ class QuickTrainWidget(QWidget):
             with suppress(Exception):
                 emitter.disconnect(self._invalidate_crops)
         self._source_emitters.clear()
-        for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()):
+        for layer in self._pair_layers():
             if layer is None:
                 continue
             from ._component_library import ensure_library_event
             ensure_library_event(layer)
-            for name in ("data", "paint", "labels_update", "component_library"):
+            for name in ("data", "paint", "labels_update", "component_library", "scale", "translate", "rotate", "shear", "affine"):
                 emitter = getattr(layer.events, name, None)
                 if emitter is not None:
                     emitter.connect(self._invalidate_crops)
@@ -743,7 +846,8 @@ class QuickTrainWidget(QWidget):
             self.rotation_check, self.flip_check, self.intensity_check,
             self.prepare_button, self.image_combo, self.truth_combo, self.samples_spin,
             self.steps_spin, self.seed_spin, self.learning_rate_spin, self.crop_combo, self.device_combo, self.load_button, self.inference_load_button,
-            self.resolution_combo, self.prediction_combo, self.threshold_spin, self.refresh_button,
+            self.dataset_source_mode, self.manage_pairs_button, self.review_pair_toggle,
+            self.resolution_combo, self.prediction_combo, self.prediction_scope, self.draw_prediction_box_button, self.threshold_spin, self.refresh_button,
             self.workflow_combo, self.annotation_combo, self.reviewed_combo, self.epochs_spin, self.batch_spin, self.extra_targets_spin, self.create_reviewed_button,
         ):
             control.setEnabled(not busy)
@@ -762,17 +866,28 @@ class QuickTrainWidget(QWidget):
         self.continuation_note.setText("The current model has already trained in the reserved validation regions. Review new regions for independent validation, or train a new model." if seen_holdout and self.model is not None else "")
         self.continuation_note.setVisible(seen_holdout and self.model is not None)
         self.predict_button.setEnabled(not busy and self.model is not None)
+        names = getattr(getattr(self.model, "config", None), "class_names", ())
+        self.threshold_spin.setEnabled(not busy and not names)
+        self.inference_classes_label.setText(
+            "Classes: 0 = background; " + "; ".join(f"{i} = {name}" for i, name in enumerate(names, 1)) + ". Highest-probability class wins; binary threshold is unused."
+            if names else "Binary model: background / foreground. Threshold controls foreground selection.")
         self.models_panel.set_busy(busy)
+        self._update_source_mode_visibility()
         self._update_model_summary()
         image, truth = self.image_combo.currentData(), self.truth_combo.currentData()
-        self.source_context.setText(f"Image: {image.name if image is not None else 'Choose an image'} · Annotations: {truth.name if truth is not None else 'Choose a Labels layer'}")
+        pair_context = f"Image: {image.name if image is not None else 'Choose an image'} · Annotations: {truth.name if truth is not None else 'Choose a Labels layer'}"
+        self.source_context.setText(f"Dataset: {sum(bool(row.get('included')) for row in self.dataset_pairs)} selected image–label pairs" if self._multiple_pairs() else pair_context)
         if hasattr(self, "editor_pair_context"):
-            self.editor_pair_context.setText(self.source_context.text())
+            self.editor_pair_context.setText(pair_context)
         reason = ("An operation is running. Wait or use Cancel." if busy else
                   "Choose an image and annotation layer in Dataset." if image is None or truth is None else
                   "Prepare the dataset in Dataset to enable training." if self.prepared is None else
                   "Dataset ready. Train a new model in Train.")
-        predict_reason = "Train or load a model to enable prediction." if self.model is None else "Model ready for prediction in Inference."
+        predict_reason = "Train or load a model to enable prediction." if self.model is None else {
+            "area": "Predict one training-sized crop centered at the current canvas position.",
+            "image": "Predict the entire image with overlapping tiles. Adds a new Labels layer.",
+            "box": "Predict the latest drawn box with overlapping tiles. Adds a new Labels layer.",
+        }[self.prediction_scope.currentData()]
         if busy:
             predict_reason = "Prediction is unavailable while an operation is running."
         if self.model is not None and self.prepared is not None:
@@ -884,6 +999,7 @@ class QuickTrainWidget(QWidget):
             augment_intensity=self.intensity_check.isChecked(),
             contrast_jitter=self.contrast_spin.value() / 100,
             brightness_jitter=self.brightness_spin.value() / 100,
+            class_names=self.models_panel.class_names(),
         )
 
     def _signature(self):
@@ -896,7 +1012,7 @@ class QuickTrainWidget(QWidget):
                 self.crop_combo.currentData(), self.resolution_combo.currentData(),
                 self.samples_spin.value() if self.workflow_combo.currentData() == "sampled" else None,
                 self.seed_spin.value() if self.workflow_combo.currentData() == "sampled" else None, self.workflow_combo.currentData(),
-                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value())
+                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value(), self.models_panel.class_names_edit.text(), self.dataset_source_mode.currentData(), json.dumps(self.dataset_pairs, sort_keys=True) if self._multiple_pairs() else None)
 
     def _validation_changed(self, *_args):
         self._coverage_splits.clear()
@@ -910,7 +1026,7 @@ class QuickTrainWidget(QWidget):
         for control, visible in ((self.holdout_spin, not kfold), (self.fold_spin, kfold)):
             control.setVisible(visible)
             self.validation_form.labelForField(control).setVisible(visible)
-        self.train_button.setText("Run spatial k-fold validation" if kfold else "Train new model")
+        self.train_button.setText(("Run image-group k-fold validation" if self._multiple_pairs() else "Run spatial k-fold validation") if kfold else "Train new model")
         self.final_train_button.setVisible(kfold)
         self.save_validation_button.setVisible(kfold)
         self.final_train_button.setEnabled(not busy and self.cross_validation is not None and self.prepared is not None)
@@ -930,7 +1046,8 @@ class QuickTrainWidget(QWidget):
             self.validation_summary.setText("\n".join(lines))
         else:
             validation = len(dataset.indices('validation'))
-            self.validation_summary.setText(f"{groups} spatial groups · {len(dataset.indices('training')):,} training / {validation:,} validation patches ({validation/len(dataset.locations):.1%} actual holdout). Group sizes can change the requested ratio.")
+            unit = 'image/specimen groups' if dataset.sources else 'spatial groups'
+            self.validation_summary.setText(f"{groups} {unit} · {len(dataset.indices('training')):,} training / {validation:,} validation patches ({validation/len(dataset.locations):.1%} actual holdout). Group sizes can change the requested ratio.")
 
     def _cross_validation_done(self, result):
         self.cross_validation = result
@@ -964,6 +1081,9 @@ class QuickTrainWidget(QWidget):
         corners = np.asarray([image.world_to_data(tuple(center+offset*half)) for offset in (np.array([-1,-1]), np.array([-1,1]), np.array([1,-1]), np.array([1,1]))])
         minimum, maximum = corners.min(axis=0), corners.max(axis=0)
         rows = [p for p in dataset.locations if p['y1'] >= minimum[-2] and p['y0'] <= maximum[-2] and p['x1'] >= minimum[-1] and p['x0'] <= maximum[-1]]
+        if dataset.sources:
+            image_id = image.metadata.get('label_assistant_review', {}).get('id')
+            rows = [p for p in rows if p.get('image_id') == image_id]
         if len(rows) > 5000:
             raise ValueError("Zoom into an area to preview validation regions; more than 5,000 indexed patches are visible.")
         if not rows:
@@ -1047,9 +1167,10 @@ class QuickTrainWidget(QWidget):
 
     def _workflow_changed(self, *_args):
         partial = self.annotation_combo.currentData() == "partial"
+        multiple = self._multiple_pairs()
         sampled_index = self.workflow_combo.findData("sampled")
-        self.workflow_combo.model().item(sampled_index).setEnabled(not partial)
-        if partial and self.workflow_combo.currentData() != "coverage":
+        self.workflow_combo.model().item(sampled_index).setEnabled(not partial and not multiple)
+        if (partial or multiple) and self.workflow_combo.currentData() != "coverage":
             self.workflow_combo.blockSignals(True)
             self.workflow_combo.setCurrentIndex(self.workflow_combo.findData("coverage"))
             self.workflow_combo.blockSignals(False)
@@ -1071,6 +1192,8 @@ class QuickTrainWidget(QWidget):
             "Each epoch visits every eligible training patch. Separate spatial blocks are reserved for validation. The gallery is a sample, not the complete dataset."
             if coverage else "Train on a fixed crop sample; separate spatial blocks are held out for validation."
         )
+        if multiple:
+            self.validation_note.setText('Each epoch visits every eligible training patch across selected pairs. Whole image/specimen groups are held out for validation.')
         self.workflow_combo.setToolTip(self.validation_note.text())
         self._invalidate_crops()
         self.crop_summary_label.setText(
@@ -1088,6 +1211,10 @@ class QuickTrainWidget(QWidget):
             "Reviewed cells supply foreground and background. Selected objects supply "
             "foreground only. Shared pixels are counted once; unknown pixels are ignored."
         )
+        if self._multiple_pairs():
+            self.annotation_note.setText('Coverage is configured per pair in Manage pairs. Validation keeps image/specimen groups separate.')
+            self._update_source_mode_visibility()
+            return
         if not partial:
             self.annotation_note.setText("Complete annotations · zero pixels are background")
             return
@@ -1147,6 +1274,18 @@ class QuickTrainWidget(QWidget):
         self._locked_extra_layers.clear()
 
     def _lock_sources(self):
+        if self._multiple_pairs():
+            layers = self._pair_layers()
+            controllers = getattr(self.viewer, '_label_assistant_edit_controllers', ()) or ()
+            relevant = [c for c in controllers if not c.closed and any(c.source is layer for layer in layers)]
+            if any(c.dirty or c.stroke_active for c in relevant):
+                raise ValueError('Apply pending annotation edits in every included pair before preparing or training.')
+            layers += [c.tile for c in relevant if c.tile is not None]
+            for layer in layers:
+                if isinstance(layer, napari.layers.Labels):
+                    self._locked_extra_layers.append((layer, bool(layer.editable)))
+                    layer.editable = False
+            return
         truth = self._layer(self.truth_combo)
         controllers = getattr(self.viewer, "_label_assistant_edit_controllers", ()) or ()
         relevant = [c for c in controllers if not c.closed and (c.source is truth or c.source is self.reviewed_combo.currentData())]
@@ -1168,6 +1307,9 @@ class QuickTrainWidget(QWidget):
             for history in self.model.history:
                 source = history.get('source', {})
                 image_id = image.metadata.get('label_assistant_review', {}).get('id')
+                if source.get('pairs'):
+                    regions.extend(p for p in history.get('locations', self.model.locations) if p.get('image_id') == image_id and p['split'] == 'training')
+                    continue
                 if (source.get('image_id') and source['image_id'] == image_id) or source.get('image_layer') == image.name:
                     locations = history.get('locations', self.model.locations if history.get('workflow') == 'coverage' else [])
                     regions.extend(p for p in locations if p['split'] == 'training')
@@ -1187,6 +1329,8 @@ class QuickTrainWidget(QWidget):
         return crops
 
     def _start_preparing(self):
+        if self._multiple_pairs():
+            return self._start_preparing_pairs()
         image = self._layer(self.image_combo)
         truth = self._layer(self.truth_combo)
         image_data, truth_data = array_2d(image.data), array_2d(truth.data)
@@ -1241,6 +1385,67 @@ class QuickTrainWidget(QWidget):
                 lambda result: self._preparation_done(result, image, truth, signature, generation),
                 image_data, truth_data, config,
             )
+        except Exception:
+            self._unlock_sources()
+            raise
+
+    def _prior_training_image_ids(self):
+        result = set()
+        if self.model is None:
+            return result
+        for record in self.model.history:
+            source = record.get('source', {})
+            locations = record.get('locations', [])
+            if source.get('pairs'):
+                result.update(item.get('image_id') for item in locations if item.get('split') == 'training')
+            elif source.get('image_id'):
+                result.add(source['image_id'])
+        result.discard(None)
+        return result
+
+    def _start_preparing_pairs(self):
+        from ._dataset_pairs import resolve_pairs
+        from ._component_library import library_for, TrainingSupervision
+        from ._reviewed_regions import KEY
+        resolved = resolve_pairs(self.viewer, self.dataset_pairs)
+        config = self._config()
+        pairs = []
+        for row, image, truth, mask in resolved:
+            reviewed = None
+            if row['coverage'] == 'partial':
+                library = library_for(truth)
+                if library is not None and library.state()['pending']:
+                    raise ValueError(f'{image.name}: update the component library after editing labels.')
+                state = mask.metadata.get(KEY, {})
+                reviewed = TrainingSupervision(array_2d(truth.data), array_2d(mask.data), library=library,
+                                               invalid_regions=state.get('invalid_regions', []),
+                                               reviewed_areas=state.get('areas'))
+            info = dict(image_id=row['image_id'], ground_truth_id=row['truth_id'],
+                        reviewed_id=row.get('reviewed_id') if mask is not None else None,
+                        image_layer=image.name, ground_truth_layer=truth.name,
+                        coverage=row['coverage'], split_group=row['split_group'])
+            if reviewed is not None and getattr(reviewed, 'library', None) is not None:
+                info['component_library'] = dict(source_id=reviewed.snapshot['source_id'],
+                                                 revision=reviewed.snapshot['revision'], selected_ids=list(reviewed.selected))
+            pairs.append(dict(image=array_2d(image.data), ground_truth=array_2d(truth.data), reviewed=reviewed, info=info))
+        signature, generation = self._signature(), self._generation
+        self._lock_sources()
+        self._status(f'Preparing {len(pairs)} pairs. Entire image/specimen groups are held out for validation.')
+        def done(dataset):
+            if generation != self._generation or signature != self._signature():
+                self._status('A dataset source changed; prepare the pairs again.')
+                return
+            self.prepared = dataset
+            self._prepared_signature = signature
+            summary = dataset.summary()
+            self.crop_summary_label.setText(f"{len(dataset.sources)} pairs · {len(dataset.locations):,} patches · {dataset.reviewed_pixels / dataset.total_pixels:.1%} supervised\nTraining: {summary['training']['total']:,} patches · Validation: {summary['validation']['total']:,} patches in held-out image/specimen groups.")
+            self._status('Multiple-pair dataset ready. Train now or inspect the optional patch preview.')
+        try:
+            self._start_worker(index_pairs, done, pairs, config,
+                               validation_fraction=self.holdout_spin.value() / 100,
+                               split_seed=self.validation_seed_spin.value(),
+                               validation_method=self.validation_method_combo.currentData(), folds=self.fold_spin.value(),
+                               prior_training_image_ids=self._prior_training_image_ids())
         except Exception:
             self._unlock_sources()
             raise
@@ -1338,7 +1543,7 @@ class QuickTrainWidget(QWidget):
         for tile in atlas.locations:
             y, x, size = tile["atlas_y0"], tile["atlas_x0"], tile["model_size"]
             rectangles.append([[y, x], [y, x + size - 1], [y + size - 1, x + size - 1], [y + size - 1, x]])
-            captions.append(f"{tile['tile']:02d} {tile['split']} · {tile['kind']}\ny={tile['y0']}, x={tile['x0']}")
+            captions.append(f"{tile['tile']:02d} {tile['split']} · {tile['kind']}\n{tile.get('image_name', '')} y={tile['y0']}, x={tile['x0']}")
             colors.append("orange" if tile["split"] == "validation" else "cyan")
         frames = self.viewer.add_shapes(
             rectangles, shape_type="rectangle", name="Model Training — crop coordinates",
@@ -1365,17 +1570,21 @@ class QuickTrainWidget(QWidget):
             if row < 0 or not 0 <= col < atlas.columns or not 0 <= index < len(atlas.locations):
                 return
             tile = atlas.locations[index]
+            source_image = image
+            if tile.get('image_id'):
+                source_image = next((layer for layer in self.viewer.layers if layer.metadata.get('label_assistant_review', {}).get('id') == tile['image_id']), None)
             self._status(f"Tile {tile['tile']}: {tile['split']}, {tile['kind']}; source y={tile['y0']}, x={tile['x0']}; foreground {tile['foreground_pixels_original']} source pixels → {tile['foreground_pixels_model']} model pixels.")
-            if locate and any(image is item for item in self.viewer.layers):
-                center = image.data_to_world((tile["y0"] + tile["size"] / 2, tile["x0"] + tile["size"] / 2))
+            if locate and source_image is not None and any(source_image is item for item in self.viewer.layers):
+                source_image.visible = True
+                center = source_image.data_to_world((tile["y0"] + tile["size"] / 2, tile["x0"] + tile["size"] / 2))
                 y, x, size = tile["y0"], tile["x0"], tile["size"]
-                world_corners = np.array([image.data_to_world(p) for p in ((y, x), (y + size, x), (y, x + size), (y + size, x + size))])
+                world_corners = np.array([source_image.data_to_world(p) for p in ((y, x), (y + size, x), (y, x + size), (y + size, x + size))])
                 extent = np.maximum(np.ptp(world_corners, axis=0), 1e-6)
                 self._focus(center, *extent)
                 for preview_layer in self._crop_preview_layers:
                     preview_layer.visible = False
                 self._gallery_return_view = None
-                self.viewer.layers.selection.active = image
+                self.viewer.layers.selection.active = source_image
                 self._update_controls()
 
         for layer in self._crop_preview_layers:
@@ -1418,6 +1627,8 @@ class QuickTrainWidget(QWidget):
                            "ground_truth_layer": self._layer(self.truth_combo).name,
                            "image_shape": list(self.prepared.image.shape),
                            "reviewed_layer": self.reviewed_combo.currentText() if self.prepared.reviewed is not None else None}
+            if self.prepared.sources:
+                source_info.update(pairs=self.prepared.source_info, image_layer=f'{len(self.prepared.sources)} image–label pairs', image_id=None, image_shape=None, ground_truth_layer=None, reviewed_layer=None)
             supervision = self.prepared.reviewed
             if getattr(supervision, "library", None) is not None:
                 source_info["component_library"] = {
@@ -1458,6 +1669,8 @@ class QuickTrainWidget(QWidget):
                 raise ValueError("Install the SMP optional dependency before running this comparison.")
         source_info = self.models_panel.bind_sources()
         source_info.update(image_layer=self._layer(self.image_combo).name, ground_truth_layer=self._layer(self.truth_combo).name)
+        if self.prepared.sources:
+            source_info.update(pairs=self.prepared.source_info, image_id=None, image_layer=f'{len(self.prepared.sources)} image–label pairs', ground_truth_layer=None)
         self.learning_chart.set_points([])
         self.validation_results_label.setText("Model comparison running on shared spatial splits.")
         generation = self._generation
@@ -1505,7 +1718,7 @@ class QuickTrainWidget(QWidget):
             self.validation_results_label.setText("Final model trained on all reviewed patches. Historical fold results are retained; these weights have no holdout score.")
         stopped = model.history[-1].get("stop_reason") if model.history else None
         prefix = "Early stop; best validation checkpoint retained. " if stopped else ""
-        self._status(prefix + f"Model ready ({model.training_device.upper()}). Choose a prediction image and click Predict current area. Preview masks need review.")
+        self._status(prefix + f"Model ready ({model.training_device.upper()}). Choose a prediction image and region in Inference. Prediction masks need review.")
 
     def _show_metrics(self):
         from ._training_report import history_points
@@ -1525,6 +1738,9 @@ class QuickTrainWidget(QWidget):
             f"Source patch: {self.model.crop_pixels} × {self.model.crop_pixels} px. "
             "These scores do not measure accuracy on a new image."
         )
+        if self.model.config.class_names:
+            self.metrics_label.setText(self.metrics_label.text() + "\nMulticlass: macro-average over foreground classes; background excluded." +
+                "\n" + " · ".join(f"{name}: IoU {metrics.get(f'class_{i}_iou', 0):.1%}, Dice {metrics.get(f'class_{i}_dice', 0):.1%}" for i, name in enumerate(self.model.config.class_names, 1)))
         if self.model.history and self.model.history[-1].get('workflow') == 'coverage':
             history = self.model.history[-1]
             self.metrics_label.setText(self.metrics_label.text() +
@@ -1535,20 +1751,54 @@ class QuickTrainWidget(QWidget):
             if history.get('learning_rate_events'):
                 self.metrics_label.setText(self.metrics_label.text() + f"\nLearning rate reduced to {history['learning_rate_events'][-1]['new_lr']:g}.")
 
+    def _update_prediction_scope(self):
+        scope = self.prediction_scope.currentData()
+        self.predict_button.setText({"area": "Predict current area", "image": "Predict entire image", "box": "Predict drawn box"}[scope])
+        self.draw_prediction_box_button.setVisible(scope == "box")
+
+    def _draw_prediction_box(self):
+        layer = self.prediction_box_layer
+        if layer is None or not any(layer is item for item in self.viewer.layers):
+            layer = self.viewer.add_shapes(name="Model prediction box", ndim=2,
+                                           edge_color="yellow", face_color="transparent")
+            self.prediction_box_layer = layer
+        self.viewer.layers.selection.active = layer
+        layer.mode = "add_rectangle"
+        self._status("Draw a box over the image, then click Predict drawn box. The latest box is used.")
+
     def _start_prediction(self):
         if self.model is None:
             raise ValueError("Train or load a model first.")
         layer = self._layer(self.prediction_combo)
         data = array_2d(layer.data)
-        center = layer.world_to_data(tuple(self.viewer.camera.center)[-2:])
         threshold = self.threshold_spin.value()
+        scope = self.prediction_scope.currentData()
+        if scope != "area":
+            bounds = None
+            if scope == "box":
+                box = self.prediction_box_layer
+                if box is None or not any(box is item for item in self.viewer.layers) or not len(box.data):
+                    raise ValueError("Click Draw prediction box and draw a rectangle first.")
+                corners = np.asarray([layer.world_to_data(box.data_to_world(point)) for point in box.data[-1]])
+                # Transform round trips can put an integer boundary a few
+                # floating-point ulps below its original pixel coordinate.
+                corners = np.round(corners, decimals=8)
+                bounds = (*np.floor(corners.min(axis=0)).astype(int), *np.ceil(corners.max(axis=0)).astype(int))
+                box.mode = "pan_zoom"
+            self._status("Predicting the entire image." if scope == "image" else "Predicting inside the drawn box.")
+            self._start_worker(
+                predict_region, lambda result: self._prediction_done(layer, threshold, result, scope),
+                self.model, data, bounds, device=self.device_combo.currentData(),
+            )
+            return
         self._status("Predicting the current area; only one image crop is read.")
+        center = layer.world_to_data(tuple(self.viewer.camera.center)[-2:])
         self._start_worker(
             predict_area, lambda result: self._prediction_done(layer, threshold, result),
             self.model, data, center, device=self.device_combo.currentData(),
         )
 
-    def _prediction_done(self, image_layer, threshold, prediction):
+    def _prediction_done(self, image_layer, threshold, prediction, scope="area"):
         if not any(image_layer is layer for layer in self.viewer.layers):
             self._status("The prediction image was removed; preview discarded.")
             return
@@ -1560,13 +1810,17 @@ class QuickTrainWidget(QWidget):
         affine[:2, 0] = np.asarray(image_layer.data_to_world((1, 0))) - zero
         affine[:2, 1] = np.asarray(image_layer.data_to_world((0, 1))) - zero
         affine[:2, 2] = origin
-        mask = (prediction.probability >= threshold).astype(np.uint8)
+        mask = prediction_labels(prediction.probability, threshold)
+        names = getattr(getattr(self.model, "config", None), "class_names", ())
+        from ._model_project import layer_id
         self.viewer.add_labels(
-            mask, name=f"Model Training preview — {image_layer.name}", affine=affine,
-            metadata={"quick_train": {"experimental": True, "source": image_layer.name,
-                                      "origin_yx": list(prediction.origin), "threshold": threshold}},
+            mask, name=f"Model Training {'preview' if scope == 'area' else 'prediction'} — {image_layer.name}", affine=affine,
+            metadata={"quick_train": {"experimental": True, "source": image_layer.name, "source_id": layer_id(image_layer),
+                                      "origin_yx": list(prediction.origin), "threshold": None if names else threshold, "scope": scope,
+                                      "class_names": list(names), "label_names": {"0": "background", **{str(i): name for i, name in enumerate(names, 1)}}}},
         )
-        self._status(f"Added experimental {mask.shape[0]} × {mask.shape[1]} preview at y={prediction.origin[0]}, x={prediction.origin[1]}. Only this area was segmented.")
+        extent = {"area": "Only this area was segmented.", "image": "The entire image was segmented.", "box": "The drawn box region was segmented."}[scope]
+        self._status(f"Added experimental {mask.shape[0]} × {mask.shape[1]} prediction at y={prediction.origin[0]}, x={prediction.origin[1]}. {extent} Review the mask before use.")
 
     def _save(self):
         if self.model is None:
@@ -1672,6 +1926,9 @@ class QuickTrainWidget(QWidget):
                        for col in range(x0 // size, (x1 - 1) // size + 1)):
                     seen = True
                     break
+            if prepared.sources:
+                prior = self._prior_training_image_ids()
+                seen = any(p['split'] == 'validation' and p.get('image_id') in prior for p in prepared.locations)
             prepared.validation_seen_before = seen
         self._update_controls()
         if reuse_prepared:

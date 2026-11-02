@@ -18,6 +18,10 @@ def dataset_snapshot(dataset, source=None):
     snapshot = {"source": deepcopy(source or {}), "image_shape": list(dataset.image.shape),
                 "crop_pixels": dataset.crop_pixels, "input_pixels": dataset.input_pixels,
                 "locations": deepcopy(dataset.locations), "validation": deepcopy(dataset.validation)}
+    if dataset.class_names:
+        snapshot["class_names"] = list(dataset.class_names)
+    if dataset.sources:
+        snapshot["sources"] = deepcopy(dataset.source_info)
     snapshot["id"] = sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return snapshot
 
@@ -31,7 +35,8 @@ def compare_models(dataset, config, specs, *, cancel=None, source_info=None, **s
     for number, location in enumerate(dataset.locations, 1):
         _check_cancel(cancel)
         region = (slice(location["y0"], location["y1"]), slice(location["x0"], location["x1"]))
-        raw = np.asarray(dataset.image[region])
+        source = dataset.sources[location['source_index']] if dataset.sources else dataset
+        raw = np.asarray(source.image[region])
         location["image_digest"] = blake2b(raw.tobytes(), digest_size=16).hexdigest()
         if number % max(1, len(dataset.locations)//100) == 0:
             yield QuickTrainProgress(0, len(specs)*1000, f"Checking comparison inputs: {number}/{len(dataset.locations)} eligible patches.")

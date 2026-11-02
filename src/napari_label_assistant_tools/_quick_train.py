@@ -53,8 +53,22 @@ class QuickTrainConfig:
     contrast_jitter: float = 0.1
     brightness_jitter: float = 0.03
     model_spec: dict | None = None
+    class_names: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if isinstance(self.class_names, str):
+            raise ValueError("Class names must be a list of foreground names, not one string.")
+        object.__setattr__(self, "class_names", tuple(self.class_names))
+
+    @property
+    def output_channels(self):
+        return len(self.class_names) + 1 if self.class_names else 1
 
     def validate(self) -> None:
+        if self.class_names and (not 2 <= len(self.class_names) <= 254 or
+                any(not isinstance(name, str) or not name.strip() or name.strip().lower() == "background" for name in self.class_names) or
+                len({name.strip().lower() for name in self.class_names}) != len(self.class_names)):
+            raise ValueError("Multiclass training needs 2–254 unique foreground class names. Background is always label 0.")
         from ._model_providers import spec_for
         spec_for(self).validate()
         if spec_for(self).provider == "smp" and self.input_pixels % 32:
@@ -99,6 +113,7 @@ class PairedCrops:
     crop_pixels: int
     locations: list[dict] = field(default_factory=list)
     blocks: list[dict] = field(default_factory=list)
+    class_names: tuple[str, ...] = ()
 
 
 @dataclass
@@ -182,7 +197,71 @@ def _normalize_crop(array: np.ndarray) -> np.ndarray:
     return np.clip((array - low) / max(float(high - low), 1e-6), 0, 1)
 
 
-def _scan_annotations(ground_truth, crop_pixels, rng, cancel):
+def class_targets(labels, class_names, valid=None):
+    """Binary instance IDs remain foreground; semantic IDs must match the task."""
+    if not class_names:
+        return labels != 0
+    selected = labels if valid is None else labels[valid]
+    if not np.isfinite(selected).all() or np.any(selected != np.floor(selected)) or np.any(selected < 0) or np.any(selected > len(class_names)):
+        raise ValueError(f"Multiclass ground truth must use label IDs 0–{len(class_names)} (0 = background). Object/instance IDs must be mapped to semantic classes first.")
+    return np.where(valid, labels, 0).astype(np.uint8) if valid is not None else labels.astype(np.uint8)
+
+
+def resize_classes(labels, shape):
+    """Nearest-neighbor sampling never combines or prioritizes class IDs."""
+    y = np.minimum(((np.arange(shape[0]) + 0.5) * labels.shape[0] / shape[0]).astype(int), labels.shape[0] - 1)
+    x = np.minimum(((np.arange(shape[1]) + 0.5) * labels.shape[1] / shape[1]).astype(int), labels.shape[1] - 1)
+    return labels[np.ix_(y, x)].copy()
+
+
+def segmentation_loss(torch, logits, target, valid=None):
+    """Preserve the binary loss; use masked cross-entropy and Dice for classes."""
+    if valid is None:
+        valid = torch.ones_like(target)
+    if logits.shape[1] == 1:
+        probability = torch.sigmoid(logits)
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float(), reduction="none")
+        bce = (bce * valid).sum() / valid.sum().clamp_min(1)
+        dice = 1 - (2 * (probability * target * valid).sum() + 1) / ((probability * valid).sum() + (target * valid).sum() + 1)
+        return bce + dice
+    truth = target[:, 0].long()
+    coverage = valid[:, 0]
+    ce = torch.nn.functional.cross_entropy(logits, truth, reduction="none")
+    ce = (ce * coverage).sum() / coverage.sum().clamp_min(1)
+    probability = torch.softmax(logits, dim=1)
+    one_hot = torch.nn.functional.one_hot(truth, logits.shape[1]).permute(0, 3, 1, 2).to(logits.dtype)
+    axes = (0, 2, 3)
+    intersection = (probability * one_hot * valid).sum(axes)
+    denominator = ((probability + one_hot) * valid).sum(axes)
+    return ce + (1 - (2 * intersection[1:] + 1) / (denominator[1:] + 1)).mean()
+
+
+def class_probabilities(torch, logits):
+    return torch.sigmoid(logits) if logits.shape[1] == 1 else torch.softmax(logits, dim=1)
+
+
+def prediction_labels(probability, threshold=0.5):
+    """Multiclass predictions use argmax, including background, not a binary cut."""
+    if probability.ndim == 3:
+        return probability.argmax(axis=0).astype(np.uint8)
+    return (probability >= threshold).astype(np.uint8)
+
+
+def metrics_from_counts(tp, fp, fn):
+    tp, fp, fn = (np.asarray(value, dtype=np.float64) for value in (tp, fp, fn))
+    values = {"precision": tp / np.maximum(tp + fp, 1), "recall": tp / np.maximum(tp + fn, 1),
+              "dice": 2 * tp / np.maximum(2 * tp + fp + fn, 1), "iou": tp / np.maximum(tp + fp + fn, 1)}
+    if tp.ndim == 0:
+        return {key: float(value) for key, value in values.items()}
+    present = tp + fp + fn > 0
+    result = {key: float(value[present].mean()) if present.any() else 0.0 for key, value in values.items()}
+    for index in range(len(tp)):
+        for key, value in values.items():
+            result[f"class_{index + 1}_{key}"] = float(value[index])
+    return result
+
+
+def _scan_annotations(ground_truth, crop_pixels, rng, cancel, class_names=()):
     """Find sparse targets at full resolution, retaining bounded anchor lists."""
     height, width = map(int, ground_truth.shape)
     side = min(max(512, 2 * crop_pixels), max(height, width) // 2)
@@ -212,7 +291,7 @@ def _scan_annotations(ground_truth, crop_pixels, rng, cancel):
                     slice(y0, min(y0 + scan_side, block["y1"])),
                     slice(x0, min(x0 + scan_side, block["x1"])),
                 )
-                foreground = np.asarray(ground_truth[region]) != 0
+                foreground = class_targets(np.asarray(ground_truth[region]), class_names) != 0
                 components, _ = label(foreground)
                 for component_id, box in enumerate(find_objects(components), 1):
                     if box is None:
@@ -271,7 +350,7 @@ def prepare_crops(image, ground_truth, config, *, cancel=None):
     if crop_pixels < 32:
         raise ValueError("The image needs at least 32 pixels on each axis and 64 on one axis for separate training and validation areas.")
     rng = np.random.default_rng(config.seed)
-    blocks = yield from _scan_annotations(ground_truth, crop_pixels, rng, cancel)
+    blocks = yield from _scan_annotations(ground_truth, crop_pixels, rng, cancel, config.class_names)
     validation_count = max(2, config.samples // 4)
     locations, datasets = [], []
     done = 0
@@ -305,7 +384,7 @@ def prepare_crops(image, ground_truth, config, *, cancel=None):
                     y0, x0 = _origin(block, crop_pixels, rng)
                     kind = "background"
                 region = (slice(y0, y0 + crop_pixels), slice(x0, x0 + crop_pixels))
-                truth = np.asarray(ground_truth[region]) != 0
+                truth = class_targets(np.asarray(ground_truth[region]), config.class_names)
                 if requested == "positive" or not truth.any():
                     break
             if requested == "positive" and not truth.any():
@@ -315,7 +394,9 @@ def prepare_crops(image, ground_truth, config, *, cancel=None):
             raw = np.asarray(image[region])
             small_shape = (config.input_pixels, config.input_pixels)
             images.append(_resize(_normalize_crop(raw), small_shape))
-            model_mask = _resize(truth, small_shape, labels=True).astype(np.uint8)
+            model_mask = (resize_classes(truth, small_shape) if config.class_names else _resize(truth, small_shape, labels=True)).astype(np.uint8)
+            if config.class_names and not set(np.unique(truth)).issubset(set(np.unique(model_mask)) | {0}):
+                raise ValueError("A class disappears at model input size. Use matching source patch and model input sizes.")
             masks.append(model_mask)
             locations.append({
                 "split": split, "y0": y0, "x0": x0, "size": crop_pixels,
@@ -333,7 +414,12 @@ def prepare_crops(image, ground_truth, config, *, cancel=None):
             raise ValueError(f"No background found in the {split} crops. Ground truth must include positive and negative examples.")
         datasets.extend([images, masks])
     public_blocks = [{k: v for k, v in b.items() if k not in ("anchors", "seen")} for b in blocks]
-    return PairedCrops(*datasets, crop_pixels, locations, public_blocks)
+    if config.class_names:
+        for split, masks in (("training", datasets[1]), ("validation", datasets[3])):
+            missing = set(range(1, config.output_channels)) - set(np.unique(masks))
+            if missing:
+                raise ValueError(f"Classes {sorted(missing)} are missing from {split} crops. Review more regions or use coverage training.")
+    return PairedCrops(*datasets, crop_pixels, locations, public_blocks, config.class_names)
 
 
 def crop_summary(crops):
@@ -379,8 +465,8 @@ def _torch():
     return torch
 
 
-def build_unet(base_channels=8):
-    """Five-level U-Net with GroupNorm, skip connections, and binary output."""
+def build_unet(base_channels=8, *, output_channels=1):
+    """Five-level U-Net with GroupNorm and a task-sized output head."""
     torch = _torch()
     nn, functional = torch.nn, torch.nn.functional
 
@@ -401,7 +487,7 @@ def build_unet(base_channels=8):
             widths = [base_channels * 2**i for i in range(5)]
             self.down = nn.ModuleList([Block(1 if i == 0 else widths[i - 1], w) for i, w in enumerate(widths)])
             self.up = nn.ModuleList([Block(widths[i + 1] + widths[i], widths[i]) for i in range(3, -1, -1)])
-            self.output = nn.Conv2d(widths[0], 1, 1)
+            self.output = nn.Conv2d(widths[0], output_channels, 1)
 
         def forward(self, x):
             skips = []
@@ -443,10 +529,19 @@ def _scores(torch, network, images, masks, device, cancel):
             _check_cancel(cancel)
             x = torch.from_numpy(images[i:i + 1]).unsqueeze(1).to(device)
             logits = network(x)
-            probability = torch.sigmoid(logits)
+            if logits.shape[1] > 1 and np.ndim(tp) == 0:
+                tp, fp, fn = (np.zeros(logits.shape[1] - 1, dtype=np.int64) for _ in range(3))
+            probability = class_probabilities(torch, logits)
             target = torch.from_numpy(masks[i:i+1]).unsqueeze(1).to(device=device, dtype=logits.dtype)
-            dice_loss = 1 - (2*(probability*target).sum()+1)/(probability.sum()+target.sum()+1)
-            validation_loss += float(torch.nn.functional.binary_cross_entropy_with_logits(logits, target) + dice_loss)
+            validation_loss += float(segmentation_loss(torch, logits, target))
+            if logits.shape[1] > 1:
+                predicted = probability.cpu().numpy()[0].argmax(axis=0)
+                for k in range(1, logits.shape[1]):
+                    positive, truth = predicted == k, masks[i] == k
+                    tp[k - 1] += int((positive & truth).sum())
+                    fp[k - 1] += int((positive & ~truth).sum())
+                    fn[k - 1] += int((~positive & truth).sum())
+                continue
             predicted = probability.cpu().numpy()[0, 0] >= 0.5
             truth = masks[i] > 0.5
             tp += int(np.count_nonzero(predicted & truth))
@@ -454,8 +549,7 @@ def _scores(torch, network, images, masks, device, cancel):
             fn += int(np.count_nonzero(~predicted & truth))
     return {
         "loss": validation_loss / max(len(images), 1),
-        "precision": tp / max(tp + fp, 1), "recall": tp / max(tp + fn, 1),
-        "dice": 2 * tp / max(2 * tp + fp + fn, 1), "iou": tp / max(tp + fp + fn, 1),
+        **metrics_from_counts(tp, fp, fn),
     }
 
 
@@ -472,10 +566,12 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
     config.validate()
     if crops.images.shape[1:] != (config.input_pixels,) * 2 or len(crops.locations) != config.samples:
         raise ValueError("Crop settings changed. Prepare and preview crops again.")
+    if tuple(crops.class_names) != config.class_names:
+        raise ValueError("Class definitions changed. Prepare the dataset again.")
     if not 0 < learning_rate <= 0.1:
         raise ValueError("Learning rate must be greater than zero and at most 0.1.")
-    if initial_model is not None and spec_for(config) != spec_for(initial_model.config):
-        raise ValueError("Continue training requires the existing model architecture.")
+    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names):
+        raise ValueError("Continue training requires the existing model architecture and class definitions.")
     torch = _torch()
     _check_cancel(cancel)
     device = _device(torch, config.device)
@@ -515,9 +611,7 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
             x = torch.from_numpy(x.copy()).unsqueeze(1).to(device)
             y = torch.from_numpy(y.copy()).unsqueeze(1).float().to(device)
             logits = network(x)
-            probability = torch.sigmoid(logits)
-            dice_loss = 1 - (2 * (probability * y).sum() + 1) / (probability.sum() + y.sum() + 1)
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, y) + dice_loss
+            loss = segmentation_loss(torch, logits, y)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -543,7 +637,7 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
             "started_at_utc": started_at,
             "finished_at_utc": datetime.now(timezone.utc).isoformat(),
             "duration_seconds": monotonic() - started_clock,
-            "config": asdict(config), "learning_rate": learning_rate,
+            "config": {**asdict(config), "class_names": list(config.class_names)}, "learning_rate": learning_rate,
             "optimizer": "AdamW (fresh each round)", "singleton_batch_norm": "running_statistics", "device": device,
             "source": deepcopy(source_info or {}), "crop_pixels": crops.crop_pixels,
             "crop_summary": crop_summary(crops), "locations": deepcopy(crops.locations),
@@ -579,9 +673,79 @@ def predict_area(model, image, center, *, device="auto", cancel=None):
         model.network.to(actual_device).eval()
         with torch.no_grad():
             x = torch.from_numpy(normalized)[None, None].to(actual_device)
-            probability = torch.sigmoid(model.network(x)).cpu().numpy()[0, 0]
+            probability = class_probabilities(torch, model.network(x)).cpu().numpy()[0]
+            probability = probability[0] if probability.shape[0] == 1 else probability
         _check_cancel(cancel)
-        return QuickTrainPrediction(np.clip(_resize(probability, (size, size)), 0, 1), (y0, x0))
+        resized = np.stack([_resize(channel, (size, size)) for channel in probability]) if probability.ndim == 3 else _resize(probability, (size, size))
+        return QuickTrainPrediction(np.clip(resized, 0, 1), (y0, x0))
+    finally:
+        model.network.cpu()
+        if actual_device == "cpu":
+            torch.set_num_threads(old_threads)
+
+
+def predict_region(model, image, bounds=None, *, device="auto", cancel=None):
+    """Predict an image or (y0, x0, y1, x1) region with overlapping tiles.
+
+    Source reads stay bounded to training-sized crops. Probabilities are
+    blended before thresholding so overlaps do not introduce hard seams.
+    """
+    torch = _torch()
+    image = array_2d(image)
+    height, width = map(int, image.shape)
+    y0, x0, y1, x1 = bounds if bounds is not None else (0, 0, height, width)
+    y0, x0 = max(0, int(y0)), max(0, int(x0))
+    y1, x1 = min(height, int(y1)), min(width, int(x1))
+    if y1 <= y0 or x1 <= x0:
+        raise ValueError("The prediction box must overlap the image.")
+    _check_cancel(cancel)
+    size = min(int(model.crop_pixels), height, width)
+    stride = max(1, size * 3 // 4)
+
+    def starts(lo, hi, length):
+        first = min(lo, length - size)
+        last = max(first, min(hi - size, length - size))
+        values = list(range(first, last + 1, stride))
+        if values[-1] != last:
+            values.append(last)
+        return values
+
+    ys, xs = starts(y0, y1, height), starts(x0, x1, width)
+    channels = getattr(model.config, "output_channels", 1)
+    output_shape = (y1 - y0, x1 - x0)
+    probability = np.zeros((channels, *output_shape) if channels > 1 else output_shape, dtype=np.float32)
+    weights = np.zeros(output_shape, dtype=np.float32)
+    ramp = np.maximum(np.hanning(size), 0.05).astype(np.float32)
+    blend = ramp[:, None] * ramp[None, :]
+    actual_device = _device(torch, device)
+    old_threads = torch.get_num_threads()
+    total = len(ys) * len(xs)
+    try:
+        if actual_device == "cpu":
+            torch.set_num_threads(min(old_threads, 4))
+        model.network.to(actual_device).eval()
+        with torch.no_grad():
+            for completed, (y, x) in enumerate(((y, x) for y in ys for x in xs), 1):
+                _check_cancel(cancel)
+                raw = np.asarray(image[y:y + size, x:x + size])
+                normalized = _resize(_normalize_crop(raw), (model.config.input_pixels,) * 2)
+                tensor = torch.from_numpy(normalized)[None, None].to(actual_device)
+                tile = class_probabilities(torch, model.network(tensor)).cpu().numpy()[0]
+                tile = np.stack([_resize(channel, (size, size)) for channel in tile]) if channels > 1 else _resize(tile[0], (size, size))
+                tile = np.clip(tile, 0, 1)
+                top, left = max(y, y0), max(x, x0)
+                bottom, right = min(y + size, y1), min(x + size, x1)
+                target = np.s_[top - y0:bottom - y0, left - x0:right - x0]
+                source = np.s_[top - y:bottom - y, left - x:right - x]
+                if channels > 1:
+                    probability[(slice(None), *target)] += tile[(slice(None), *source)] * blend[source]
+                else:
+                    probability[target] += tile[source] * blend[source]
+                weights[target] += blend[source]
+                yield QuickTrainProgress(completed, total, f"Predicting tile {completed}/{total}.")
+        _check_cancel(cancel)
+        probability /= weights
+        return QuickTrainPrediction(probability, (y0, x0))
     finally:
         model.network.cpu()
         if actual_device == "cpu":
@@ -596,9 +760,9 @@ def save_model(model, path):
     path = Path(path)
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     payload = {
-        "quick_train_version": 2,
+        "quick_train_version": 3 if model.config.class_names else 2,
         "library_versions": library_versions(),
-        "contract": {"input_channels": 1, "output_channels": 1, "output": "logits"}, "config": asdict(model.config),
+        "contract": {"input_channels": 1, "output_channels": model.config.output_channels, "output": "logits", "class_names": list(model.config.class_names)}, "config": asdict(model.config),
         "crop_pixels": model.crop_pixels, "metrics": model.metrics,
         "training_device": model.training_device, "locations": model.locations,
         "training_steps": model.training_steps, "training_rounds": model.training_rounds,
@@ -628,10 +792,14 @@ def save_model(model, path):
 def load_model(path):
     torch = _torch()
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2):
+    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2, 3):
         raise ValueError("Choose a checkpoint saved by napari-label-assistant Model Training (formerly Quick Train).")
     config = QuickTrainConfig(**payload["config"])
     config.validate()
+    if payload.get("contract", {}).get("output_channels", config.output_channels) != config.output_channels:
+        raise ValueError("The checkpoint output channels do not match its class definitions.")
+    if tuple(payload.get("contract", {}).get("class_names", config.class_names)) != config.class_names:
+        raise ValueError("The checkpoint class names do not match its configuration.")
     crop_pixels = int(payload["crop_pixels"])
     if not 32 <= crop_pixels <= config.crop_pixels:
         raise ValueError("The model has an invalid crop size.")

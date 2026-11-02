@@ -12,17 +12,19 @@ import numpy as np
 from ._quick_train import (
     PairedCrops, QuickTrainModel, QuickTrainProgress, _check_cancel, _device,
     _normalize_crop, _resize, _torch, array_2d, augment_batch, build_unet,
+    class_targets, resize_classes, segmentation_loss, class_probabilities, metrics_from_counts,
 )
 
 
-def _model_supervision(truth, valid, crop_pixels, input_pixels):
+def _model_supervision(truth, valid, crop_pixels, input_pixels, class_names=()):
     pad = ((0, crop_pixels - truth.shape[0]), (0, crop_pixels - truth.shape[1]))
     reviewed = np.pad(valid, pad)
-    targets = np.pad(truth & valid, pad)
+    targets = np.pad(np.where(valid, truth, 0), pad)
     shape = (input_pixels,) * 2
     usable = 1 - _resize(~reviewed, shape, labels=True)
-    targets = _resize(targets, shape, labels=True) * usable
-    if not usable.any() or ((truth & valid).any() and not targets.any()):
+    targets = (resize_classes(targets, shape) if class_names else _resize(targets, shape, labels=True)) * usable
+    missing = set(np.unique(truth[valid])) - set(np.unique(targets)) - {0} if class_names else set()
+    if missing or not usable.any() or (((truth != 0) & valid).any() and not targets.any()):
         raise ValueError(
             'Reviewed pixels or targets disappear at model input size. '
             'Use matching source patch and model input sizes, or fully review a larger region.'
@@ -43,6 +45,9 @@ class IndexedPatches:
     total_pixels: int
     validation_seen_before: bool = False
     validation: dict = field(default_factory=dict)
+    class_names: tuple[str, ...] = ()
+    sources: list = field(default_factory=list)
+    source_info: list[dict] = field(default_factory=list)
 
     def indices(self, split):
         return [i for i, item in enumerate(self.locations) if item['split'] == split]
@@ -60,6 +65,10 @@ class IndexedPatches:
     def read(self, index):
         """Read just one patch; padding and unreviewed pixels are excluded from loss."""
         item = self.locations[index]
+        if self.sources:
+            source = self.sources[item['source_index']]
+            local = {**item, 'block': item['source_block']}
+            return replace(source, locations=[local]).read(0)
         region = (slice(item['y0'], item['y1']), slice(item['x0'], item['x1']))
         raw = np.asarray(self.image[region])
         if item.get("image_digest") and blake2b(raw.tobytes(), digest_size=16).hexdigest() != item["image_digest"]:
@@ -80,11 +89,12 @@ class IndexedPatches:
         normalized = np.pad(normalized, pad, mode='edge')
         shape = (self.input_pixels,) * 2
         x = _resize(normalized, shape)
-        y, valid = _model_supervision(truth, valid, self.crop_pixels, self.input_pixels)
+        targets = class_targets(source_labels, self.class_names, valid)
+        y, valid = _model_supervision(targets, valid, self.crop_pixels, self.input_pixels, self.class_names)
         return x.astype(np.float32), y.astype(np.float32), valid.astype(np.float32)
 
 
-def index_patches(image, ground_truth, config, *, reviewed=None, validation_blocks=None, prior_training_regions=(), cancel=None, validation_fraction=0.25, split_seed=42, validation_method="holdout", folds=5):
+def index_patches(image, ground_truth, config, *, reviewed=None, validation_blocks=None, prior_training_regions=(), cancel=None, validation_fraction=0.25, split_seed=42, validation_method="holdout", folds=5, _defer_split=False):
     """Visit every grid patch, storing coordinates and counts rather than image pixels."""
     from ._model_providers import spec_for
     config.validate()
@@ -96,7 +106,7 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
         raise ValueError('Image, ground truth, and reviewed-region mask must have the same 2D shape.')
     h, w = map(int, image.shape)
     size = config.crop_pixels
-    if min(h, w) < size * 2:
+    if not _defer_split and min(h, w) < size * 2:
         raise ValueError('Coverage training needs at least two source patches on each axis. Choose a smaller source patch size.')
     locations, groups = [], {}
     component_blocks = {}
@@ -120,7 +130,8 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
         valid = np.ones(truth.shape, bool) if reviewed is None else np.asarray(reviewed[region]) != 0
         count, positive = int(valid.sum()), int((truth & valid).sum())
         if count:
-            _model_supervision(truth, valid, size, config.input_pixels)
+            targets = class_targets(source_labels, config.class_names, valid)
+            model_targets, _ = _model_supervision(targets, valid, size, config.input_pixels, config.class_names)
             block = f'{row // group_rows}:{col // group_cols}'
             for component in getattr(reviewed, "component_ids", lambda *args: [])(region, truth, valid):
                 component_blocks.setdefault(component, set()).add(block)
@@ -132,6 +143,7 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
                 'kind': 'target' if positive else 'reviewed background',
                 'annotation_digest': blake2b(truth.tobytes()+valid.tobytes(), digest_size=16).hexdigest(),
                 'source_label_digest': blake2b(source_labels.tobytes(), digest_size=16).hexdigest(),
+                **({'class_ids': [int(value) for value in np.unique(model_targets)]} if config.class_names else {}),
             })
             reviewed_pixels += count
         if done == total or done % max(1, total // 200) == 0:
@@ -173,7 +185,9 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
     forbidden = {remap.get(block, block) for block in forbidden}
     if validation_blocks is not None:
         validation_blocks = {remap.get(block, block) for block in validation_blocks}
-    if validation_method == "kfold":
+    if _defer_split:
+        validation_blocks = set()
+    elif validation_method == "kfold":
         partitions = spatial_folds(locations, folds, split_seed)
         validation_blocks = set(partitions[0])
     elif validation_method != "holdout":
@@ -198,13 +212,93 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
     # Retain reserved blocks even if annotations temporarily disappear from them.
     blocks = [{'id': k, 'split': 'validation' if remap.get(k, k) in validation_blocks else 'training'}
               for k in sorted(set(remap) | validation_blocks)]
-    for split in ('training', 'validation'):
+    for split in (() if _defer_split else ('training', 'validation')):
         rows = [p for p in locations if p['split'] == split]
         if not rows or not any(p['contains_foreground'] for p in rows):
             raise ValueError(f'{split.title()} regions need reviewed targets. Review more regions; keep validation separate.')
         if not any(p['reviewed_pixels'] > p['foreground_pixels_original'] for p in rows):
             raise ValueError(f'{split.title()} regions need reviewed background as well as targets.')
-    return IndexedPatches(image, ground_truth, reviewed, size, config.input_pixels, locations, blocks, reviewed_pixels, h * w, bool(validation_blocks & forbidden), {"method": validation_method, "holdout_fraction": validation_fraction, "seed": split_seed, "fold_count": folds if validation_method == "kfold" else 1, "folds": partitions if validation_method == "kfold" else []})
+    dataset = IndexedPatches(image, ground_truth, reviewed, size, config.input_pixels, locations, blocks, reviewed_pixels, h * w, bool(validation_blocks & forbidden), {"method": validation_method, "holdout_fraction": validation_fraction, "seed": split_seed, "fold_count": folds if validation_method == "kfold" else 1, "folds": partitions if validation_method == "kfold" else []}, config.class_names)
+    if not _defer_split:
+        _check_class_coverage(dataset)
+    return dataset
+
+
+def index_pairs(pairs, config, *, cancel=None, validation_fraction=0.25,
+                split_seed=42, validation_method="holdout", folds=5,
+                prior_training_image_ids=()):
+    """Pool bounded patch indices, keeping each image/specimen in one split."""
+    config.validate()
+    if len(pairs) < 2:
+        raise ValueError("Select at least two image–label pairs, or use Current pair.")
+    sources, infos, locations = [], [], []
+    seen_images = set()
+    for number, pair in enumerate(pairs):
+        _check_cancel(cancel)
+        info = dict(pair['info'])
+        identifier = info['image_id']
+        if identifier in seen_images:
+            raise ValueError("An image can appear only once in a dataset.")
+        seen_images.add(identifier)
+        source = yield from index_patches(
+            pair['image'], pair['ground_truth'], config, reviewed=pair.get('reviewed'),
+            cancel=cancel, _defer_split=True,
+        )
+        group = str(info.get('split_group') or identifier).strip()
+        info.update(split_group=group, image_shape=list(source.image.shape))
+        sources.append(source)
+        infos.append(info)
+        locations.extend({**item, 'source_index': number, 'image_id': identifier,
+                          'image_name': info['image_layer'], 'source_block': item['block'],
+                          'block': group} for item in source.locations)
+        yield QuickTrainProgress(number + 1, len(pairs), f"Indexed pair {number + 1}/{len(pairs)}: {info['image_layer']} ({len(source.locations):,} patches).")
+    groups = sorted({item['block'] for item in locations})
+    if len(groups) < 2:
+        raise ValueError("Validation needs at least two independent image/specimen groups.")
+    if validation_method == 'kfold':
+        partitions = spatial_folds(locations, folds, split_seed)
+        reserved = partitions[0]
+    elif validation_method == 'holdout':
+        if not 0.05 <= validation_fraction <= 0.5:
+            raise ValueError("Validation holdout must be between 5% and 50%.")
+        positives = [group for group in groups if any(p['contains_foreground'] for p in locations if p['block'] == group)]
+        if len(positives) < 2:
+            raise ValueError("Training and validation each need an independent image/specimen group containing targets.")
+        rng = np.random.default_rng(split_seed)
+        rng.shuffle(positives)
+        background = sorted(set(groups) - set(positives))
+        rng.shuffle(background)
+        reserved = positives[:max(1, int(len(positives) * validation_fraction))] + background[:int(len(background) * validation_fraction)]
+        partitions = []
+    else:
+        raise ValueError("Choose holdout or k-fold validation.")
+    dataset = replace(sources[0], sources=sources, source_info=infos, locations=locations,
+                      reviewed_pixels=sum(s.reviewed_pixels for s in sources),
+                      total_pixels=sum(s.total_pixels for s in sources))
+    dataset = partition_dataset(dataset, reserved)
+    prior = set(prior_training_image_ids)
+    dataset.validation_seen_before = any(p['split'] == 'validation' and p['image_id'] in prior for p in dataset.locations)
+    dataset.validation = {'method': validation_method, 'unit': 'image_or_specimen',
+                          'holdout_fraction': validation_fraction, 'seed': split_seed,
+                          'fold_count': folds if partitions else 1, 'folds': partitions,
+                          'validation_blocks': list(reserved)}
+    for split in ('training', 'validation'):
+        rows = [p for p in dataset.locations if p['split'] == split]
+        if not any(p['contains_foreground'] for p in rows) or not any(p['reviewed_pixels'] > p['foreground_pixels_original'] for p in rows):
+            raise ValueError(f"{split.title()} images need reviewed targets and background. Adjust the pairs or validation split.")
+    _check_class_coverage(dataset)
+    return dataset
+
+
+def _check_class_coverage(dataset, validation_enabled=True):
+    if not dataset.class_names:
+        return
+    for split in ("training", "validation") if validation_enabled else ("training",):
+        present = {value for item in dataset.locations if item['split'] == split for value in item.get('class_ids', [])}
+        missing = set(range(1, len(dataset.class_names) + 1)) - present
+        if missing:
+            names = ", ".join(dataset.class_names[k - 1] for k in sorted(missing))
+            raise ValueError(f"{split.title()} regions are missing classes: {names}. Review examples in more spatial regions or adjust the validation split.")
 
 
 def preview_index(dataset, count=16, *, cancel=None):
@@ -220,9 +314,9 @@ def preview_index(dataset, count=16, *, cancel=None):
                 _check_cancel(cancel)
                 x, y, v = dataset.read(index)
                 xs.append(x); ys.append(y); vs.append(v)
-                locations.append({**dataset.locations[index], 'foreground_pixels_model': int(y.sum())})
+                locations.append({**dataset.locations[index], 'foreground_pixels_model': int(np.count_nonzero(y))})
         images.append(np.stack(xs)); masks.append(np.stack(ys)); validity.append(np.stack(vs))
-    crops = PairedCrops(images[0], masks[0], images[1], masks[1], dataset.crop_pixels, locations, dataset.blocks)
+    crops = PairedCrops(images[0], masks[0], images[1], masks[1], dataset.crop_pixels, locations, dataset.blocks, dataset.class_names)
     crops.validity = np.concatenate(validity)
     return crops
 
@@ -268,16 +362,14 @@ def epoch_indices(dataset, rng, extra_targets=0.25):
 
 
 def masked_binary_loss(torch, logits, truth, valid):
-    probability = torch.sigmoid(logits)
-    bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, truth, reduction='none')
-    bce = (bce * valid).sum() / valid.sum().clamp_min(1)
-    dice = 1 - (2 * (probability * truth * valid).sum() + 1) / ((probability * valid).sum() + (truth * valid).sum() + 1)
-    return bce + dice
+    return segmentation_loss(torch, logits, truth, valid)
 
 
 def _validate(torch, network, dataset, device, cancel, *, step, total):
     network.eval()
     tp = fp = fn = 0
+    if dataset.class_names:
+        tp, fp, fn = (np.zeros(len(dataset.class_names), dtype=np.int64) for _ in range(3))
     losses = []
     ids = dataset.indices('validation')
     with torch.no_grad():
@@ -288,15 +380,23 @@ def _validate(torch, network, dataset, device, cancel, *, step, total):
             losses.append(float(masked_binary_loss(torch, logits,
                 torch.from_numpy(y)[None, None].to(device),
                 torch.from_numpy(valid)[None, None].to(device))))
-            prediction = torch.sigmoid(logits).cpu().numpy()[0, 0] >= 0.5
-            truth, valid = y > 0.5, valid > 0.5
-            tp += int((prediction & truth & valid).sum())
-            fp += int((prediction & ~truth & valid).sum())
-            fn += int((~prediction & truth & valid).sum())
+            if dataset.class_names:
+                prediction = class_probabilities(torch, logits).cpu().numpy()[0].argmax(axis=0)
+                coverage = valid > 0.5
+                for k in range(1, len(dataset.class_names) + 1):
+                    positive, truth = prediction == k, y == k
+                    tp[k - 1] += int((positive & truth & coverage).sum())
+                    fp[k - 1] += int((positive & ~truth & coverage).sum())
+                    fn[k - 1] += int((~positive & truth & coverage).sum())
+            else:
+                prediction = torch.sigmoid(logits).cpu().numpy()[0, 0] >= 0.5
+                truth, valid = y > 0.5, valid > 0.5
+                tp += int((prediction & truth & valid).sum())
+                fp += int((prediction & ~truth & valid).sum())
+                fn += int((~prediction & truth & valid).sum())
             if done == len(ids) or done % max(1, len(ids) // 100) == 0:
                 yield QuickTrainProgress(step, total, f'Validating reserved regions: {done:,}/{len(ids):,} patches.')
-    return {'loss': float(np.mean(losses)), 'precision': tp / max(tp + fp, 1), 'recall': tp / max(tp + fn, 1),
-            'dice': 2 * tp / max(2 * tp + fp + fn, 1), 'iou': tp / max(tp + fp + fn, 1)}
+    return {'loss': float(np.mean(losses)), **metrics_from_counts(tp, fp, fn)}
 
 
 def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rate=0.001,
@@ -306,14 +406,17 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
     from ._model_providers import build_model, spec_for, training_mode, library_versions
     from ._model_comparison import dataset_snapshot
     config.validate()
+    if tuple(dataset.class_names) != config.class_names:
+        raise ValueError('Class definitions changed. Prepare the dataset again.')
+    _check_class_coverage(dataset, validation_enabled)
     if not 1 <= epochs <= 1000 or not 0 <= extra_targets <= 1 or not 0 < learning_rate <= 0.1:
         raise ValueError('Choose 1–1000 epochs, 0–100% additional target patches, and a positive learning rate up to 0.1.')
     if (config.crop_pixels, config.input_pixels) != (dataset.crop_pixels, dataset.input_pixels):
         raise ValueError('Patch settings changed. Index the dataset again.')
     if initial_model is not None and dataset.validation_seen_before:
         raise ValueError('The current model has already trained in these validation regions. Review new regions or train a new model.')
-    if initial_model is not None and spec_for(config) != spec_for(initial_model.config):
-        raise ValueError('Continue training requires the current model architecture.')
+    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names):
+        raise ValueError('Continue training requires the current model architecture and class definitions.')
     control = PlateauControl(reduce_patience, stop_patience, lr_factor, min_delta) if plateau_enabled and validation_enabled else None
     lr_events = []
     stop_reason = None
@@ -401,7 +504,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             'validation': deepcopy(dataset.validation) if validation_enabled else {'method': 'none', 'purpose': 'final model on all reviewed data'},
             'locations': deepcopy(dataset.locations),
             'started_at_utc': started_at, 'finished_at_utc': datetime.now(timezone.utc).isoformat(),
-            'duration_seconds': monotonic() - started, 'config': asdict(config),
+            'duration_seconds': monotonic() - started, 'config': {**asdict(config), 'class_names': list(config.class_names)},
             'dataset_snapshot_id': dataset_snapshot(dataset, source_info)['id'], 'library_versions': library_versions(), 'epochs': epoch, 'max_epochs': epochs,
             'plateau_control': {'enabled': bool(plateau_enabled and validation_enabled), 'requested': plateau_enabled, 'reduce_patience': reduce_patience,
                 'stop_patience': stop_patience, 'factor': lr_factor, 'min_delta': min_delta},

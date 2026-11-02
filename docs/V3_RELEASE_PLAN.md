@@ -2,10 +2,13 @@
 
 This records the training and review workflow discussion and its implementation.
 The work started with the 3.0.0 major-version increment after 2.0.2.
-The current version is 3.3.0. It includes Model Library, training-history
+Version 3.3.0 included Model Library, training-history
 comparisons, workspace-managed model files, and the earlier editing,
 review-navigation, deletion-recovery, and save-state improvements
 documented in [CHANGELOG.md](../CHANGELOG.md).
+This is a historical implementation record. Version 4.3.0 adds multi-image
+datasets, semantic multiclass tasks, and tiled whole-image/box inference. See
+[TRAINING.md](TRAINING.md) for the current workflow.
 The persistent library, combined supervision, workspace persistence, and local
 update paths are implemented. The user workflow is in [TRAINING.md](TRAINING.md).
 
@@ -24,8 +27,9 @@ update paths are implemented. The user workflow is in [TRAINING.md](TRAINING.md)
   followed by early stopping, batches up to 128, 4096 source patches, and 2048
   model inputs. Model history preserves settings and actual completed epochs.
 - Use short instructions and tooltips; retain annotation coverage guidance.
-- Inference remains prediction of the current area, not full-image inference.
-- Widget checks cover the four pages and library selection/persistence.
+- Version 3 inference predicted the current area; version 4.3.0 also supports
+  overlapping tiled inference over entire images and drawn boxes.
+- Widget checks cover the five pages and library selection/persistence.
 
 ## Implemented: two compatible ways to supply training annotations
 

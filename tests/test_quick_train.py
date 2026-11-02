@@ -6,7 +6,7 @@ import pytest
 
 from napari_label_assistant_tools._quick_train import (
     QuickTrainCancelled, QuickTrainConfig, build_crop_atlas, crop_summary,
-    load_model, predict_area, prepare_crops, save_model, train_quick_unet,
+    load_model, predict_area, predict_region, prepare_crops, save_model, train_quick_unet,
 )
 
 
@@ -40,6 +40,46 @@ def paired_image():
     truth = ((xx // 16) % 2).astype(np.uint8)
     image = (truth * 120 + 50 + yy % 8).astype(np.uint8)
     return image, truth
+
+
+@pytest.mark.parametrize("shape,bounds", [
+    ((97, 143), None), ((27, 91), None),
+    ((97, 143), (7, 13, 86, 138)), ((97, 143), (80, 130, 97, 143)),
+    ((97, 143), (-10, -20, 23, 17)),
+])
+def test_tiled_prediction_covers_edges_with_bounded_reads(shape, bounds):
+    from types import SimpleNamespace
+    torch = pytest.importorskip("torch")
+
+    class Constant(torch.nn.Module):
+        def forward(self, tensor):
+            return torch.zeros_like(tensor)
+
+    model = SimpleNamespace(network=Constant(), crop_pixels=32,
+                            config=SimpleNamespace(input_pixels=32))
+    image = SliceOnlyArray(np.arange(np.prod(shape), dtype=np.float32).reshape(shape))
+    prediction, updates = consume(predict_region(model, image, bounds, device="cpu"))
+    y0, x0, y1, x1 = bounds if bounds else (0, 0, *shape)
+    y0, x0, y1, x1 = max(0, y0), max(0, x0), min(shape[0], y1), min(shape[1], x1)
+    assert prediction.origin == (y0, x0)
+    assert prediction.probability.shape == (y1 - y0, x1 - x0)
+    np.testing.assert_allclose(prediction.probability, 0.5)
+    assert updates[-1].completed == updates[-1].total == len(image.reads)
+    assert all(max(s.stop - s.start for s in read) <= 32 for read in image.reads)
+    assert not model.network.training
+
+
+def test_tiled_prediction_cancels_between_tiles():
+    from types import SimpleNamespace
+    torch = pytest.importorskip("torch")
+    model = SimpleNamespace(network=torch.nn.Identity(), crop_pixels=32,
+                            config=SimpleNamespace(input_pixels=32))
+    cancel = Event()
+    task = predict_region(model, np.ones((80, 90), dtype=np.float32), device="cpu", cancel=cancel)
+    next(task)
+    cancel.set()
+    with pytest.raises(QuickTrainCancelled):
+        next(task)
 
 
 def tiny_config(**kwargs):
