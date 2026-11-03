@@ -26,14 +26,18 @@ class ModelsWidget(QWidget):
         self.task_name.setPlaceholderText("e.g. Myelin segmentation")
         self.definition = QLineEdit()
         self.definition.setPlaceholderText("e.g. Myelin sheath pixels; exclude axon interiors")
+        self.output_mode = QComboBox()
+        self.output_mode.addItem('One mask — binary / exclusive classes', False)
+        self.output_mode.addItem('Separate masks — overlapping channels', True)
         self.class_names_edit = QLineEdit()
         self.class_names_edit.setPlaceholderText("Leave empty for binary; e.g. axon, myelin")
-        self.class_names_edit.setToolTip("Comma-separated semantic classes in label-ID order: 1, 2, … . Label 0 is background. These are tissue classes, not individual object IDs.")
+        self.class_names_edit.setToolTip("One mask: names map to class IDs 1, 2, …, with background 0; empty means binary. Separate masks: names define independent channels assigned to 0/1 mask layers in Manage channels.")
         form.addRow("Task", self.task_combo)
         form.addRow("Name", self.task_name)
         form.addRow("Target definition", self.definition)
-        form.addRow("Foreground classes", self.class_names_edit)
-        class_note = QLabel("Binary: leave classes empty; all nonzero IDs are foreground. Multiclass example: axon, myelin → 0 background, 1 axon, 2 myelin. Use a semantic Labels layer with these IDs; existing instance labels are not converted.")
+        form.addRow('Output mode', self.output_mode)
+        form.addRow("Foreground classes / channels", self.class_names_edit)
+        class_note = QLabel("One mask: leave names empty for binary, or enter exclusive classes in label-ID order. Separate masks: enter channel names, e.g. cell, mitochondria, nucleus, and assign one 0/1 mask per channel in Dataset → Manage channels. Overlaps are preserved.")
         class_note.setWordWrap(True)
         form.addRow(class_note)
         row = QHBoxLayout()
@@ -147,8 +151,31 @@ class ModelsWidget(QWidget):
         text = self.class_names_edit.text().strip()
         names = tuple(part.strip() for part in text.split(",")) if text else ()
         from ._quick_train import QuickTrainConfig
-        QuickTrainConfig(class_names=names).validate()
+        QuickTrainConfig(class_names=names, multilabel=self.is_multilabel()).validate()
         return names
+
+    def is_multilabel(self):
+        return bool(self.output_mode.currentData())
+
+    def apply_channel_names(self, names):
+        """Accept setup from Dataset without changing prior trained task meanings."""
+        from ._quick_train import QuickTrainConfig
+        QuickTrainConfig(class_names=names, multilabel=True).validate()
+        task = self.task()
+        changed = task is None or tuple(task.get('class_names', ())) != tuple(names) or not task.get('multilabel', False)
+        trained = task is not None and any(row.get('task_id') == task['id'] for row in project(self.viewer)['models'])
+        if changed and trained:
+            add_task(self.viewer, task['name'] + ' — overlapping masks',
+                     task['target_definition'] + '; independent channels: ' + ', '.join(names),
+                     class_names=names, multilabel=True)
+        elif changed and task is None:
+            add_task(self.viewer, 'Overlapping masks', 'Independent target channels: ' + ', '.join(names),
+                     class_names=names, multilabel=True)
+        elif changed:
+            task.update(class_names=list(names), multilabel=True)
+        self.refresh()
+        from ._model_project import notify_project
+        notify_project(self.viewer)
 
     def _open_library(self):
         from ._model_library_widget import model_library_widget
@@ -164,20 +191,20 @@ class ModelsWidget(QWidget):
         task = self.task()
         if task is None:
             names = self.class_names()
-            task = add_task(self.viewer, " / ".join(names) + " segmentation" if names else "Foreground segmentation", "Semantic classes in label-ID order: " + ", ".join(names) if names else "Nonzero ground-truth pixels are foreground; reviewed zero pixels are background.", class_names=names)
+            task = add_task(self.viewer, " / ".join(names) + " segmentation" if names else "Foreground segmentation", ("Independent mask channels: " if self.is_multilabel() else "Semantic classes in label-ID order: ") + ", ".join(names) if names else "Nonzero ground-truth pixels are foreground; reviewed zero pixels are background.", class_names=names, multilabel=self.is_multilabel())
             self.refresh()
         return task
 
     def bind_sources(self):
         task=self.ensure_task()
-        if tuple(task.get("class_names", ())) != self.class_names():
+        if tuple(task.get("class_names", ())) != self.class_names() or bool(task.get('multilabel', False)) != self.is_multilabel():
             raise ValueError("Class definitions differ from the selected task. Update this task, or create a new task to keep existing models unchanged.")
         sources={name: layer_id(combo.currentData()) for name,combo in (("image",self.trainer.image_combo),("ground_truth",self.trainer.truth_combo),("reviewed",self.trainer.reviewed_combo))}
         task["sources"]=sources
-        return {"task_id":task["id"], "task_name":task["name"], "target_definition":task["target_definition"], "class_names": list(task.get("class_names", ())), "source_ids":sources, "image_id": sources["image"], "ground_truth_id": sources["ground_truth"]}
+        return {"task_id":task["id"], "task_name":task["name"], "target_definition":task["target_definition"], "class_names": list(task.get("class_names", ())), 'multilabel': self.is_multilabel(), "source_ids":sources, "image_id": sources["image"], "ground_truth_id": sources["ground_truth"]}
 
     def _add_task(self):
-        add_task(self.viewer,self.task_name.text(),self.definition.text(), class_names=self.class_names())
+        add_task(self.viewer,self.task_name.text(),self.definition.text(), class_names=self.class_names(), multilabel=self.is_multilabel())
         self.refresh()
 
     def _update_task(self):
@@ -188,9 +215,9 @@ class ModelsWidget(QWidget):
             raise ValueError("Give the task a name and target definition.")
         # Changing semantic meaning should create another task, not rewrite old runs.
         names = self.class_names()
-        if any(r.get("task_id") == task["id"] for r in project(self.viewer)["models"]) and (task["target_definition"] != self.definition.text().strip() or tuple(task.get("class_names", ())) != names):
+        if any(r.get("task_id") == task["id"] for r in project(self.viewer)["models"]) and (task["target_definition"] != self.definition.text().strip() or tuple(task.get("class_names", ())) != names or bool(task.get('multilabel', False)) != self.is_multilabel()):
             raise ValueError("This task has trained models. Create another task to change its target definition.")
-        task.update(name=self.task_name.text().strip(),target_definition=self.definition.text().strip(), class_names=list(names))
+        task.update(name=self.task_name.text().strip(),target_definition=self.definition.text().strip(), class_names=list(names), multilabel=self.is_multilabel())
         self.refresh()
         from ._model_project import notify_project
         notify_project(self.viewer)
@@ -200,6 +227,7 @@ class ModelsWidget(QWidget):
         project(self.viewer)["current_task"]=task["id"] if task else None
         self.task_name.setText(task["name"] if task else "")
         self.definition.setText(task["target_definition"] if task else "")
+        self.output_mode.setCurrentIndex(self.output_mode.findData(bool(task.get('multilabel', False)) if task else False))
         self.class_names_edit.setText(", ".join(task.get("class_names", ())) if task else "")
         if task:
             for name,combo in (("image",self.trainer.image_combo),("ground_truth",self.trainer.truth_combo),("reviewed",self.trainer.reviewed_combo)):
@@ -406,7 +434,7 @@ class ModelsWidget(QWidget):
             self.trainer._status("Comparison exported to "+path)
 
     def set_busy(self,busy):
-        for widget in (self.task_combo,self.task_name,self.definition,self.class_names_edit,self.add_task_button,self.update_task_button,
+        for widget in (self.task_combo,self.task_name,self.definition,self.class_names_edit,self.output_mode,self.add_task_button,self.update_task_button,
             self.name,self.provider,self.architecture,self.initialization,self.models,self.run_combo,self.use_button,self.configuration_button,
             self.add_candidate,self.remove_candidate,self.compare_button,self.to_train):
             widget.setEnabled(not busy)

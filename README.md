@@ -13,6 +13,45 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
+## Development: overlapping multilabel masks
+
+Training now supports three annotation formats:
+
+| Format | Annotation layers for each image | Prediction |
+|---|---|---|
+| Binary | One mask: background 0, target 1 (existing instance IDs also become foreground) | One foreground mask |
+| Exclusive multiclass | One mask: background 0, named classes 1, 2, … | One class ID per pixel |
+| Overlapping multilabel | One binary 0/1 mask per named feature | Separate masks that can overlap |
+
+For a macrophage and its organelles, create aligned **cell**, **mitochondria**,
+**nucleus**, and other binary mask layers. Paint the whole cell including its
+organelles in the cell mask. In **2. Models**, choose **Separate masks —
+overlapping channels**, then open **1. Dataset → Manage channels…**. Name the
+features directly in that dialog and assign their masks. For one image, **Use
+mask layers as channels** fills the names/assignments from the existing Labels
+layers and includes the image. You do not need to rename the layers. Names can
+also be entered in Models. Do not combine overlapping masks into one integer
+layer. Existing trained tasks are preserved by creating a separate task when the
+channel definition changes.
+
+**Foreground pixels → Binary 0/1** requires binary targets. Choose **Any nonzero
+ID** when a mask contains object IDs such as 2, 3, and 4 that all represent the
+same feature. The one-image shortcut chooses this explicitly displayed mode;
+training reads a binary view without modifying the original labels.
+
+Choose **Complete** only when that channel is fully annotated, **Partial** with
+its associated reviewed-region mask, or **Unknown / not annotated** when its
+labels are absent on an image. Unknown pixels do not become background. Prepare
+the dataset and train with **All patches**. One image reserves spatial groups;
+several images reserve entire image/specimen groups. Each split needs known
+positive and negative examples for every channel.
+
+Inference thresholds each channel independently and creates separate named
+Labels layers. A pixel can belong to both cell and mitochondria. This supports
+overlap but does not enforce containment or assign organelles to cell instances.
+Channel definitions, assignments, checkpoints, and output metadata persist with
+the workspace. Existing one-mask workflows remain available.
+
 ## Version 4.3.0: Multiple-image datasets, multiclass training, and tiled inference
 
 - **Train across image–label pairs:** in **1. Dataset**, choose **Multiple pairs**

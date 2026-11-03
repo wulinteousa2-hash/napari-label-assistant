@@ -48,6 +48,7 @@ class IndexedPatches:
     class_names: tuple[str, ...] = ()
     sources: list = field(default_factory=list)
     source_info: list[dict] = field(default_factory=list)
+    multilabel: bool = False
 
     def indices(self, split):
         return [i for i, item in enumerate(self.locations) if item['split'] == split]
@@ -62,7 +63,7 @@ class IndexedPatches:
             } for split in ('training', 'validation')
         }
 
-    def read(self, index):
+    def read(self, index, *, _image_patch=None):
         """Read just one patch; padding and unreviewed pixels are excluded from loss."""
         item = self.locations[index]
         if self.sources:
@@ -70,7 +71,7 @@ class IndexedPatches:
             local = {**item, 'block': item['source_block']}
             return replace(source, locations=[local]).read(0)
         region = (slice(item['y0'], item['y1']), slice(item['x0'], item['x1']))
-        raw = np.asarray(self.image[region])
+        raw = np.asarray(self.image[region]) if _image_patch is None else _image_patch[0]
         if item.get("image_digest") and blake2b(raw.tobytes(), digest_size=16).hexdigest() != item["image_digest"]:
             raise ValueError("Image pixels changed during comparison. Prepare the dataset and restart the comparison.")
         source_labels = np.asarray(self.ground_truth[region])
@@ -84,11 +85,13 @@ class IndexedPatches:
         label_digest = blake2b(source_labels.tobytes(), digest_size=16).hexdigest()
         if item.get("source_label_digest", label_digest) != label_digest:
             raise ValueError("Source label IDs changed after indexing. Update and prepare the dataset again.")
-        normalized = _normalize_crop(raw)
-        pad = ((0, self.crop_pixels - raw.shape[0]), (0, self.crop_pixels - raw.shape[1]))
-        normalized = np.pad(normalized, pad, mode='edge')
-        shape = (self.input_pixels,) * 2
-        x = _resize(normalized, shape)
+        if _image_patch is None:
+            normalized = _normalize_crop(raw)
+            pad = ((0, self.crop_pixels - raw.shape[0]), (0, self.crop_pixels - raw.shape[1]))
+            normalized = np.pad(normalized, pad, mode='edge')
+            x = _resize(normalized, (self.input_pixels,) * 2)
+        else:
+            x = _image_patch[1]
         targets = class_targets(source_labels, self.class_names, valid)
         y, valid = _model_supervision(targets, valid, self.crop_pixels, self.input_pixels, self.class_names)
         return x.astype(np.float32), y.astype(np.float32), valid.astype(np.float32)
@@ -98,6 +101,8 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
     """Visit every grid patch, storing coordinates and counts rather than image pixels."""
     from ._model_providers import spec_for
     config.validate()
+    if config.multilabel:
+        raise ValueError('Use Manage channels / index_multilabel for overlapping target masks.')
     if not 0.05 <= validation_fraction <= 0.5:
         raise ValueError("Validation holdout must be between 5% and 50%.")
     image, ground_truth = array_2d(image), array_2d(ground_truth)
@@ -226,7 +231,7 @@ def index_patches(image, ground_truth, config, *, reviewed=None, validation_bloc
 
 def index_pairs(pairs, config, *, cancel=None, validation_fraction=0.25,
                 split_seed=42, validation_method="holdout", folds=5,
-                prior_training_image_ids=()):
+                prior_training_image_ids=(), _indexed_sources=None):
     """Pool bounded patch indices, keeping each image/specimen in one split."""
     config.validate()
     if len(pairs) < 2:
@@ -240,10 +245,13 @@ def index_pairs(pairs, config, *, cancel=None, validation_fraction=0.25,
         if identifier in seen_images:
             raise ValueError("An image can appear only once in a dataset.")
         seen_images.add(identifier)
-        source = yield from index_patches(
-            pair['image'], pair['ground_truth'], config, reviewed=pair.get('reviewed'),
-            cancel=cancel, _defer_split=True,
-        )
+        if _indexed_sources is not None:
+            source = _indexed_sources[number]
+        else:
+            source = yield from index_patches(
+                pair['image'], pair['ground_truth'], config, reviewed=pair.get('reviewed'),
+                cancel=cancel, _defer_split=True,
+            )
         group = str(info.get('split_group') or identifier).strip()
         info.update(split_group=group, image_shape=list(source.image.shape))
         sources.append(source)
@@ -291,6 +299,15 @@ def index_pairs(pairs, config, *, cancel=None, validation_fraction=0.25,
 
 
 def _check_class_coverage(dataset, validation_enabled=True):
+    if dataset.multilabel:
+        for split in ('training', 'validation') if validation_enabled else ('training',):
+            rows = [p for p in dataset.locations if p['split'] == split]
+            for channel, name in enumerate(dataset.class_names):
+                positive = sum(p['channel_positive_pixels'][channel] for p in rows)
+                known = sum(p['channel_reviewed_pixels'][channel] for p in rows)
+                if not positive or known <= positive:
+                    raise ValueError(f'{split.title()} channel {name!r} needs known positive and negative pixels. Review more regions or adjust the split.')
+        return
     if not dataset.class_names:
         return
     for split in ("training", "validation") if validation_enabled else ("training",):
@@ -377,10 +394,19 @@ def _validate(torch, network, dataset, device, cancel, *, step, total):
             _check_cancel(cancel)
             x, y, valid = dataset.read(index)
             logits = network(torch.from_numpy(x)[None, None].to(device))
-            losses.append(float(masked_binary_loss(torch, logits,
-                torch.from_numpy(y)[None, None].to(device),
-                torch.from_numpy(valid)[None, None].to(device))))
-            if dataset.class_names:
+            target = torch.from_numpy(y)[None].to(device)
+            coverage_tensor = torch.from_numpy(valid)[None].to(device)
+            if not dataset.multilabel:
+                target, coverage_tensor = target.unsqueeze(1), coverage_tensor.unsqueeze(1)
+            losses.append(float(segmentation_loss(torch, logits, target, coverage_tensor, multilabel=dataset.multilabel)))
+            if dataset.multilabel:
+                prediction = torch.sigmoid(logits).cpu().numpy()[0] >= 0.5
+                for k in range(len(dataset.class_names)):
+                    positive, truth, coverage = prediction[k], y[k] > 0.5, valid[k] > 0.5
+                    tp[k] += int((positive & truth & coverage).sum())
+                    fp[k] += int((positive & ~truth & coverage).sum())
+                    fn[k] += int((~positive & truth & coverage).sum())
+            elif dataset.class_names:
                 prediction = class_probabilities(torch, logits).cpu().numpy()[0].argmax(axis=0)
                 coverage = valid > 0.5
                 for k in range(1, len(dataset.class_names) + 1):
@@ -406,7 +432,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
     from ._model_providers import build_model, spec_for, training_mode, library_versions
     from ._model_comparison import dataset_snapshot
     config.validate()
-    if tuple(dataset.class_names) != config.class_names:
+    if tuple(dataset.class_names) != config.class_names or dataset.multilabel != config.multilabel:
         raise ValueError('Class definitions changed. Prepare the dataset again.')
     _check_class_coverage(dataset, validation_enabled)
     if not 1 <= epochs <= 1000 or not 0 <= extra_targets <= 1 or not 0 < learning_rate <= 0.1:
@@ -415,7 +441,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
         raise ValueError('Patch settings changed. Index the dataset again.')
     if initial_model is not None and dataset.validation_seen_before:
         raise ValueError('The current model has already trained in these validation regions. Review new regions or train a new model.')
-    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names):
+    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names or config.multilabel != initial_model.config.multilabel):
         raise ValueError('Continue training requires the current model architecture and class definitions.')
     control = PlateauControl(reduce_patience, stop_patience, lr_factor, min_delta) if plateau_enabled and validation_enabled else None
     lr_events = []
@@ -458,10 +484,13 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
                 batches = [dataset.read(int(i)) for i in batch_ids]
                 x, y, valid = [np.stack(parts) for parts in zip(*batches)]
                 x, y, valid = augment_batch(x, y, valid, rng, config)
-                x, y, valid = [torch.from_numpy(a.copy()).unsqueeze(1).to(device) for a in (x, y, valid)]
+                x, y, valid = [torch.from_numpy(a.copy()).to(device) for a in (x, y, valid)]
+                x = x.unsqueeze(1)
+                if not dataset.multilabel:
+                    y, valid = y.unsqueeze(1), valid.unsqueeze(1)
                 training_mode(network, len(batch_ids))
                 optimizer.zero_grad(set_to_none=True)
-                loss = masked_binary_loss(torch, network(x), y, valid)
+                loss = segmentation_loss(torch, network(x), y, valid, multilabel=dataset.multilabel)
                 loss.backward(); optimizer.step()
                 step += 1
                 visited.update(map(int, batch_ids))

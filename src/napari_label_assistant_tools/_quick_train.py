@@ -54,6 +54,7 @@ class QuickTrainConfig:
     brightness_jitter: float = 0.03
     model_spec: dict | None = None
     class_names: tuple[str, ...] = ()
+    multilabel: bool = False
 
     def __post_init__(self):
         if isinstance(self.class_names, str):
@@ -62,13 +63,19 @@ class QuickTrainConfig:
 
     @property
     def output_channels(self):
+        if self.multilabel:
+            return len(self.class_names)
         return len(self.class_names) + 1 if self.class_names else 1
 
     def validate(self) -> None:
-        if self.class_names and (not 2 <= len(self.class_names) <= 254 or
+        if not isinstance(self.multilabel, bool):
+            raise ValueError("Multilabel mode must be true or false.")
+        if self.multilabel and not self.class_names:
+            raise ValueError("Name at least one output channel for multilabel training.")
+        if self.class_names and (not (1 if self.multilabel else 2) <= len(self.class_names) <= 254 or
                 any(not isinstance(name, str) or not name.strip() or name.strip().lower() == "background" for name in self.class_names) or
                 len({name.strip().lower() for name in self.class_names}) != len(self.class_names)):
-            raise ValueError("Multiclass training needs 2–254 unique foreground class names. Background is always label 0.")
+            raise ValueError("Use 2–254 unique foreground class names for multiclass, or 1–254 channel names for multilabel. Background is implicit.")
         from ._model_providers import spec_for
         spec_for(self).validate()
         if spec_for(self).provider == "smp" and self.input_pixels % 32:
@@ -125,6 +132,7 @@ class CropAtlas:
     stride_y: int
     stride_x: int
     header: int
+    channel_names: tuple[str, ...] = ()
 
 
 @dataclass
@@ -214,10 +222,23 @@ def resize_classes(labels, shape):
     return labels[np.ix_(y, x)].copy()
 
 
-def segmentation_loss(torch, logits, target, valid=None):
+def segmentation_loss(torch, logits, target, valid=None, *, multilabel=False):
     """Preserve the binary loss; use masked cross-entropy and Dice for classes."""
     if valid is None:
         valid = torch.ones_like(target)
+    if multilabel:
+        if logits.shape != target.shape or valid.shape != target.shape:
+            raise ValueError("Multilabel targets and validity must match N × channels × H × W logits.")
+        probability = torch.sigmoid(logits)
+        axes = (0, 2, 3)
+        usable = valid.sum(axes)
+        known = usable > 0
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float(), reduction='none')
+        bce = (bce * valid).sum(axes) / usable.clamp_min(1)
+        intersection = (probability * target * valid).sum(axes)
+        denominator = ((probability + target) * valid).sum(axes)
+        losses = bce + 1 - (2 * intersection + 1) / (denominator + 1)
+        return losses[known].mean() if known.any() else logits.sum() * 0
     if logits.shape[1] == 1:
         probability = torch.sigmoid(logits)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float(), reduction="none")
@@ -236,13 +257,13 @@ def segmentation_loss(torch, logits, target, valid=None):
     return ce + (1 - (2 * intersection[1:] + 1) / (denominator[1:] + 1)).mean()
 
 
-def class_probabilities(torch, logits):
-    return torch.sigmoid(logits) if logits.shape[1] == 1 else torch.softmax(logits, dim=1)
+def class_probabilities(torch, logits, *, multilabel=False):
+    return torch.sigmoid(logits) if multilabel or logits.shape[1] == 1 else torch.softmax(logits, dim=1)
 
 
-def prediction_labels(probability, threshold=0.5):
+def prediction_labels(probability, threshold=0.5, *, multilabel=False):
     """Multiclass predictions use argmax, including background, not a binary cut."""
-    if probability.ndim == 3:
+    if probability.ndim == 3 and not multilabel:
         return probability.argmax(axis=0).astype(np.uint8)
     return (probability >= threshold).astype(np.uint8)
 
@@ -342,6 +363,8 @@ def _origin(block, size, rng, anchor=None):
 def prepare_crops(image, ground_truth, config, *, cancel=None):
     """Sample guaranteed positives and contextual negatives in disjoint blocks."""
     config.validate()
+    if config.multilabel:
+        raise ValueError('Multilabel training uses All patches and Manage channels, not sampled single-mask crops.')
     image, ground_truth = array_2d(image), array_2d(ground_truth)
     if tuple(image.shape) != tuple(ground_truth.shape):
         raise ValueError("Training image and ground truth must have the same 2D shape.")
@@ -444,14 +467,16 @@ def build_crop_atlas(crops):
     header, gutter = 36, 8
     stride_y, stride_x = size + header + gutter, size + gutter
     atlas_image = np.zeros((rows * stride_y, columns * stride_x), dtype=np.float32)
-    atlas_mask = np.zeros(atlas_image.shape, dtype=np.uint8)
+    channels = masks.shape[1] if masks.ndim == 4 else None
+    atlas_mask = np.zeros((channels, *atlas_image.shape) if channels is not None else atlas_image.shape, dtype=np.uint8)
     locations = []
     for i, (image, mask, source) in enumerate(zip(images, masks, crops.locations)):
         y0, x0 = (i // columns) * stride_y + header, (i % columns) * stride_x
         atlas_image[y0:y0 + size, x0:x0 + size] = image
-        atlas_mask[y0:y0 + size, x0:x0 + size] = mask
+        atlas_mask[..., y0:y0 + size, x0:x0 + size] = mask
         locations.append({**source, "tile": i + 1, "atlas_y0": y0, "atlas_x0": x0, "model_size": size})
-    return CropAtlas(atlas_image, atlas_mask, locations, columns, stride_y, stride_x, header)
+    return CropAtlas(atlas_image, atlas_mask, locations, columns, stride_y, stride_x, header,
+                     tuple(crops.class_names) if channels is not None else ())
 
 
 def _torch():
@@ -564,13 +589,15 @@ def train_prepared_unet(crops, config, *, cancel=None, initial_model=None, learn
     """Train only on the already inspected inputs; do not resample locations."""
     from ._model_providers import build_model, spec_for, training_mode
     config.validate()
+    if config.multilabel:
+        raise ValueError('Prepare a channel dataset using All patches for multilabel training.')
     if crops.images.shape[1:] != (config.input_pixels,) * 2 or len(crops.locations) != config.samples:
         raise ValueError("Crop settings changed. Prepare and preview crops again.")
     if tuple(crops.class_names) != config.class_names:
         raise ValueError("Class definitions changed. Prepare the dataset again.")
     if not 0 < learning_rate <= 0.1:
         raise ValueError("Learning rate must be greater than zero and at most 0.1.")
-    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names):
+    if initial_model is not None and (spec_for(config) != spec_for(initial_model.config) or config.class_names != initial_model.config.class_names or config.multilabel != initial_model.config.multilabel):
         raise ValueError("Continue training requires the existing model architecture and class definitions.")
     torch = _torch()
     _check_cancel(cancel)
@@ -673,8 +700,8 @@ def predict_area(model, image, center, *, device="auto", cancel=None):
         model.network.to(actual_device).eval()
         with torch.no_grad():
             x = torch.from_numpy(normalized)[None, None].to(actual_device)
-            probability = class_probabilities(torch, model.network(x)).cpu().numpy()[0]
-            probability = probability[0] if probability.shape[0] == 1 else probability
+            probability = class_probabilities(torch, model.network(x), multilabel=getattr(model.config, 'multilabel', False)).cpu().numpy()[0]
+            probability = probability[0] if probability.shape[0] == 1 and not getattr(model.config, 'multilabel', False) else probability
         _check_cancel(cancel)
         resized = np.stack([_resize(channel, (size, size)) for channel in probability]) if probability.ndim == 3 else _resize(probability, (size, size))
         return QuickTrainPrediction(np.clip(resized, 0, 1), (y0, x0))
@@ -712,8 +739,9 @@ def predict_region(model, image, bounds=None, *, device="auto", cancel=None):
 
     ys, xs = starts(y0, y1, height), starts(x0, x1, width)
     channels = getattr(model.config, "output_channels", 1)
+    channel_axis = channels > 1 or getattr(model.config, 'multilabel', False)
     output_shape = (y1 - y0, x1 - x0)
-    probability = np.zeros((channels, *output_shape) if channels > 1 else output_shape, dtype=np.float32)
+    probability = np.zeros((channels, *output_shape) if channel_axis else output_shape, dtype=np.float32)
     weights = np.zeros(output_shape, dtype=np.float32)
     ramp = np.maximum(np.hanning(size), 0.05).astype(np.float32)
     blend = ramp[:, None] * ramp[None, :]
@@ -730,14 +758,14 @@ def predict_region(model, image, bounds=None, *, device="auto", cancel=None):
                 raw = np.asarray(image[y:y + size, x:x + size])
                 normalized = _resize(_normalize_crop(raw), (model.config.input_pixels,) * 2)
                 tensor = torch.from_numpy(normalized)[None, None].to(actual_device)
-                tile = class_probabilities(torch, model.network(tensor)).cpu().numpy()[0]
-                tile = np.stack([_resize(channel, (size, size)) for channel in tile]) if channels > 1 else _resize(tile[0], (size, size))
+                tile = class_probabilities(torch, model.network(tensor), multilabel=getattr(model.config, 'multilabel', False)).cpu().numpy()[0]
+                tile = np.stack([_resize(channel, (size, size)) for channel in tile]) if channel_axis else _resize(tile[0], (size, size))
                 tile = np.clip(tile, 0, 1)
                 top, left = max(y, y0), max(x, x0)
                 bottom, right = min(y + size, y1), min(x + size, x1)
                 target = np.s_[top - y0:bottom - y0, left - x0:right - x0]
                 source = np.s_[top - y:bottom - y, left - x:right - x]
-                if channels > 1:
+                if channel_axis:
                     probability[(slice(None), *target)] += tile[(slice(None), *source)] * blend[source]
                 else:
                     probability[target] += tile[source] * blend[source]
@@ -760,9 +788,9 @@ def save_model(model, path):
     path = Path(path)
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     payload = {
-        "quick_train_version": 3 if model.config.class_names else 2,
+        "quick_train_version": 4 if model.config.multilabel else 3 if model.config.class_names else 2,
         "library_versions": library_versions(),
-        "contract": {"input_channels": 1, "output_channels": model.config.output_channels, "output": "logits", "class_names": list(model.config.class_names)}, "config": asdict(model.config),
+        "contract": {"input_channels": 1, "output_channels": model.config.output_channels, "output": "logits", "class_names": list(model.config.class_names), "multilabel": model.config.multilabel}, "config": asdict(model.config),
         "crop_pixels": model.crop_pixels, "metrics": model.metrics,
         "training_device": model.training_device, "locations": model.locations,
         "training_steps": model.training_steps, "training_rounds": model.training_rounds,
@@ -792,10 +820,12 @@ def save_model(model, path):
 def load_model(path):
     torch = _torch()
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2, 3):
+    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2, 3, 4):
         raise ValueError("Choose a checkpoint saved by napari-label-assistant Model Training (formerly Quick Train).")
     config = QuickTrainConfig(**payload["config"])
     config.validate()
+    if payload.get('contract', {}).get('multilabel', False) != config.multilabel:
+        raise ValueError('The checkpoint output mode does not match its configuration.')
     if payload.get("contract", {}).get("output_channels", config.output_channels) != config.output_channels:
         raise ValueError("The checkpoint output channels do not match its class definitions.")
     if tuple(payload.get("contract", {}).get("class_names", config.class_names)) != config.class_names:

@@ -1,11 +1,45 @@
 # Training large images
 
-The Training tab supports binary and semantic multiclass segmentation. With
+The Training tab supports binary, exclusive multiclass, and overlapping
+multilabel segmentation. With **One mask — binary / exclusive classes** and
 **Foreground classes** empty, all nonzero ground-truth labels are foreground;
 individual object IDs are not learned separately. Define names such as
 `axon, myelin` in **Models** for semantic IDs `0 = background`, `1 = axon`,
 `2 = myelin`. Up to 254 foreground classes are supported. Class definitions
 persist per task/checkpoint; trained tasks require a new task to change meanings.
+
+For nested features, choose **Separate masks — overlapping channels** in Models.
+Open **Dataset → Manage channels…** to name channels (for example
+`cell, mitochondria, nucleus`) and assign separate aligned mask layers. The
+dialog opens even when no names have been entered in Models. For one image,
+**Use mask layers as channels** fills channel names and target assignments from
+the loaded Labels layers and includes the image. Names are descriptive; masks
+still supply numeric supervision. The whole-cell mask includes organelles;
+organelle masks overlap it.
+
+Use **Foreground pixels → Binary 0/1** for binary masks. **Any nonzero ID** treats
+all nonzero instance IDs within that mask as one feature during training and
+preserves source pixels. The one-image shortcut selects this mode. If a selected
+task already has trained models with different meanings, applying the channel
+setup creates another task rather than changing its old models.
+Multilabel output uses one independent sigmoid channel per name, without a
+separate background channel. Do not merge these masks into exclusive class IDs.
+
+Every channel has its own supervision coverage. **Complete** means its positive
+and negative pixels have all been checked. **Partial** uses that target's
+associated reviewed-region mask. **Unknown / not annotated** excludes that
+channel on that image. Missing masks never become negative examples implicitly.
+Use reviewed cells rather than selected-component foreground in this mode.
+**All patches** streams the selected channels; sampled single-mask preparation
+is unavailable. One image uses spatial validation; multiple images reserve whole
+image/specimen groups. Each channel needs known positive and negative examples
+in both training and validation.
+
+Multilabel validation reports per-channel Dice/IoU and macro averages. Prediction
+applies the adjustable threshold independently and adds one binary Labels layer
+per channel. It preserves overlaps without forcing biological containment or
+inferring cell-to-organelle instance ownership. Class/channel order and output
+mode are stored in checkpoints, with mask assignments saved in the workspace.
 
 Training has five pages: **Dataset**, **Models**, **Train**, **Inference**, and **Advanced**.
 Choose annotations and prepare the dataset in Dataset; patch preview is optional. Select a biological task and

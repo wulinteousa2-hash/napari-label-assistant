@@ -19,19 +19,26 @@ def identity(layer):
     return state["id"]
 
 
-def associated_mask(viewer, image):
+def associated_mask(viewer, image, truth=None):
     if image is None:
         return None
     image_id = image.metadata.get(KEY, {}).get("id")
     if not image_id:
         return None
-    return next((layer for layer in viewer.layers
-                 if layer.metadata.get(KEY, {}).get("role") == "reviewed_regions"
-                 and layer.metadata[KEY].get("image_id") == image_id), None)
+    candidates = [layer for layer in viewer.layers
+                  if layer.metadata.get(KEY, {}).get('role') == 'reviewed_regions'
+                  and layer.metadata[KEY].get('image_id') == image_id]
+    if truth is None:
+        return next(iter(candidates), None)
+    truth_id = identity(truth)
+    return next((layer for layer in candidates if layer.metadata[KEY].get('truth_id') == truth_id),
+                next((layer for layer in candidates if not layer.metadata[KEY].get('truth_id')), None))
 
 
-def associate(mask, image):
+def associate(mask, image, truth=None):
     mask.metadata = {**mask.metadata, KEY: {"role": "reviewed_regions", "image_id": identity(image)}}
+    if truth is not None:
+        mask.metadata[KEY]['truth_id'] = identity(truth)
 
 
 def write_area(mask, bounds, value):
@@ -223,7 +230,7 @@ class ReviewedAreaWidget(QGroupBox):
         return layer
 
     def update_review_overlay(self, truth):
-        mask = associated_mask(self.viewer, self.image_combo.currentData())
+        mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
         areas = mask.metadata.get(KEY, {}).get("areas", []) if mask is not None else []
         self.make_outline(truth, areas, "Reviewed areas — green outlines", "lime", "review_overlay")
 
@@ -297,7 +304,8 @@ class ReviewedAreaWidget(QGroupBox):
         self.update_status()
 
     def update_status(self, *_args):
-        mask = associated_mask(self.viewer, self.image_combo.currentData())
+        truth = self.selected_cell[0] if self.selected_cell is not None else getattr(self.controller, 'source', None)
+        mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
         if mask is not None:
             count = len(mask.metadata[KEY].get("areas", []))
             self.status.setText(f"{count} marked area(s) · Training selects this mask in Partial mode. Preview patches again after changes.")
@@ -341,7 +349,7 @@ class ReviewedAreaWidget(QGroupBox):
     def mark(self, value):
         from .workspace.service import _require_zarr
         image, truth, bounds = self.context()
-        mask = associated_mask(self.viewer, image)
+        mask = associated_mask(self.viewer, image, truth)
         if mask is None:
             if not value:
                 raise ValueError("This image has no reviewed-region mask.")
@@ -408,7 +416,7 @@ class ReviewedAreaWidget(QGroupBox):
         truth, current, sy, sx = self.selected_cell
         if not self.mark(1):
             return
-        mask = associated_mask(self.viewer, self.image_combo.currentData())
+        mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
         h, w = truth.data.shape
         columns = (w + sx - 1) // sx
         total = ((h + sy - 1) // sy) * columns
@@ -467,7 +475,7 @@ class ReviewedAreaWidget(QGroupBox):
     def preview(self):
         from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY
         image, truth, bounds = self.context()
-        mask = associated_mask(self.viewer, image)
+        mask = associated_mask(self.viewer, image, truth)
         if mask is None:
             raise ValueError("Mark an area as reviewed first.")
         if bounds.shape[0] * bounds.shape[1] > 16_777_216:

@@ -20,7 +20,9 @@ def dataset_snapshot(dataset, source=None):
                 "locations": deepcopy(dataset.locations), "validation": deepcopy(dataset.validation)}
     if dataset.class_names:
         snapshot["class_names"] = list(dataset.class_names)
-    if dataset.sources:
+    if dataset.multilabel:
+        snapshot['multilabel'] = True
+    if dataset.source_info:
         snapshot["sources"] = deepcopy(dataset.source_info)
     snapshot["id"] = sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return snapshot

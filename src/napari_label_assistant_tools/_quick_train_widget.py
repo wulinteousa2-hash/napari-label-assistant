@@ -66,6 +66,7 @@ class QuickTrainWidget(QWidget):
         self._locked_extra_layers = []
         self._coverage_splits = {}
         self.dataset_pairs = []
+        self.channel_assignments = []
         self.model_state_label = QLabel("No model in memory.")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -541,6 +542,7 @@ class QuickTrainWidget(QWidget):
         self.seed_spin.valueChanged.connect(lambda *_args: self._invalidate_crops() if self.workflow_combo.currentData() == "sampled" else None)
         self.samples_spin.valueChanged.connect(self._invalidate_crops)
         self.models_panel.class_names_edit.textChanged.connect(self._invalidate_crops)
+        self.models_panel.output_mode.currentIndexChanged.connect(self._output_mode_changed)
         for control in (self.epochs_spin, self.batch_spin, self.extra_targets_spin):
             control.valueChanged.connect(self._update_workload)
         self.workflow_combo.currentIndexChanged.connect(self._workflow_changed)
@@ -556,7 +558,7 @@ class QuickTrainWidget(QWidget):
         self._layer_refresh_timer = _auto_refresh_layer_controls(viewer, self, self.refresh_layers)
         self.viewer.layers.events.removed.connect(self._source_removed)
         self.refresh_layers()
-        self._workflow_changed()
+        self._output_mode_changed()
         self._update_model_summary()
         from ._model_project import project
         settings = project(self.viewer).get("settings")
@@ -575,10 +577,13 @@ class QuickTrainWidget(QWidget):
                 "new_model": self.models_panel.spec().to_dict(), "model_name": self.models_panel.name.text(),
                 "class_names_text": self.models_panel.class_names_edit.text(),
                 "dataset_pairs": self.dataset_pairs,
+                'channel_assignments': self.channel_assignments,
+                'multilabel': self.models_panel.is_multilabel(),
                 "comparison_candidates": self.models_panel.candidates}
 
     def restore_project_settings(self, settings):
         self.dataset_pairs = list(settings.get('dataset_pairs', []))
+        self.channel_assignments = list(settings.get('channel_assignments', []))
         combos = settings.get("combos", {})
         # Coverage determines whether sampled workflow is eligible. Restore it first.
         ordered = [name for name in ("annotation_combo", "workflow_combo") if name in combos]
@@ -619,6 +624,7 @@ class QuickTrainWidget(QWidget):
             if width_index >= 0:
                 panel.width.setCurrentIndex(width_index)
         panel.name.setText(settings.get("model_name",""))
+        panel.output_mode.setCurrentIndex(panel.output_mode.findData(bool(settings.get('multilabel', False))))
         if "class_names_text" in settings:
             panel.class_names_edit.setText(settings["class_names_text"])
         panel.candidates=list(settings.get("comparison_candidates",[]))
@@ -632,7 +638,22 @@ class QuickTrainWidget(QWidget):
     def _multiple_pairs(self):
         return self.dataset_source_mode.currentData() == 'multiple'
 
+    def _is_multilabel(self):
+        return hasattr(self, 'models_panel') and self.models_panel.is_multilabel()
+
+    def _output_mode_changed(self, *_args):
+        multilabel = self._is_multilabel()
+        self.dataset_source_mode.model().item(0).setEnabled(not multilabel)
+        self.dataset_source_mode.setItemText(1, 'Images / target channels' if multilabel else 'Multiple pairs')
+        if multilabel:
+            self.dataset_source_mode.setCurrentIndex(1)
+        self._workflow_changed()
+        self._sources_changed()
+
     def _dataset_mode_changed(self, *_args):
+        if self._is_multilabel() and not self._multiple_pairs():
+            self.dataset_source_mode.setCurrentIndex(1)
+            return
         self._workflow_changed()
         self._sources_changed()
 
@@ -640,12 +661,35 @@ class QuickTrainWidget(QWidget):
         multiple = self._multiple_pairs()
         reviewing = not multiple or self.review_pair_toggle.isChecked()
         self.review_pair_toggle.setVisible(multiple)
+        self.review_pair_toggle.setText('Review selected mask' if self._is_multilabel() else 'Review selected pair')
+        self.manage_pairs_button.setText('Manage channels…' if self._is_multilabel() else 'Manage pairs…')
+        self.annotation_tabs.setTabEnabled(1, not self._is_multilabel())
+        if self._is_multilabel() and self.annotation_tabs.currentIndex() == 1:
+            self.annotation_tabs.setCurrentIndex(0)
         self.annotation_tabs.setVisible(reviewing)
         self.dataset_source_layout.setStretch(self.dataset_source_layout.count() - 1, 0 if reviewing else 1)
         for control in (self.image_combo, self.truth_combo, self.annotation_combo):
             control.setVisible(reviewing)
             self.dataset_form.labelForField(control).setVisible(reviewing)
         self.pairs_summary.setVisible(multiple)
+        if self._is_multilabel():
+            from ._multilabel_targets import resolve_channels
+            names = tuple(part.strip() for part in self.models_panel.class_names_edit.text().split(',') if part.strip())
+            included = [row for row in self.channel_assignments if row.get('included')]
+            issues = []
+            for row in included:
+                try:
+                    resolve_channels(self.viewer, names, [row])
+                except ValueError as error:
+                    issues.append(str(error))
+            detail = f'{len(issues)} need attention' if issues else 'Ready to prepare' if included and names else 'Open Manage channels to name features and assign masks'
+            image_word = 'image' if len(included) == 1 else 'images'
+            channel_word = 'channel' if len(names) == 1 else 'channels'
+            self.pairs_summary.setText(f'{len(included)} {image_word} · {len(names)} {channel_word} · {detail}')
+            self.pairs_summary.setToolTip('\n'.join(issues))
+            self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+            self.dataset_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+            return
         included = [row for row in self.dataset_pairs if row.get('included')]
         from ._dataset_pairs import resolve_pairs
         issues = []
@@ -661,6 +705,16 @@ class QuickTrainWidget(QWidget):
         self.dataset_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
 
     def _manage_pairs(self):
+        if self._is_multilabel():
+            from ._multilabel_targets import MultilabelTargetsDialog
+            names = tuple(part.strip() for part in self.models_panel.class_names_edit.text().split(',') if part.strip())
+            dialog = MultilabelTargetsDialog(self.viewer, names, self.channel_assignments, self)
+            if dialog.exec_():
+                self.models_panel.apply_channel_names(dialog.names)
+                self.channel_assignments = dialog.assignments()
+                self._sources_changed()
+                self._status('Channel names and masks saved in the current setup. Check annotation coverage, then Prepare dataset. Save the workspace to keep these assignments.')
+            return
         from ._dataset_pairs import DatasetPairsDialog
         dialog = DatasetPairsDialog(self.viewer, self.dataset_pairs, self)
         if not dialog.exec_():
@@ -684,9 +738,18 @@ class QuickTrainWidget(QWidget):
         """Watch every included source, including unresolved rows, for removal/edits."""
         if not self._multiple_pairs():
             return [layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()) if layer is not None]
-        identifiers = {row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id')}
+        identifiers = self._channel_layer_ids() if self._is_multilabel() else {row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id')}
         from ._model_project import layer_id
         return [layer for layer in self.viewer.layers if layer_id(layer) in identifiers]
+
+    def _channel_layer_ids(self):
+        identifiers = set()
+        for row in self.channel_assignments:
+            if row.get('included'):
+                identifiers.add(row.get('image_id'))
+                for channel in row.get('channels', {}).values():
+                    identifiers.update((channel.get('target_id'), channel.get('reviewed_id')))
+        return identifiers
 
     def _update_model_summary(self, *_args):
         from ._model_providers import spec_for
@@ -764,7 +827,7 @@ class QuickTrainWidget(QWidget):
 
     def _source_removed(self, event):
         from ._model_project import layer_id
-        if any(event.value is layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())) or (self._multiple_pairs() and any(layer_id(event.value) == row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id'))):
+        if any(event.value is layer for layer in (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())) or (self._is_multilabel() and layer_id(event.value) in self._channel_layer_ids()) or (self._multiple_pairs() and any(layer_id(event.value) == row.get(key) for row in self.dataset_pairs if row.get('included') for key in ('image_id', 'truth_id', 'reviewed_id'))):
             self._invalidate_crops()
 
     def _select_associated_reviewed_mask(self):
@@ -772,13 +835,13 @@ class QuickTrainWidget(QWidget):
         if self.annotation_combo.currentData() != "partial":
             return
         image = self.image_combo.currentData()
-        mask = associated_mask(self.viewer, image)
+        mask = associated_mask(self.viewer, image, self.truth_combo.currentData() if self._is_multilabel() else None)
         current = self.reviewed_combo.currentData()
         if mask is not None or (current is not None and current.metadata.get(KEY, {}).get("role") == "reviewed_regions"):
             self.reviewed_combo.blockSignals(True)
             self.reviewed_combo.setCurrentIndex(max(0, self.reviewed_combo.findData(mask)))
             self.reviewed_combo.blockSignals(False)
-        if mask is not None:
+        if mask is not None and not self._is_multilabel():
             truth_id = mask.metadata.get(KEY, {}).get("truth_id")
             truth = next((layer for layer in self.viewer.layers if truth_id and layer.metadata.get(KEY, {}).get("id") == truth_id), None)
             if truth is not None:
@@ -867,16 +930,20 @@ class QuickTrainWidget(QWidget):
         self.continuation_note.setVisible(seen_holdout and self.model is not None)
         self.predict_button.setEnabled(not busy and self.model is not None)
         names = getattr(getattr(self.model, "config", None), "class_names", ())
-        self.threshold_spin.setEnabled(not busy and not names)
+        multilabel = getattr(getattr(self.model, 'config', None), 'multilabel', False)
+        self.threshold_spin.setEnabled(not busy and (not names or multilabel))
         self.inference_classes_label.setText(
             "Classes: 0 = background; " + "; ".join(f"{i} = {name}" for i, name in enumerate(names, 1)) + ". Highest-probability class wins; binary threshold is unused."
             if names else "Binary model: background / foreground. Threshold controls foreground selection.")
+        if multilabel:
+            self.inference_classes_label.setText('Independent channels: ' + ', '.join(names) + '. Threshold applies to each channel; overlapping masks are preserved as separate layers.')
         self.models_panel.set_busy(busy)
         self._update_source_mode_visibility()
         self._update_model_summary()
         image, truth = self.image_combo.currentData(), self.truth_combo.currentData()
         pair_context = f"Image: {image.name if image is not None else 'Choose an image'} · Annotations: {truth.name if truth is not None else 'Choose a Labels layer'}"
-        self.source_context.setText(f"Dataset: {sum(bool(row.get('included')) for row in self.dataset_pairs)} selected image–label pairs" if self._multiple_pairs() else pair_context)
+        definitions = self.channel_assignments if self._is_multilabel() else self.dataset_pairs
+        self.source_context.setText(f"Dataset: {sum(bool(row.get('included')) for row in definitions)} selected images" if self._multiple_pairs() else pair_context)
         if hasattr(self, "editor_pair_context"):
             self.editor_pair_context.setText(pair_context)
         reason = ("An operation is running. Wait or use Cancel." if busy else
@@ -1000,6 +1067,7 @@ class QuickTrainWidget(QWidget):
             contrast_jitter=self.contrast_spin.value() / 100,
             brightness_jitter=self.brightness_spin.value() / 100,
             class_names=self.models_panel.class_names(),
+            multilabel=self._is_multilabel(),
         )
 
     def _signature(self):
@@ -1012,7 +1080,7 @@ class QuickTrainWidget(QWidget):
                 self.crop_combo.currentData(), self.resolution_combo.currentData(),
                 self.samples_spin.value() if self.workflow_combo.currentData() == "sampled" else None,
                 self.seed_spin.value() if self.workflow_combo.currentData() == "sampled" else None, self.workflow_combo.currentData(),
-                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value(), self.models_panel.class_names_edit.text(), self.dataset_source_mode.currentData(), json.dumps(self.dataset_pairs, sort_keys=True) if self._multiple_pairs() else None)
+                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value(), self.models_panel.class_names_edit.text(), self.dataset_source_mode.currentData(), json.dumps(self.dataset_pairs, sort_keys=True) if self._multiple_pairs() else None, self._is_multilabel(), json.dumps(self.channel_assignments, sort_keys=True) if self._is_multilabel() else None)
 
     def _validation_changed(self, *_args):
         self._coverage_splits.clear()
@@ -1026,7 +1094,12 @@ class QuickTrainWidget(QWidget):
         for control, visible in ((self.holdout_spin, not kfold), (self.fold_spin, kfold)):
             control.setVisible(visible)
             self.validation_form.labelForField(control).setVisible(visible)
-        self.train_button.setText(("Run image-group k-fold validation" if self._multiple_pairs() else "Run spatial k-fold validation") if kfold else "Train new model")
+        grouped = self._multiple_pairs() and (not self._is_multilabel() or sum(bool(row.get('included')) for row in self.channel_assignments) > 1)
+        blocked = self.validation_method_combo.blockSignals(True)
+        self.validation_method_combo.setItemText(0, 'Image/specimen holdout' if grouped else 'Spatial holdout (recommended)')
+        self.validation_method_combo.setItemText(1, 'Image/specimen k-fold' if grouped else 'Spatial k-fold (advanced)')
+        self.validation_method_combo.blockSignals(blocked)
+        self.train_button.setText(("Run image-group k-fold validation" if grouped else "Run spatial k-fold validation") if kfold else "Train new model")
         self.final_train_button.setVisible(kfold)
         self.save_validation_button.setVisible(kfold)
         self.final_train_button.setEnabled(not busy and self.cross_validation is not None and self.prepared is not None)
@@ -1194,6 +1267,8 @@ class QuickTrainWidget(QWidget):
         )
         if multiple:
             self.validation_note.setText('Each epoch visits every eligible training patch across selected pairs. Whole image/specimen groups are held out for validation.')
+            if self._is_multilabel():
+                self.validation_note.setText('Independent target channels use All patches. One image reserves spatial groups; several images reserve whole image/specimen groups.')
         self.workflow_combo.setToolTip(self.validation_note.text())
         self._invalidate_crops()
         self.crop_summary_label.setText(
@@ -1212,7 +1287,7 @@ class QuickTrainWidget(QWidget):
             "foreground only. Shared pixels are counted once; unknown pixels are ignored."
         )
         if self._multiple_pairs():
-            self.annotation_note.setText('Coverage is configured per pair in Manage pairs. Validation keeps image/specimen groups separate.')
+            self.annotation_note.setText('Each channel has independent coverage in Manage channels. One image uses spatial validation; several images use image/specimen groups.' if self._is_multilabel() else 'Coverage is configured per pair in Manage pairs. Validation keeps image/specimen groups separate.')
             self._update_source_mode_visibility()
             return
         if not partial:
@@ -1257,7 +1332,7 @@ class QuickTrainWidget(QWidget):
             rotate=image.rotate, shear=image.shear, affine=image.affine,
         )
         from ._reviewed_regions import associate
-        associate(layer, image)
+        associate(layer, image, self.truth_combo.currentData() if self._is_multilabel() else None)
         self.refresh_layers()
         self.reviewed_combo.setCurrentIndex(self.reviewed_combo.findData(layer))
         self._status("Empty reviewed-region mask created. Correct the selected cell in Labels, then choose Finish review under Dataset → Reviewed cells.")
@@ -1329,6 +1404,8 @@ class QuickTrainWidget(QWidget):
         return crops
 
     def _start_preparing(self):
+        if self._is_multilabel():
+            return self._start_preparing_channels()
         if self._multiple_pairs():
             return self._start_preparing_pairs()
         image = self._layer(self.image_combo)
@@ -1450,6 +1527,51 @@ class QuickTrainWidget(QWidget):
             self._unlock_sources()
             raise
 
+    def _start_preparing_channels(self):
+        from ._multilabel_targets import resolve_channels
+        from ._multilabel import index_multilabel
+        if not self.models_panel.class_names_edit.text().strip():
+            self._manage_pairs()
+            if not self.models_panel.class_names_edit.text().strip():
+                self._status('Open Manage channels to name features and assign their mask layers before preparation.')
+                return
+        config = self._config()
+        resolved = resolve_channels(self.viewer, config.class_names, self.channel_assignments)
+        pairs = []
+        for row, image, targets in resolved:
+            channels, channel_info = [], []
+            for name, target in zip(config.class_names, targets):
+                if target is None:
+                    channels.append(None)
+                    channel_info.append(dict(name=name, coverage='unknown'))
+                else:
+                    assignment, layer, mask = target
+                    channels.append(dict(data=array_2d(layer.data), reviewed=array_2d(mask.data) if mask is not None else None,
+                                         foreground_mode=assignment.get('foreground_mode', 'binary')))
+                    channel_info.append(dict(name=name, **assignment))
+            pairs.append(dict(image=array_2d(image.data), channels=channels,
+                              info=dict(image_id=row['image_id'], image_layer=image.name,
+                                        split_group=row.get('split_group') or row['image_id'], channels=channel_info)))
+        signature, generation = self._signature(), self._generation
+        def done(dataset):
+            if generation != self._generation or signature != self._signature():
+                self._status('Channel annotations changed; prepare again.')
+                return
+            self.prepared, self._prepared_signature = dataset, signature
+            self.crop_summary_label.setText(f"{len(pairs)} images · {len(config.class_names)} independent channels · {len(dataset.locations):,} patches\nTraining: {len(dataset.indices('training')):,} · Validation: {len(dataset.indices('validation')):,}. Unknown channel pixels are ignored.")
+            self._status('Multilabel dataset ready. Overlapping target masks stay independent during training.')
+        self._lock_sources()
+        try:
+            self._start_worker(index_multilabel, done, pairs, config,
+                               validation_fraction=self.holdout_spin.value() / 100,
+                               split_seed=self.validation_seed_spin.value(),
+                               validation_method=self.validation_method_combo.currentData(), folds=self.fold_spin.value(),
+                               prior_training_image_ids=self._prior_training_image_ids(),
+                               prior_training_regions=self._previous_sampled_training(resolved[0][1]) if len(resolved) == 1 else ())
+        except Exception:
+            self._unlock_sources()
+            raise
+
     def _index_done(self, result, image, truth, signature, generation, partition_key):
         if generation != self._generation or signature != self._signature() or not all(any(layer is item for item in self.viewer.layers) for layer in (image, truth)):
             self._status("Source changed during indexing. Prepare again.")
@@ -1537,8 +1659,11 @@ class QuickTrainWidget(QWidget):
                                   "tiles": atlas.locations, "read_only_preview": True},
         }
         grid_image = self.viewer.add_image(atlas.image, name="Model Training — crop images", contrast_limits=(0, 1), translate=translation, scale=scale, metadata=metadata.copy())
-        grid_mask = self.viewer.add_labels(atlas.mask, name="Model Training — crop ground truth", translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.5)
-        grid_mask.editable = False
+        grid_masks = []
+        for name, mask in (zip(atlas.channel_names, atlas.mask) if atlas.channel_names else [('', atlas.mask)]):
+            grid_mask = self.viewer.add_labels(mask, name='Model Training — crop ground truth' + (f' — {name}' if name else ''), translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.5)
+            grid_mask.editable = False
+            grid_masks.append(grid_mask)
         rectangles, captions, colors = [], [], []
         for tile in atlas.locations:
             y, x, size = tile["atlas_y0"], tile["atlas_x0"], tile["model_size"]
@@ -1553,15 +1678,17 @@ class QuickTrainWidget(QWidget):
                   "translation": [-size / 2 - 8, -size / 2], "size": 10},
         )
         frames.editable = False
-        self._crop_preview_layers = [grid_image, grid_mask, frames]
+        self._crop_preview_layers = [grid_image, *grid_masks, frames]
         if validity is not None and not np.all(validity):
-            ignored = np.zeros_like(atlas.mask, dtype=np.uint8)
-            for tile, valid in zip(atlas.locations, validity):
-                y, x, size = tile['atlas_y0'], tile['atlas_x0'], tile['model_size']
-                ignored[y:y + size, x:x + size] = valid == 0
-            ignored_layer = self.viewer.add_labels(ignored, name="Training — ignored pixels", translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.25)
-            ignored_layer.editable = False
-            self._crop_preview_layers.append(ignored_layer)
+            channel_names = atlas.channel_names or ('',)
+            for channel, name in enumerate(channel_names):
+                ignored = np.zeros(atlas.image.shape, dtype=np.uint8)
+                for tile, valid in zip(atlas.locations, validity):
+                    y, x, size = tile['atlas_y0'], tile['atlas_x0'], tile['model_size']
+                    ignored[y:y + size, x:x + size] = (valid[channel] if atlas.channel_names else valid) == 0
+                ignored_layer = self.viewer.add_labels(ignored, name='Training — ignored pixels' + (f' — {name}' if name else ''), translate=translation, scale=scale, metadata=metadata.copy(), opacity=0.25)
+                ignored_layer.editable = False
+                self._crop_preview_layers.append(ignored_layer)
 
         def show_tile(_layer, event, *, locate=False):
             position = grid_image.world_to_data(tuple(event.position)[-2:])
@@ -1627,8 +1754,8 @@ class QuickTrainWidget(QWidget):
                            "ground_truth_layer": self._layer(self.truth_combo).name,
                            "image_shape": list(self.prepared.image.shape),
                            "reviewed_layer": self.reviewed_combo.currentText() if self.prepared.reviewed is not None else None}
-            if self.prepared.sources:
-                source_info.update(pairs=self.prepared.source_info, image_layer=f'{len(self.prepared.sources)} image–label pairs', image_id=None, image_shape=None, ground_truth_layer=None, reviewed_layer=None)
+            if self.prepared.sources or self.prepared.multilabel:
+                source_info.update(pairs=self.prepared.source_info, multilabel=self.prepared.multilabel, image_layer=f'{len(self.prepared.source_info)} annotated images', image_id=None, image_shape=None, ground_truth_layer=None, reviewed_layer=None)
             supervision = self.prepared.reviewed
             if getattr(supervision, "library", None) is not None:
                 source_info["component_library"] = {
@@ -1669,8 +1796,8 @@ class QuickTrainWidget(QWidget):
                 raise ValueError("Install the SMP optional dependency before running this comparison.")
         source_info = self.models_panel.bind_sources()
         source_info.update(image_layer=self._layer(self.image_combo).name, ground_truth_layer=self._layer(self.truth_combo).name)
-        if self.prepared.sources:
-            source_info.update(pairs=self.prepared.source_info, image_id=None, image_layer=f'{len(self.prepared.sources)} image–label pairs', ground_truth_layer=None)
+        if self.prepared.sources or self.prepared.multilabel:
+            source_info.update(pairs=self.prepared.source_info, multilabel=self.prepared.multilabel, image_id=None, image_layer=f'{len(self.prepared.source_info)} annotated images', ground_truth_layer=None)
         self.learning_chart.set_points([])
         self.validation_results_label.setText("Model comparison running on shared spatial splits.")
         generation = self._generation
@@ -1739,7 +1866,7 @@ class QuickTrainWidget(QWidget):
             "These scores do not measure accuracy on a new image."
         )
         if self.model.config.class_names:
-            self.metrics_label.setText(self.metrics_label.text() + "\nMulticlass: macro-average over foreground classes; background excluded." +
+            self.metrics_label.setText(self.metrics_label.text() + ('\nMultilabel: macro-average over independent channels.' if self.model.config.multilabel else "\nMulticlass: macro-average over foreground classes; background excluded.") +
                 "\n" + " · ".join(f"{name}: IoU {metrics.get(f'class_{i}_iou', 0):.1%}, Dice {metrics.get(f'class_{i}_dice', 0):.1%}" for i, name in enumerate(self.model.config.class_names, 1)))
         if self.model.history and self.model.history[-1].get('workflow') == 'coverage':
             history = self.model.history[-1]
@@ -1810,9 +1937,20 @@ class QuickTrainWidget(QWidget):
         affine[:2, 0] = np.asarray(image_layer.data_to_world((1, 0))) - zero
         affine[:2, 1] = np.asarray(image_layer.data_to_world((0, 1))) - zero
         affine[:2, 2] = origin
-        mask = prediction_labels(prediction.probability, threshold)
         names = getattr(getattr(self.model, "config", None), "class_names", ())
+        multilabel = getattr(getattr(self.model, 'config', None), 'multilabel', False)
+        mask = prediction_labels(prediction.probability, threshold, multilabel=multilabel)
         from ._model_project import layer_id
+        if multilabel:
+            if mask.ndim != 3 or mask.shape[0] != len(names):
+                raise ValueError('Prediction channels do not match the loaded model definition.')
+            for channel, name in enumerate(names):
+                self.viewer.add_labels(mask[channel], name=f'Model Training prediction — {image_layer.name} — {name}', affine=affine,
+                    metadata={'quick_train': dict(experimental=True, source=image_layer.name, source_id=layer_id(image_layer),
+                        origin_yx=list(prediction.origin), scope=scope, threshold=threshold, multilabel=True,
+                        channel_name=name, channel_index=channel, class_names=list(names), label_names={'0': 'background', '1': name})})
+            self._status(f'Added {len(names)} independent {mask.shape[-2]} × {mask.shape[-1]} channel masks. Overlaps are preserved; review each output before reuse.')
+            return
         self.viewer.add_labels(
             mask, name=f"Model Training {'preview' if scope == 'area' else 'prediction'} — {image_layer.name}", affine=affine,
             metadata={"quick_train": {"experimental": True, "source": image_layer.name, "source_id": layer_id(image_layer),

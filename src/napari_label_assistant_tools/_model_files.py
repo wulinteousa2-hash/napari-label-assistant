@@ -137,7 +137,7 @@ def verify_relocated_checkpoint(path, row, expected_config):
         payload = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
     except Exception as error:
         raise ValueError(f"Could not verify this checkpoint: {error}") from error
-    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2, 3):
+    if not isinstance(payload, dict) or payload.get("quick_train_version") not in (1, 2, 3, 4):
         raise ValueError("This is not a supported plugin checkpoint. Import the correct model instead.")
     identity = payload.get("identity", {})
     if identity.get("model_id") and identity["model_id"] != row["model_id"]:

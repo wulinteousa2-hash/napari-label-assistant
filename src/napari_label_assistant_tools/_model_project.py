@@ -46,13 +46,13 @@ def layer_id(layer):
     return metadata["id"]
 
 
-def add_task(viewer, name, definition, *, class_names=()):
+def add_task(viewer, name, definition, *, class_names=(), multilabel=False):
     if not name.strip() or not definition.strip():
         raise ValueError("Give the task a name and define which pixels count as the target.")
     state = project(viewer)
     from ._quick_train import QuickTrainConfig
-    QuickTrainConfig(class_names=class_names).validate()
-    task = {"id": uuid4().hex, "name": name.strip(), "target_definition": definition.strip(), "sources": {}, "class_names": list(class_names)}
+    QuickTrainConfig(class_names=class_names, multilabel=multilabel).validate()
+    task = {"id": uuid4().hex, "name": name.strip(), "target_definition": definition.strip(), "sources": {}, "class_names": list(class_names), 'multilabel': multilabel}
     state["tasks"].append(task)
     state["current_task"] = task["id"]
     notify_project(viewer)
@@ -66,7 +66,7 @@ def remember_model(viewer, model, *, task_id=None, path=None, select=True, name=
     identifier = identity.get("model_id") or uuid4().hex
     identity.update(model_id=identifier, task_id=identity.get("task_id") or task_id)
     task = next((t for t in state["tasks"] if t["id"] == identity.get("task_id")), None)
-    if task is not None and tuple(task.get("class_names", ())) != model.config.class_names:
+    if task is not None and (tuple(task.get("class_names", ())) != model.config.class_names or bool(task.get('multilabel', False)) != model.config.multilabel):
         # Loading a checkpoint with different semantics must never rewrite an
         # existing task or make its prior runs appear to use new classes.
         identity["task_id"] = uuid4().hex
@@ -74,7 +74,7 @@ def remember_model(viewer, model, *, task_id=None, path=None, select=True, name=
     if task is None and identity.get("task_id"):
         source = model.history[-1].get("source", {}) if model.history else {}
         task = {"id": identity["task_id"], "name": source.get("task_name", "Imported segmentation task"),
-                "target_definition": source.get("target_definition", "See imported model training history."), "sources": {}, "class_names": list(model.config.class_names)}
+                "target_definition": source.get("target_definition", "See imported model training history."), "sources": {}, "class_names": list(model.config.class_names), 'multilabel': model.config.multilabel}
         state["tasks"].append(task)
     # Every update is a new run/checkpoint revision; previous saved files remain valid.
     revision = uuid4().hex
@@ -272,7 +272,7 @@ def validate_project_state(state):
         if not isinstance(names, list):
             raise ValueError("Invalid task class definitions.")
         from ._quick_train import QuickTrainConfig
-        QuickTrainConfig(class_names=names).validate()
+        QuickTrainConfig(class_names=names, multilabel=task.get('multilabel', False)).validate()
     for row in state["models"]:
         if not isinstance(row.get("id"), str) or not isinstance(row.get("name"), str) or not isinstance(row.get("revision"), str) or not isinstance(row.get("spec"), dict):
             raise ValueError("Invalid model record.")

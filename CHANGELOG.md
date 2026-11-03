@@ -3,6 +3,37 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Name channels directly in **Manage channels…**, including an empty initial
+  setup. A one-image **Use mask layers as channels** shortcut fills names and
+  assignments from existing layers. Editable names retain mask assignments;
+  trained task definitions are protected by creating a new task when needed.
+- Add explicit per-channel **Binary 0/1 / Any nonzero ID** interpretation so
+  instance-label masks can be read as binary features without rewriting pixels.
+  Guide empty-name preparation into channel setup instead of a validation dead end.
+- Added **Separate masks — overlapping channels** task output mode alongside
+  existing binary and exclusive multiclass masks. Each named channel has an
+  independent 0/1 target; no extra background channel or winner-takes-all merge
+  removes nested memberships such as cell and mitochondria at the same pixel.
+- Added a separate **Manage channels…** dialog with per-image mask assignments,
+  channel-specific complete/partial/unknown coverage, associated review masks,
+  prediction-review confirmations, and specimen/split groups. Store assignments
+  using stable layer IDs and retain them through workspace reloads.
+- Added bounded patch preparation, channel-masked BCE plus Dice loss, and
+  per-channel metrics. Unknown/unreviewed channels have zero loss and gradient.
+  One image uses spatial validation; multiple images use image/specimen groups.
+  Support model comparisons, k-fold evaluation, and final all-reviewed training.
+- Added independent sigmoid inference for current crops, entire images, and
+  drawn boxes. A shared adjustable threshold creates one aligned binary Labels
+  layer per named channel. Channel-aware previews retain overlaps and show
+  per-channel ignored pixels.
+- Added multilabel checkpoint format version 4, with explicit output mode and
+  channel order, legacy checkpoint loading, and Model Library relocation support.
+  Protect trained task meanings and reject incompatible continuation modes.
+
 ## [4.3.0] - 2026-11-02
 
 ### Added
