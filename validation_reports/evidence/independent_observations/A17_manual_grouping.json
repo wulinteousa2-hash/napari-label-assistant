@@ -1,0 +1,11 @@
+{
+  "training_ids": [
+    "id-0",
+    "id-1"
+  ],
+  "validation_ids": [
+    "id-2"
+  ],
+  "all_input_images_byte_identical": true,
+  "qualification": "Group labels are enforced, but biological independence/deduplication is not inferred."
+}

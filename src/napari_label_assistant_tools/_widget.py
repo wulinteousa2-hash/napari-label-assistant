@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import napari
 import numpy as np
+from ._coordinates import crop_transform_kwargs, matching_mask_transforms
 from scipy import ndimage as ndi
 try:
     from skimage.measure import euler_number
@@ -1108,8 +1109,7 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
         viewer.add_labels(
             result,
             name=target_name,
-            scale=ref.scale,
-            translate=ref.translate,
+            **crop_transform_kwargs(ref),
         )
         _set_status(f"Created {target_name} from {len(layers)} selected layer(s).")
         _refresh_layers()
@@ -1117,6 +1117,8 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
     def _apply() -> None:
         layers = _selected_layers()
         mode = mode_combo.currentText()
+        if layers and any(not matching_mask_transforms(layers[0], layer) for layer in layers[1:]):
+            raise ValueError("Selected masks must have matching spatial transforms before combining. Align the layers first.")
         if mode == "Reassign Label Value":
             if len(layers) != 1:
                 raise ValueError("Select exactly one layer for relabeling.")
@@ -1606,11 +1608,12 @@ def component_operations_widget(
     edit_form = QFormLayout(edit_group)
     editing_strategy_combo = QComboBox()
     editing_strategy_combo.addItem("Automatic (recommended)", "auto")
+    editing_strategy_combo.addItem("Grid tile editing (low memory)", "grid")
     editing_strategy_combo.addItem("Local-area editing", "tiled")
     editing_strategy_combo.addItem("Full-layer editing", "direct")
     editing_strategy_combo.setToolTip(
-        "Automatic uses a bounded in-memory editable area when a full editing "
-        "copy would be costly, and standard napari editing otherwise."
+        "Automatic opens large workspace masks as grid crops before loading them into napari. "
+        "Grid tile editing keeps full masks on disk. Local-area and Full-layer editing load complete source layers."
     )
     edit_tile_size_combo = QComboBox()
     edit_tile_size_combo.addItem(
@@ -1661,11 +1664,38 @@ def component_operations_widget(
     edit_form.addRow("", auto_save_edit_check)
     edit_form.addRow(edit_action_row)
     edit_form.addRow("Status", dynamic_edit_status)
+    from ._mask_tiles import tile_controls
+    grid_tiles = tile_controls(viewer, edit_group, editing_strategy_combo)
+    edit_form.addRow(grid_tiles)
+    def _show_edit_mode_controls():
+        from ._mask_tiles import manager_for
+        manager = manager_for(viewer)
+        grid_active = manager is not None and bool(manager.entries)
+        for field in (edit_tile_size_combo, show_edit_boundary_check, auto_save_edit_check, edit_action_row):
+            field.setVisible(not grid_active)
+            if field is not edit_action_row:
+                label = edit_form.labelForField(field)
+                if label is not None:
+                    label.setVisible(not grid_active)
+    grid_tiles._poll.timeout.connect(_show_edit_mode_controls)
+    _show_edit_mode_controls()
     annotate_layout.addWidget(edit_group)
     annotate_layout.addStretch(1)
 
     analysis_group = QGroupBox("Grid-addressed component review")
     analysis_layout = QVBoxLayout(analysis_group)
+    tile_scope = QLabel()
+    tile_scope.setWordWrap(True)
+    analysis_layout.addWidget(tile_scope)
+    def _tile_scope():
+        from ._mask_tiles import manager_for
+        manager = manager_for(viewer)
+        active = manager is not None and bool(manager.entries)
+        tile_scope.setVisible(active)
+        if active:
+            tile_scope.setText(f'Active tile R{manager.row:02d}C{manager.col:02d}. Measurements, component IDs and grid addresses below are local to this tile; objects may cross its boundary.')
+    grid_tiles._poll.timeout.connect(_tile_scope)
+    _tile_scope()
     analysis_note = QLabel(
         "Register full-mask locations with reproducible grid addresses. Find "
         "connected components, trace reviewer findings to exact cells, and "
@@ -1729,17 +1759,20 @@ def component_operations_widget(
 
     copy_target_combo = QComboBox()
     copy_target_combo.setToolTip(
-        "Labels layer that will receive copied components. It must have the "
-        "same 2D shape as the source layer."
+        "Receives selected components. Crops use original image coordinates; "
+        "manual selection prepares a matching canvas when needed, preserving the original."
     )
     form.addRow("Copy destination", copy_target_combo)
     manual_copy_target_check = QCheckBox("Choose destination manually")
     manual_copy_target_check.setToolTip(
-        "Choose a Labels layer or type a new name. Copy selected creates a "
-        "destination matching the source's 2D shape when needed. An existing "
-        "layer with a different shape is preserved."
+        "Choose a Labels layer or type a new name. Confirm an existing destination once. "
+        "Crops copy at their image coordinates; a matching destination is prepared "
+        "automatically when needed, with the original retained for recovery."
     )
     form.addRow("", manual_copy_target_check)
+    copy_destination_hint=QLabel()
+    copy_destination_hint.setWordWrap(True)
+    form.addRow(copy_destination_hint)
 
     click_select_check = QCheckBox("Select components from canvas")
     click_select_check.setToolTip(
@@ -1818,6 +1851,8 @@ def component_operations_widget(
         selected_component_ids=set(),
         syncing_table_selection=False,
         last_copy_target_name=None,
+        confirmed_copy_targets=set(),
+        restore_copy_destination=None,
         displayed_grid_layer_names=None,
         large_records=[],
         large_ids=[],
@@ -1915,14 +1950,19 @@ def component_operations_widget(
                 continue
             if layer is source_layer:
                 continue
+            role=layer.metadata.get('label_assistant_review',{}).get('role')
+            if not manual and (role in ('reviewed_regions','reviewed_annotations') or ' — original' in layer.name):
+                continue
             if (
                 not manual
                 and _supported_2d_mask_shape(getattr(layer, "data", None))
                 != source_shape
             ):
                 continue
+            if not manual and not matching_mask_transforms(source_layer, layer):
+                continue
             targets.append(layer)
-        return targets
+        return sorted(targets,key=lambda layer:layer.name.casefold()!='curated')
 
     def _refresh_copy_targets() -> None:
         current_copy = (
@@ -1948,6 +1988,14 @@ def component_operations_widget(
             elif manual_copy_target_check.isChecked():
                 copy_target_combo.setEditText(current_copy)
         copy_target_combo.blockSignals(False)
+        if copy_target_combo.count()==0 and not manual_copy_target_check.isChecked():
+            copy_destination_hint.setText('No matching destination yet. Click Copy selected to prepare Curated, or choose a destination manually.')
+        elif manual_copy_target_check.isChecked():
+            copy_destination_hint.setText('Confirm the destination once; matching is automatic.'+(
+                ' Right-click rows → Restore original destination before matching to undo the match.'
+                if state.restore_copy_destination is not None else ' Originals are retained if a matching replacement is needed.'))
+        else:
+            copy_destination_hint.setText('Copies use matching image coordinates.')
 
     def _set_manual_copy_target(enabled: bool) -> None:
         copy_target_combo.setEditable(enabled)
@@ -2536,6 +2584,7 @@ def component_operations_widget(
     def _copy_selected_to_layer(target_layer) -> None:
         source_layer = _target_layer()
         ids = _selected_component_ids()
+        index=state.fast_index
         if source_layer is None or not ids:
             raise ValueError("Select component rows to copy.")
         if state.analyzed_layer_name != source_layer.name or state.fast_index is None:
@@ -2547,33 +2596,71 @@ def component_operations_widget(
         source_shape = _supported_2d_mask_shape(source_layer.data)
         if large_controller.busy:
             raise ValueError("Wait for the current large-label operation to finish.")
-        if manual_copy_target_check.isChecked() and (
-            target_layer is None
-            or (
-                isinstance(target_layer, napari.layers.Labels)
-                and _supported_2d_mask_shape(target_layer.data) != source_shape
-            )
-        ):
-            name = copy_target_combo.currentText().strip()
+        from .workspace.service import _ensure_no_training, _ensure_no_library_scan
+        _ensure_no_training(viewer)
+        _ensure_no_library_scan(viewer)
+        if target_layer is None and not manual_copy_target_check.isChecked():
+            manual_copy_target_check.setChecked(True)
+            copy_target_combo.setEditText('Curated' if source_layer.name!='Curated' else 'Curated copy')
+            target_layer=_copy_target_layer()
+        note=''
+        if manual_copy_target_check.isChecked():
+            from . import _copy_destination as destination
+            name = target_layer.name if target_layer is not None else copy_target_combo.currentText().strip()
             if not name:
-                raise ValueError("Enter a name for the destination Labels layer.")
+                name='Curated' if source_layer.name!='Curated' else 'Curated copy'
             if source_shape is None:
                 raise ValueError("Copying requires a 2D source Labels layer.")
+            if target_layer is not None and not isinstance(target_layer,napari.layers.Labels):
+                raise ValueError('Choose a Labels destination, not an Image/Shapes/Points layer.')
+            records=[index.records[value] for value in ids]
+            offset=destination.fitted_offset(source_layer,target_layer,records) if target_layer is not None else None
             if target_layer is not None:
-                name = f"{target_layer.name} (source shape)"
-            source_data = source_layer.data
-            while isinstance(source_data, (list, tuple)):
-                source_data = source_data[0]
-            axes = [i for i, size in enumerate(source_data.shape) if size != 1]
-            target_layer = viewer.add_labels(
-                np.zeros(source_shape, dtype=source_data.dtype),
-                name=name,
-                scale=tuple(source_layer.scale[i] for i in axes),
-                translate=tuple(source_layer.translate[i] for i in axes),
-            )
+                key=destination.confirmation_key(target_layer)
+                if offset is None or key not in state.confirmed_copy_targets:
+                    if not destination.confirm_manual_destination(container,source_layer,target_layer,offset is None):
+                        _set_status('Copy cancelled. Choose another destination; no layers or pixels were changed.')
+                        return
+                    state.confirmed_copy_targets.clear()
+                    state.confirmed_copy_targets.add(key)
+            if target_layer is None or offset is None:
+                from .workspace.service import _commit_pending_local_edits
+                _commit_pending_local_edits(viewer)
+                if state.fast_index is not index:
+                    raise ValueError('Pending edits were applied. Find components again before copying the changed source.')
+                target_layer,note,restore=destination.create_matching(viewer,source_layer,target_layer,name)
+                if restore is not None:
+                    state.restore_copy_destination=restore
+                offset=destination.fitted_offset(source_layer,target_layer,records)
+                state.confirmed_copy_targets.clear()
+                state.confirmed_copy_targets.add(destination.confirmation_key(target_layer))
             _refresh_targets()
             copy_target_combo.setCurrentText(target_layer.name)
             viewer.layers.selection.active = source_layer
+            exact_type=np.result_type(destination.array_data(source_layer).dtype,destination.full_data(target_layer).dtype).kind in 'ui'
+            if offset is not None and (target_layer.data.shape!=source_layer.data.shape or
+                                       not matching_mask_transforms(source_layer,target_layer) or not exact_type or
+                                       hasattr(target_layer,'_label_assistant_copy_prefill')):
+                first_written=[]
+                def finished(count,message):
+                    if message is None and first_written:
+                        destination.reveal_written_tile(source_layer,target_layer,first_written[0])
+                    destination.refresh_destination(target_layer)
+                    state.last_copy_target_name=target_layer.name
+                    _set_status(note+(message or f'Copied {count:,} pixels from {source_layer.name} to {target_layer.name} at original image coordinates.'))
+                    _refresh_copy_targets()
+                def write(slices,mask,values,placement,preserving):
+                    if preserving and not mask.any():
+                        return (0,f'Matching {target_layer.name}: checking existing mask chunks…')
+                    count=destination.write_region(viewer,target_layer,slices,mask,values,placement)
+                    if not preserving and not first_written and count:
+                        y=int(np.flatnonzero(mask.any(axis=1))[0])
+                        x=int(np.flatnonzero(mask[y])[0])
+                        first_written.append((slices[0].start+placement[0]+y,slices[1].start+placement[1]+x))
+                    return (0,f'Matching {target_layer.name}: retaining existing annotations in bounded chunks…') if preserving else count
+                large_controller.copy_regions(destination.copy_work(source_layer,index,ids,target_layer,offset),
+                    source_layer,target_layer,write,finished)
+                return
         if target_layer is None or not isinstance(target_layer, napari.layers.Labels):
             raise ValueError("Choose a valid destination labels layer.")
         if getattr(target_layer, "_label_assistant_library_indexing", False):
@@ -2585,14 +2672,15 @@ def component_operations_widget(
                 f"shape as {source_layer.name!r}: source={source_shape}, "
                 f"destination={target_shape}."
             )
-        if isinstance(state.fast_index, LargeComponentIndex):
-            index = state.fast_index
+        if not matching_mask_transforms(source_layer, target_layer):
+            raise ValueError("Copy destination must have matching spatial transforms. Align the layers first; no pixels were copied.")
+        if isinstance(index, LargeComponentIndex):
 
             def _after_large_copy(copied_pixels: int) -> None:
                 state.last_copy_target_name = str(target_layer.name)
                 viewer.layers.selection.active = source_layer
                 _set_status(
-                    f"Copied {len(ids)} component(s), {copied_pixels:,} pixels "
+                    note+f"Copied {len(ids)} component(s), {copied_pixels:,} pixels "
                     f"from {source_layer.name} to {target_layer.name}."
                 )
                 _refresh_targets()
@@ -2610,17 +2698,28 @@ def component_operations_widget(
         updated, copied_pixels = _copy_mask_components_to_target(
             source_layer.data,
             target_layer.data,
-            state.fast_index.component_id_map,
+            index.component_id_map,
             ids,
         )
         target_layer.data = updated
         state.last_copy_target_name = str(target_layer.name)
         viewer.layers.selection.active = source_layer
         _set_status(
-            f"Copied {len(ids)} component(s) ({copied_pixels} px) from {source_layer.name} "
+            note+f"Copied {len(ids)} component(s) ({copied_pixels} px) from {source_layer.name} "
             f"to {target_layer.name}. Source layer remains active."
         )
         _refresh_targets()
+
+    def _restore_copy_destination():
+        if state.restore_copy_destination is None:
+            raise ValueError('No automatically matched destination to restore.')
+        if large_controller.busy:
+            raise ValueError('Wait for the copy operation to finish before restoring its destination.')
+        target=state.restore_copy_destination()
+        state.restore_copy_destination=None
+        state.confirmed_copy_targets.clear()
+        _refresh_targets();copy_target_combo.setCurrentText(target.name)
+        _set_status(f'Restored original destination {target.name}. The copied result is retained as a separate layer.')
 
     def _show_component_context_menu(position) -> None:
         ids = _selected_component_ids()
@@ -2631,10 +2730,14 @@ def component_operations_widget(
             return
         menu = QMenu(component_table)
         copy_menu = menu.addMenu("Copy selected to")
-        targets = _eligible_copy_targets(source_layer)
+        targets = _eligible_copy_targets(source_layer,manual=manual_copy_target_check.isChecked())
         if not targets:
-            action = copy_menu.addAction("No same-size labels targets")
-            action.setEnabled(False)
+            action = copy_menu.addAction("Prepare matching Curated and copy")
+            def prepare_and_copy():
+                manual_copy_target_check.setChecked(True)
+                copy_target_combo.setEditText('Curated' if source_layer.name!='Curated' else 'Curated copy')
+                _run_safely(lambda:_copy_selected_to_layer(_copy_target_layer()))
+            action.triggered.connect(prepare_and_copy)
         else:
             if state.last_copy_target_name:
                 for target_layer in targets:
@@ -2657,6 +2760,10 @@ def component_operations_widget(
                         lambda: _copy_selected_to_layer(layer)
                     )
                 )
+        if state.restore_copy_destination is not None:
+            menu.addSeparator()
+            action=menu.addAction('Restore original destination before matching')
+            action.triggered.connect(lambda:_run_safely(_restore_copy_destination))
         menu.exec(component_table.viewport().mapToGlobal(position))
 
     component_table._context_menu_callback = _show_component_context_menu
@@ -2928,9 +3035,13 @@ def component_operations_widget(
     target_combo.currentIndexChanged.connect(lambda _idx: _on_target_changed())
     activity_poll_timer.timeout.connect(_poll_view_activity)
     viewer.layers.selection.events.active.connect(_on_active_layer_changed)
-    editing_strategy_combo.currentIndexChanged.connect(
-        lambda _idx: dynamic_edit_controller.sync(force=True)
-    )
+    def _editing_mode_changed(_index):
+        from ._mask_tiles import set_mode
+        def apply():
+            set_mode(viewer, editing_strategy_combo.currentData())
+            dynamic_edit_controller.sync(force=True)
+        _run_safely(apply)
+    editing_strategy_combo.currentIndexChanged.connect(_editing_mode_changed)
     edit_tile_size_combo.currentIndexChanged.connect(
         lambda _idx: dynamic_edit_controller.ensure_tile(force=True)
     )
@@ -2970,6 +3081,8 @@ def component_operations_widget(
     container._page_spin = page_spin
     container._analysis_progress = analysis_progress
     container._copy_target_combo = copy_target_combo
+    container._copy_destination_hint = copy_destination_hint
+    container._restore_copy_destination = _restore_copy_destination
     container._manual_copy_target_check = manual_copy_target_check
     container._click_select_check = click_select_check
     container._append_click_select_check = append_click_select_check
@@ -2980,6 +3093,7 @@ def component_operations_widget(
     container._small_component_size_spin = small_component_size_spin
     container._cancel_analysis_button = btn_cancel_analysis
     container._editing_strategy_combo = editing_strategy_combo
+    container._grid_tiles = grid_tiles
     container._edit_tile_size_combo = edit_tile_size_combo
     container._show_edit_boundary_check = show_edit_boundary_check
     container._auto_save_edit_check = auto_save_edit_check

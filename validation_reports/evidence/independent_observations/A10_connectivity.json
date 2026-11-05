@@ -1,0 +1,23 @@
+{
+  "mask": [
+    [
+      1,
+      1,
+      1
+    ],
+    [
+      1,
+      0,
+      1
+    ],
+    [
+      1,
+      1,
+      0
+    ]
+  ],
+  "foreground_neighbors": 4,
+  "expected_dual_euler": 1,
+  "actual_euler": 0,
+  "qualification": "The implementation explicitly computes 8-foreground Euler while identifying components with 4-neighbor connectivity."
+}

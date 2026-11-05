@@ -8,6 +8,7 @@ from typing import Callable
 import numpy as np
 from qtpy.QtCore import QTimer
 from superqt.utils import create_worker
+from ._coordinates import matching_mask_transforms
 
 from ._large_components import (
     LargeAnalysisCancelled,
@@ -149,6 +150,8 @@ class LargeComponentController:
             )
         if tuple(target_data.shape) != index.shape:
             raise ValueError("Copy target shape does not match the analyzed mask.")
+        if not delete and not matching_mask_transforms(source_layer, target_layer):
+            raise ValueError("Copy destination must have matching spatial transforms. Align the layers first; no pixels were copied.")
         source_data = source_layer.data
         if not delete and isinstance(source_data, (list, tuple)):
             source_data = source_data[0]
@@ -236,7 +239,78 @@ class LargeComponentController:
 
         QTimer.singleShot(0, step)
 
+    def copy_regions(self, regions, source_layer, target_layer, write, on_done):
+        """Keep ROI copying responsive while preserving source/target locks."""
+        if self.busy:
+            raise ValueError('Wait for the current mask operation to finish.')
+        self.cancel_event=Event()
+        self.edit_active=True
+        self._editing_target=target_layer
+        self._editing_source=source_layer
+        self._copy_editable=[(layer,layer.editable) for layer in (source_layer,target_layer)]
+        for layer in (source_layer,target_layer):
+            layer._label_assistant_component_editing=True
+            layer.editable=False
+        self.analyze_button.setEnabled(False)
+        old_cancel_text=self.cancel_button.text()
+        self.cancel_button.setText('Cancel copy')
+        self.cancel_button.setVisible(True)
+        self.progress.setVisible(True);self.progress.setRange(0,0)
+        self.progress.setFormat('Copying selected components…')
+        iterator=iter(regions)
+        changed=0
+        def finish(message=None):
+            self.edit_active=False
+            for layer in (source_layer,target_layer):
+                layer._label_assistant_component_editing=False
+            for layer,editable in self._copy_editable:
+                layer.editable=editable
+            self._copy_editable=[]
+            self._editing_target=self._editing_source=None
+            self.cancel_event=None
+            if self.closed:
+                return
+            self.analyze_button.setEnabled(True)
+            self.cancel_button.setText(old_cancel_text)
+            self.cancel_button.setVisible(False);self.progress.setVisible(False)
+            try:
+                on_done(changed,message)
+            except Exception as error:
+                self.status((message or f'Wrote {changed:,} selected pixels.')+f' Preview refresh failed: {error}')
+        def step():
+            nonlocal changed
+            if self.closed:
+                finish();return
+            if self.cancel_event.is_set():
+                finish('Copy stopped by user; completed pixels are retained.');return
+            try:
+                item=next(iterator)
+            except StopIteration:
+                finish();return
+            except Exception as error:
+                finish(f'Copy stopped while reading masks: {error}. Completed pixels are retained.');return
+            try:
+                result=write(*item)
+                if isinstance(result,tuple):
+                    count,message=result
+                    changed+=count
+                    self.status(message)
+                else:
+                    changed+=result
+                    self.status(f'Copying at image coordinates: {changed:,} selected pixels written…')
+            except Exception as error:
+                finish(f'Copy stopped: {error}. Earlier pixels may have changed.');return
+            QTimer.singleShot(0,step)
+        QTimer.singleShot(0,step)
+
     def close(self) -> None:
+        for layer,editable in getattr(self,'_copy_editable',[]):
+            layer.editable=editable
+        self._copy_editable=[]
+        source=getattr(self,'_editing_source',None)
+        if source is not None:
+            source._label_assistant_component_editing=False
+            self._editing_source=None
         target = getattr(self, "_editing_target", None)
         if target is not None:
             target._label_assistant_component_editing = False

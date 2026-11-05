@@ -3,9 +3,40 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [5.3.0] - 2026-11-05
+
+### Fixed
+
+- Make manual component-copy destinations actionable: confirm an existing target
+  once, copy ROI masks at image coordinates, or prepare a matching canvas under
+  the selected name while preserving the original for restoration. Keep aligned
+  existing annotations, process larger transfers in cancellable chunks, and avoid
+  the disabled "no same-size targets" context-menu dead end. Prefer Curated and
+  protect review/coverage masks from automatic destination selection.
+
+- Preserve rotation, shear, and additional affine transforms across workspace
+  save/load, alongside existing scale/translation; keep older manifests readable.
+  Cropped predictions retain their exact original-image coordinates after reload.
+- Apply complete source transforms to local editable areas and boundaries,
+  including crop offsets and live source-transform changes, without resampling
+  image or label pixels.
+- Require matching spatial registration before copying components or combining
+  masks. Filter incompatible automatic copy destinations; explicitly confirmed
+  manual destinations can prepare a matching replacement with a retained original.
+  Preserve complete source transforms and validate ordinary and tiled copy paths.
 
 ### Added
+
+- Add managed **Grid tile editing (low memory)** through the existing editing
+  selector. Automatic workspace opening keeps large 2D Zarr masks outside napari
+  and displays only bounded crops for Curated and review layers.
+- Add tile-size/address navigation, Save & Next, independent completion progress,
+  exact global-coordinate writes including erasures, conflict/range guards and
+  bounded interrupted-write recovery. Remember the working tile and mode in the
+  workspace; portable saving retains complete masks.
+- Preserve full-mask dataset access while editing crops, adopt newly created
+  aligned masks into sparse full-size backing stores, and clearly scope tile
+  components/completion separately from global scientific review/library state.
 
 - Name channels directly in **Manage channels…**, including an empty initial
   setup. A one-image **Use mask layers as channels** shortcut fills names and

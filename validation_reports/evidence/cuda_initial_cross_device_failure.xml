@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="2.544" timestamp="2026-11-03T14:53:33.764326-06:00" hostname="spark-1ee2"><testcase classname="validation_reports.repro.test_cuda_smoke" name="test_cuda_forward_backward_and_inference_reload" time="2.533"><failure message="AssertionError: &#10;Not equal to tolerance rtol=0.0003, atol=0.0003&#10;&#10;Mismatched elements: 164 / 1024 (16%)&#10;First 5 mismatches are at indices:&#10; [0, 0, 1, 29]: 0.06680476665496826 (ACTUAL), 0.06713937968015671 (DESIRED)&#10; [0, 0, 2, 27]: 0.3055415749549866 (ACTUAL), 0.30500268936157227 (DESIRED)&#10; [0, 0, 3, 28]: 0.3588656187057495 (ACTUAL), 0.3580774664878845 (DESIRED)&#10; [0, 0, 5, 26]: 0.48826301097869873 (ACTUAL), 0.48899441957473755 (DESIRED)&#10; [0, 0, 5, 28]: 0.33760738372802734 (ACTUAL), 0.33714866638183594 (DESIRED)&#10;Max absolute difference among violations: 0.00206068&#10;Max relative difference among violations: 0.05997903&#10; ACTUAL: array([[[[ 0.342556,  0.350961,  0.346663, ...,  0.245372,  0.464758,&#10;           0.355493],&#10;         [ 0.331375,  0.344317,  0.349503, ...,  0.066805,  0.207055,...&#10; DESIRED: array([[[[ 0.342556,  0.350957,  0.346679, ...,  0.245559,  0.464618,&#10;           0.355493],&#10;         [ 0.33138 ,  0.344321,  0.349545, ...,  0.067139,  0.207155,...">tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/cuda-tests/test_cuda_forward_backward_and0')
+
+    def test_cuda_forward_backward_and_inference_reload(tmp_path):
+        import torch
+        from napari_label_assistant_tools._quick_train import QuickTrainConfig,QuickTrainModel,build_unet,save_model,load_model
+        if not torch.cuda.is_available(): pytest.skip('CUDA unavailable')
+        torch.manual_seed(71)
+        config=QuickTrainConfig(crop_pixels=32,input_pixels=32,base_channels=4,device='cuda')
+        network=build_unet(4).to('cuda').train()
+        x=torch.linspace(0,1,32*32).reshape(1,1,32,32).to('cuda')
+        optimizer=torch.optim.AdamW(network.parameters(),lr=.001)
+        optimizer.zero_grad();loss=network(x).square().mean();loss.backward();optimizer.step()
+        assert torch.isfinite(loss)
+        network.eval()
+        with torch.no_grad():
+            before=network(x).cpu().numpy(); repeated=network(x).cpu().numpy()
+        model=QuickTrainModel(network,config,32,{},'cuda');path=tmp_path/'cuda.pt'
+        save_model(model,path);loaded=load_model(path)
+        with torch.no_grad(): cpu=loaded.network(x.cpu()).numpy()
+&gt;       np.testing.assert_allclose(before,cpu,atol=3e-4,rtol=3e-4)
+E       AssertionError: 
+E       Not equal to tolerance rtol=0.0003, atol=0.0003
+E       
+E       Mismatched elements: 164 / 1024 (16%)
+E       First 5 mismatches are at indices:
+E        [0, 0, 1, 29]: 0.06680476665496826 (ACTUAL), 0.06713937968015671 (DESIRED)
+E        [0, 0, 2, 27]: 0.3055415749549866 (ACTUAL), 0.30500268936157227 (DESIRED)
+E        [0, 0, 3, 28]: 0.3588656187057495 (ACTUAL), 0.3580774664878845 (DESIRED)
+E        [0, 0, 5, 26]: 0.48826301097869873 (ACTUAL), 0.48899441957473755 (DESIRED)
+E        [0, 0, 5, 28]: 0.33760738372802734 (ACTUAL), 0.33714866638183594 (DESIRED)
+E       Max absolute difference among violations: 0.00206068
+E       Max relative difference among violations: 0.05997903
+E        ACTUAL: array([[[[ 0.342556,  0.350961,  0.346663, ...,  0.245372,  0.464758,
+E                  0.355493],
+E                [ 0.331375,  0.344317,  0.349503, ...,  0.066805,  0.207055,...
+E        DESIRED: array([[[[ 0.342556,  0.350957,  0.346679, ...,  0.245559,  0.464618,
+E                  0.355493],
+E                [ 0.33138 ,  0.344321,  0.349545, ...,  0.067139,  0.207155,...
+
+validation_reports/repro/test_cuda_smoke.py:25: AssertionError</failure></testcase></testsuite></testsuites>

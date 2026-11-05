@@ -1,0 +1,202 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_______________________ test_synthetic_pipeline[binary] ________________________
+
+mode = 'binary'
+make_napari_viewer = <function make_napari_viewer.<locals>.actual_factory at 0xf092fdc0d620>
+qtbot = <pytestqt.qtbot.QtBot object at 0xf092fe56a5d0>
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/synthetic-tests/test_synthetic_pipeline_binary0')
+
+    @pytest.mark.parametrize('mode', ['binary', 'multiclass', 'multilabel'])
+    def test_synthetic_pipeline(mode, make_napari_viewer, qtbot, tmp_path):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        import torch
+        config = QuickTrainConfig(crop_pixels=32, input_pixels=32, samples=8, steps=1,
+                                  base_channels=4, batch_size=2, device='cpu', seed=71,
+                                  class_names=() if mode=='binary' else ('axon','myelin') if mode=='multiclass' else ('whole region','axon'),
+                                  multilabel=mode=='multilabel')
+        source = make_napari_viewer()
+        originals = []
+        for seed in (71,72,73):
+            image, truth, outer, inner = synthetic(seed)
+            source.add_image(image, name=f'image {seed}')
+            target = (truth != 0).astype(np.uint8) if mode=='binary' else truth
+            source.add_labels(target, name=f'truth {seed}')
+            originals.extend([image.copy(), target.copy()])
+            if mode=='multilabel':
+                source.add_labels(outer, name=f'whole region {seed}')
+                source.add_labels(inner, name=f'axon {seed}')
+                originals.extend([outer.copy(), inner.copy()])
+        # Representative selection/copy acceptance on an isolated disposable mask.
+        raw = originals[1]
+        components = _build_fast_component_index(raw)
+        accepted = list(components.records)[:1]
+>       curated, changed = _copy_mask_components_to_target(raw, components, accepted, np.zeros_like(raw))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+validation_reports/repro/test_synthetic_workflow.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/napari_label_assistant_tools/_widget.py:806: in _copy_mask_components_to_target
+    target = np.asarray(_as_2d_mask(target_data))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+data = _FastComponentIndex(shape=(96, 128), component_id_map=array([[0, 0, 0, ..., 0, 0, 0],
+       [0, 0, 0, ..., 0, 0, 0],
+...box_y0=60, bbox_x0=22, bbox_y1=79, bbox_x1=47, grid_row=None, grid_col=None, grid_id='')}, deleted_component_ids=set())
+
+    def _as_2d_mask(data: np.ndarray) -> np.ndarray:
+        """Convert supported napari layer data into a 2D Labels array."""
+        arr = _resolve_layer_data_array(data)
+        if arr.ndim == 2:
+            return arr
+        squeezed = np.squeeze(arr)
+        if squeezed.ndim == 2:
+            return squeezed
+        if arr.ndim != 2:
+>           raise ValueError(
+                f"Expected a 2D Labels layer. Got shape={arr.shape}. "
+                "Select a 2D Labels layer rather than an RGB/RGBA or grayscale image."
+            )
+E           ValueError: Expected a 2D Labels layer. Got shape=(). Select a 2D Labels layer rather than an RGB/RGBA or grayscale image.
+
+src/napari_label_assistant_tools/_widget.py:570: ValueError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+_____________________ test_synthetic_pipeline[multiclass] ______________________
+
+mode = 'multiclass'
+make_napari_viewer = <function make_napari_viewer.<locals>.actual_factory at 0xf09222993ec0>
+qtbot = <pytestqt.qtbot.QtBot object at 0xf092fe588d10>
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/synthetic-tests/test_synthetic_pipeline_multic0')
+
+    @pytest.mark.parametrize('mode', ['binary', 'multiclass', 'multilabel'])
+    def test_synthetic_pipeline(mode, make_napari_viewer, qtbot, tmp_path):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        import torch
+        config = QuickTrainConfig(crop_pixels=32, input_pixels=32, samples=8, steps=1,
+                                  base_channels=4, batch_size=2, device='cpu', seed=71,
+                                  class_names=() if mode=='binary' else ('axon','myelin') if mode=='multiclass' else ('whole region','axon'),
+                                  multilabel=mode=='multilabel')
+        source = make_napari_viewer()
+        originals = []
+        for seed in (71,72,73):
+            image, truth, outer, inner = synthetic(seed)
+            source.add_image(image, name=f'image {seed}')
+            target = (truth != 0).astype(np.uint8) if mode=='binary' else truth
+            source.add_labels(target, name=f'truth {seed}')
+            originals.extend([image.copy(), target.copy()])
+            if mode=='multilabel':
+                source.add_labels(outer, name=f'whole region {seed}')
+                source.add_labels(inner, name=f'axon {seed}')
+                originals.extend([outer.copy(), inner.copy()])
+        # Representative selection/copy acceptance on an isolated disposable mask.
+        raw = originals[1]
+        components = _build_fast_component_index(raw)
+        accepted = list(components.records)[:1]
+>       curated, changed = _copy_mask_components_to_target(raw, components, accepted, np.zeros_like(raw))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+validation_reports/repro/test_synthetic_workflow.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/napari_label_assistant_tools/_widget.py:806: in _copy_mask_components_to_target
+    target = np.asarray(_as_2d_mask(target_data))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+data = _FastComponentIndex(shape=(96, 128), component_id_map=array([[0, 0, 0, ..., 0, 0, 0],
+       [0, 0, 0, ..., 0, 0, 0],
+...box_y0=60, bbox_x0=22, bbox_y1=79, bbox_x1=47, grid_row=None, grid_col=None, grid_id='')}, deleted_component_ids=set())
+
+    def _as_2d_mask(data: np.ndarray) -> np.ndarray:
+        """Convert supported napari layer data into a 2D Labels array."""
+        arr = _resolve_layer_data_array(data)
+        if arr.ndim == 2:
+            return arr
+        squeezed = np.squeeze(arr)
+        if squeezed.ndim == 2:
+            return squeezed
+        if arr.ndim != 2:
+>           raise ValueError(
+                f"Expected a 2D Labels layer. Got shape={arr.shape}. "
+                "Select a 2D Labels layer rather than an RGB/RGBA or grayscale image."
+            )
+E           ValueError: Expected a 2D Labels layer. Got shape=(). Select a 2D Labels layer rather than an RGB/RGBA or grayscale image.
+
+src/napari_label_assistant_tools/_widget.py:570: ValueError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+_____________________ test_synthetic_pipeline[multilabel] ______________________
+
+mode = 'multilabel'
+make_napari_viewer = <function make_napari_viewer.<locals>.actual_factory at 0xf09215d52480>
+qtbot = <pytestqt.qtbot.QtBot object at 0xf092fe589f10>
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/synthetic-tests/test_synthetic_pipeline_multil0')
+
+    @pytest.mark.parametrize('mode', ['binary', 'multiclass', 'multilabel'])
+    def test_synthetic_pipeline(mode, make_napari_viewer, qtbot, tmp_path):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        import torch
+        config = QuickTrainConfig(crop_pixels=32, input_pixels=32, samples=8, steps=1,
+                                  base_channels=4, batch_size=2, device='cpu', seed=71,
+                                  class_names=() if mode=='binary' else ('axon','myelin') if mode=='multiclass' else ('whole region','axon'),
+                                  multilabel=mode=='multilabel')
+        source = make_napari_viewer()
+        originals = []
+        for seed in (71,72,73):
+            image, truth, outer, inner = synthetic(seed)
+            source.add_image(image, name=f'image {seed}')
+            target = (truth != 0).astype(np.uint8) if mode=='binary' else truth
+            source.add_labels(target, name=f'truth {seed}')
+            originals.extend([image.copy(), target.copy()])
+            if mode=='multilabel':
+                source.add_labels(outer, name=f'whole region {seed}')
+                source.add_labels(inner, name=f'axon {seed}')
+                originals.extend([outer.copy(), inner.copy()])
+        # Representative selection/copy acceptance on an isolated disposable mask.
+        raw = originals[1]
+        components = _build_fast_component_index(raw)
+        accepted = list(components.records)[:1]
+>       curated, changed = _copy_mask_components_to_target(raw, components, accepted, np.zeros_like(raw))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+validation_reports/repro/test_synthetic_workflow.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/napari_label_assistant_tools/_widget.py:806: in _copy_mask_components_to_target
+    target = np.asarray(_as_2d_mask(target_data))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+data = _FastComponentIndex(shape=(96, 128), component_id_map=array([[0, 0, 0, ..., 0, 0, 0],
+       [0, 0, 0, ..., 0, 0, 0],
+...box_y0=60, bbox_x0=22, bbox_y1=79, bbox_x1=47, grid_row=None, grid_col=None, grid_id='')}, deleted_component_ids=set())
+
+    def _as_2d_mask(data: np.ndarray) -> np.ndarray:
+        """Convert supported napari layer data into a 2D Labels array."""
+        arr = _resolve_layer_data_array(data)
+        if arr.ndim == 2:
+            return arr
+        squeezed = np.squeeze(arr)
+        if squeezed.ndim == 2:
+            return squeezed
+        if arr.ndim != 2:
+>           raise ValueError(
+                f"Expected a 2D Labels layer. Got shape={arr.shape}. "
+                "Select a 2D Labels layer rather than an RGB/RGBA or grayscale image."
+            )
+E           ValueError: Expected a 2D Labels layer. Got shape=(). Select a 2D Labels layer rather than an RGB/RGBA or grayscale image.
+
+src/napari_label_assistant_tools/_widget.py:570: ValueError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=============================== warnings summary ===============================
+../../../miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: 16 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.13/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED validation_reports/repro/test_synthetic_workflow.py::test_synthetic_pipeline[binary]
+FAILED validation_reports/repro/test_synthetic_workflow.py::test_synthetic_pipeline[multiclass]
+FAILED validation_reports/repro/test_synthetic_workflow.py::test_synthetic_pipeline[multilabel]
+3 failed, 16 warnings in 4.60s

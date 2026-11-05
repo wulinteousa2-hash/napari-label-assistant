@@ -1,0 +1,114 @@
+{
+  "expected_world": [
+    [
+      13.90062869765829,
+      57.24955484733939
+    ],
+    [
+      15.71324427173159,
+      58.094791370820786
+    ],
+    [
+      13.176558584658181,
+      60.22204916549376
+    ],
+    [
+      16.80667031595084,
+      78.4654668501912
+    ]
+  ],
+  "actual_world": [
+    [
+      13.90062869765829,
+      57.24955484733939
+    ],
+    [
+      15.71324427173159,
+      58.094791370820786
+    ],
+    [
+      13.176558584658181,
+      60.22204916549376
+    ],
+    [
+      16.80667031595084,
+      78.4654668501912
+    ]
+  ],
+  "pixels_equal": true,
+  "stored_prediction_record": {
+    "layer_type": "Labels",
+    "name": "Model Training preview \u2014 Image",
+    "visible": true,
+    "opacity": 0.7,
+    "blending": "translucent",
+    "scale": [
+      2.0,
+      3.0
+    ],
+    "translate": [
+      7.0,
+      11.0
+    ],
+    "rotate": [
+      [
+        0.9063077870366499,
+        -0.42261826174069944
+      ],
+      [
+        0.42261826174069944,
+        0.9063077870366499
+      ]
+    ],
+    "shear": [
+      0.2
+    ],
+    "affine": [
+      [
+        1.0,
+        0.0,
+        6.90062869765829
+      ],
+      [
+        0.0,
+        1.0,
+        46.24955484733939
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "quick_train": {
+      "experimental": true,
+      "source": "Image",
+      "source_id": "972bac74d0bb4c53aa6f3d88ddde9f43",
+      "origin_yx": [
+        9,
+        13
+      ],
+      "threshold": 0.5,
+      "scope": "area",
+      "class_names": [],
+      "label_names": {
+        "0": "background"
+      }
+    },
+    "storage": {
+      "kind": "zarr",
+      "path": "prediction_label_assistant_data/001_Model_Training_preview_Image.ome.zarr",
+      "array_path": "s0",
+      "mode": "r+",
+      "shape": [
+        5,
+        7
+      ],
+      "chunks": [
+        5,
+        7
+      ],
+      "dtype": "uint8"
+    }
+  }
+}

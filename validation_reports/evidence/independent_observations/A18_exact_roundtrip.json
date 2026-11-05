@@ -1,0 +1,6 @@
+{
+  "image_sha256": "c6efccc90e8214f23299405a1e525f3ec1f95c3c1c72ecf2d24b4306e3f53faa",
+  "labels_sha256": "c617fe164bf49d37b34ee5ceeead80a50d3a5805ad90e5352eaa99fb6afb188a",
+  "exact": true,
+  "transforms": "scale and translation only; full affine tested separately in A01"
+}

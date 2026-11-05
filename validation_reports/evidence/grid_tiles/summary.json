@@ -1,0 +1,58 @@
+{
+  "timestamp_utc": "2026-11-05T14:44:37.852375+00:00",
+  "base_commit": "cb95a5e97717aca24db658c488fd810647955bcd",
+  "uncommitted_working_tree": true,
+  "suites": [
+    {
+      "name": "full_suite",
+      "collected": 333,
+      "passed": 333,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 227.932
+    },
+    {
+      "name": "final_widgets",
+      "collected": 29,
+      "passed": 29,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 28.88
+    },
+    {
+      "name": "library_workspace_integration",
+      "collected": 46,
+      "passed": 46,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 35.322
+    }
+  ],
+  "changed_file_sha256": {
+    "CHANGELOG.md": "45494caae3b036695528f4e3d35fe434fcb7d27253ef61335f262325be63a81f",
+    "README.md": "db1fa34654b60457809e31e20204be8bba8a1b25a3890e8961440e448a2041c6",
+    "src/napari_label_assistant_tools/_component_library.py": "e23951c26ef8bedddd0a1f6849613295751acf83cce4e074bc1700fc684f5373",
+    "src/napari_label_assistant_tools/_component_library_widget.py": "2b21e2820073962338b117639dfff36498067056e8b70388fd5bae4b97d5023b",
+    "src/napari_label_assistant_tools/_dataset_pairs.py": "1ef56c904827f1f931a89778082336929fdd9d9c05d742450ff7c926a1079779",
+    "src/napari_label_assistant_tools/_dynamic_edit.py": "b676a69a459f4a9c88a8319b1b316c63a0008f3064265647c1a5ee2c1c113424",
+    "src/napari_label_assistant_tools/_large_component_controller.py": "9846d776d99c8fbd2e06aa9ce9cd170814e2fb9aef5a20ba9375b1c78111cbcd",
+    "src/napari_label_assistant_tools/_multilabel_targets.py": "285df9f20e9b39ea2c7255e081b6cadbb2deb0041bcde3fdd7a60624ff541047",
+    "src/napari_label_assistant_tools/_quick_train_widget.py": "943b0bbb5b9d462e442831ddec56991f5844b3123c50679eebb8e5b3634dab6b",
+    "src/napari_label_assistant_tools/_reviewed_regions.py": "997fab8e2c36a6909fe03217a39b41a3b81bb3c630be744981fa9cf797612861",
+    "src/napari_label_assistant_tools/_widget.py": "947b21481ad9190c25c44665b3d5c547250a76522d76a9b687aba38024d5b7b5",
+    "src/napari_label_assistant_tools/_workspace_widget.py": "c6c7a38f13d25f793bba368c4c526e73d1ca7c50fd28f55c95af3d32ddf21808",
+    "src/napari_label_assistant_tools/workspace/service.py": "7ae07430c3883f641a1004bba6223d01c5f21560ca5b8987f2ec088795bf20f4",
+    "tests/test_label_assistant_widget.py": "84323e1be2b929dfe30ed2d3b783ff1fe0c22d7178b9a12541a4f8f17585196e",
+    "src/napari_label_assistant_tools/_mask_tiles.py": "3ba453279497450a7258f8cdc046032161812b92d67a0483d5c497a95a6d3d51",
+    "tests/test_mask_tiles.py": "d706f4d0d5f82ebef7bae8cf7f071778bd587e893a6b590cf460fdad22bd86c2"
+  },
+  "notes": [
+    "No production masks were opened or edited during implementation testing.",
+    "Final widget run covers compact-control visibility changes after the full suite.",
+    "Sparse local mask-only opening measurement is not a real low-end desktop benchmark.",
+    "Original audit evidence is preserved in its existing locations."
+  ]
+}

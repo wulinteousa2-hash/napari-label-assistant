@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
 from ._dynamic_edit import is_internal_layer
 from ._model_project import layer_id
 from ._quick_train import array_2d
+from ._mask_tiles import full_data, full_source
 
 
 def source_layers(viewer):
@@ -93,10 +94,10 @@ def resolve_pairs(viewer, definitions, *, minimum=2):
         shape = tuple(array_2d(image.data).shape)
         import numpy as np
         for layer in [truth] + ([mask] if mask is not None else []):
-            if tuple(array_2d(layer.data).shape) != shape:
+            if tuple(array_2d(full_data(layer)).shape) != shape:
                 raise ValueError(f"{image.name}: image, labels, and reviewed mask must have matching shapes.")
             if not np.allclose([image.data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))],
-                               [layer.data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))]):
+                               [full_source(layer).data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))]):
                 raise ValueError(f"{image.name}: image and annotation transforms must align.")
         if mask is not None:
             state = mask.metadata.get('label_assistant_review', {})

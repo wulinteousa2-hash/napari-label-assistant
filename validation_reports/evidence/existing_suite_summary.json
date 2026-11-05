@@ -1,0 +1,43 @@
+{
+  "started_utc": "2026-11-03T20:35:43.591606+00:00",
+  "elapsed_seconds": 143.95652917888947,
+  "collection_command": [
+    "/home/wteox/miniforge3/envs/napari-dev2/bin/python",
+    "-m",
+    "pytest",
+    "tests",
+    "--collect-only",
+    "-q",
+    "-p",
+    "no:cacheprovider"
+  ],
+  "collection_exit_code": 0,
+  "command": [
+    "/home/wteox/miniforge3/envs/napari-dev2/bin/python",
+    "-m",
+    "pytest",
+    "tests",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp=/tmp/nla-audit-cb95a5e/existing-tests",
+    "--junitxml=/home/wteox/Projects/napari/napari-label-assistant/validation_reports/evidence/existing_suite.xml",
+    "--durations=20"
+  ],
+  "exit_code": 0,
+  "environment_overrides": {
+    "QT_QPA_PLATFORM": "offscreen",
+    "PYTHONPATH": "/tmp/label-assistant-test-deps:/home/wteox/Projects/napari/napari-label-assistant/src",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "XDG_CONFIG_HOME": "/tmp/nla-audit-cb95a5e/config",
+    "XDG_CACHE_HOME": "/tmp/nla-audit-cb95a5e/cache",
+    "MPLCONFIGDIR": "/tmp/nla-audit-cb95a5e/mpl",
+    "OMP_NUM_THREADS": "2",
+    "MKL_NUM_THREADS": "2"
+  },
+  "total_cases": 289,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "passed": 289
+}

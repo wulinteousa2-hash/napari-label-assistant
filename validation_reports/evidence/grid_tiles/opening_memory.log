@@ -1,0 +1,36 @@
+WARNING: QOpenGLWidget is not supported on this platform.
+{
+  "source_shape": [
+    84175,
+    79966
+  ],
+  "source_dtypes": [
+    "uint32",
+    "uint8",
+    "uint8"
+  ],
+  "logical_source_mask_bytes": 40386828300,
+  "visible_layer_shapes": [
+    [
+      1024,
+      1024
+    ],
+    [
+      1024,
+      1024
+    ],
+    [
+      1024,
+      1024
+    ]
+  ],
+  "visible_pixel_buffer_bytes": 6291456,
+  "original_edit_snapshot_bytes": 6291456,
+  "rss_before_bytes": 384786432,
+  "rss_after_bytes": 481460224,
+  "rss_difference_bytes": 96673792,
+  "process_peak_rss_bytes": 479969280,
+  "opening_seconds": 0.45643320702947676,
+  "mode": "automatic -> grid",
+  "scope": "Sparse local Zarr, three masks only, Qt offscreen; no real-desktop latency or low-end hardware guarantee."
+}

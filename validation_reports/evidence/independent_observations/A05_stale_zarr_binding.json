@@ -1,0 +1,21 @@
+{
+  "expected_value": 9,
+  "actual_values": [
+    2
+  ],
+  "storage": {
+    "kind": "zarr",
+    "path": "first.zarr",
+    "array_path": "",
+    "mode": "r+",
+    "shape": [
+      12,
+      13
+    ],
+    "chunks": [
+      4,
+      5
+    ],
+    "dtype": "uint32"
+  }
+}

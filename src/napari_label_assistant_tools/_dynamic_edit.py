@@ -11,6 +11,8 @@ import numpy as np
 from napari.qt.threading import create_worker
 from qtpy.QtCore import QTimer
 
+from ._coordinates import apply_crop_transform, crop_transform_kwargs
+
 
 INTERNAL_LAYER_ROLE_KEY = "label_assistant_internal_role"
 COMPATIBLE_INTERNAL_ROLE_KEYS = (
@@ -192,6 +194,7 @@ class DynamicLabelsEditController:
         self.request_id = 0
         self.block_data_event = False
         self.worker = None
+        self._transform_source = None
         self._set_actions_enabled(False)
 
         self.view_timer = QTimer(parent)
@@ -221,6 +224,8 @@ class DynamicLabelsEditController:
         return "auto"
 
     def resolved_strategy(self, layer) -> str:
+        if hasattr(layer, '_label_assistant_mask_entry'):
+            return 'direct'  # Already a bounded crop; never create a second tile.
         return resolved_editing_strategy(
             self.requested_strategy(), layer.data
         )
@@ -267,6 +272,10 @@ class DynamicLabelsEditController:
             self.teardown(commit=True)
             with suppress(Exception):
                 layer.editable = True
+            if hasattr(layer, '_label_assistant_mask_entry'):
+                layer.editable = layer._label_assistant_mask_entry.bounds is not None
+                self.status('Grid tile ready. Paint directly; Save & Next writes edits to the full mask on disk.', 'ready')
+                return
             estimate = self._format_bytes(estimated_direct_edit_bytes(layer.data))
             prefix = (
                 "Automatic selected direct editing."
@@ -431,16 +440,12 @@ class DynamicLabelsEditController:
                 getattr(source, "selected_label", 1),
             )
         )
-        origin = np.asarray(
-            source.data_to_world((bounds.y0, bounds.x0)), dtype=float
-        ).ravel()[-2:]
-        scale = np.asarray(source.scale, dtype=float)[-2:]
+        transform = crop_transform_kwargs(source, (bounds.y0, bounds.x0))
         if not _layer_is_present(self.viewer, self.tile):
             self.tile = self.viewer.add_labels(
                 data,
                 name=f"{source.name} — editable area",
-                scale=scale,
-                translate=origin,
+                **transform,
                 metadata={
                     INTERNAL_LAYER_ROLE_KEY: EDIT_TILE_ROLE,
                     "source_layer_name": source.name,
@@ -456,8 +461,7 @@ class DynamicLabelsEditController:
             self.block_data_event = True
             try:
                 self.tile.data = data
-                self.tile.scale = scale
-                self.tile.translate = origin
+                apply_crop_transform(self.tile, source, (bounds.y0, bounds.x0))
             finally:
                 self.block_data_event = False
         with suppress(Exception):
@@ -470,6 +474,7 @@ class DynamicLabelsEditController:
                 self.tile.mode = previous_mode
         self.source = source
         self.bounds = bounds
+        self._watch_source_transform(source)
         self.original = np.asarray(data).copy()
         self.dirty = False
         self.dirty_bounds = None
@@ -843,8 +848,7 @@ class DynamicLabelsEditController:
                 edge_color="#35e86f",
                 face_color="transparent",
                 edge_width=3,
-                scale=np.asarray(self.source.scale)[-2:],
-                translate=np.asarray(self.source.translate)[-2:],
+                **crop_transform_kwargs(self.source),
                 metadata={
                     INTERNAL_LAYER_ROLE_KEY: EDIT_BOUNDARY_ROLE,
                     "source_layer_name": self.source.name,
@@ -853,7 +857,25 @@ class DynamicLabelsEditController:
             self.boundary.editable = False
         else:
             self.boundary.data = [rectangle]
+            apply_crop_transform(self.boundary, self.source)
         self.update_boundary_visibility()
+
+    def _watch_source_transform(self, source) -> None:
+        if self._transform_source is source:
+            return
+        if self._transform_source is not None:
+            for name in ("scale", "translate", "rotate", "shear", "affine"):
+                with suppress(Exception):
+                    getattr(self._transform_source.events, name).disconnect(self._source_transform_changed)
+        self._transform_source = source
+        if source is not None:
+            for name in ("scale", "translate", "rotate", "shear", "affine"):
+                getattr(source.events, name).connect(self._source_transform_changed)
+
+    def _source_transform_changed(self, event=None) -> None:
+        if self.tile is not None and self.source is not None and self.bounds is not None:
+            apply_crop_transform(self.tile, self.source, (self.bounds.y0, self.bounds.x0))
+            self._update_boundary()
 
     def update_boundary_visibility(self, *_args) -> None:
         if self.boundary is not None:
@@ -861,6 +883,7 @@ class DynamicLabelsEditController:
                 self.boundary.visible = self.show_boundary.isChecked()
 
     def teardown(self, *, commit: bool) -> None:
+        self._watch_source_transform(None)
         self.view_timer.stop()
         self.commit_timer.stop()
         self.request_id += 1

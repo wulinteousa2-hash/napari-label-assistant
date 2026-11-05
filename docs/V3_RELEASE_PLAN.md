@@ -6,8 +6,9 @@ Version 3.3.0 included Model Library, training-history
 comparisons, workspace-managed model files, and the earlier editing,
 review-navigation, deletion-recovery, and save-state improvements
 documented in [CHANGELOG.md](../CHANGELOG.md).
-This is a historical implementation record. Version 4.3.0 adds multi-image
-datasets, semantic multiclass tasks, and tiled whole-image/box inference. See
+This is a historical implementation record. Version 5.3.0 includes multi-image
+datasets, semantic multiclass and overlapping multilabel tasks, tiled inference,
+managed grid-mask editing, and recoverable destination matching. See
 [TRAINING.md](TRAINING.md) for the current workflow.
 The persistent library, combined supervision, workspace persistence, and local
 update paths are implemented. The user workflow is in [TRAINING.md](TRAINING.md).

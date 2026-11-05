@@ -131,6 +131,8 @@ def save_workspace(
             getattr(layer, "name", "")
         ):
             continue
+        from .._mask_tiles import full_source
+        layer = full_source(layer)
         try:
             record = _serialize_layer(
                 layer,
@@ -138,7 +140,7 @@ def save_workspace(
                 data_root=data_root,
                 layer_index=index,
                 optimize_large_images=bool(optimize_large_images),
-                copy_labels=copy_labels,
+                copy_labels=copy_labels or bool(getattr(layer, '_label_assistant_mask_temporary', False)),
                 complete_package=complete_package,
                 label_bindings=label_bindings,
                 library_bindings=library_bindings,
@@ -195,6 +197,11 @@ def save_workspace(
         "layers": records,
         "skipped_layers": skipped,
     }
+    from .._mask_tiles import manager_for, MODE
+    mask_manager = manager_for(viewer)
+    payload['mask_view'] = (mask_manager.state() if mask_manager is not None and mask_manager.entries
+                            else {'mode': getattr(viewer, MODE, 'auto'),
+                                  'editing_strategy': getattr(viewer, '_label_assistant_editing_strategy', 'auto')})
     from .._model_project import save_project
     payload["model_project"] = save_project(viewer, path, data_root, complete_package)
     spectral_state = _spectral_project_state(viewer, path, data_root)
@@ -221,6 +228,7 @@ def save_workspace(
         try:
             layer.data = array
             _remember_layer_storage(layer, reference)
+            layer._label_assistant_mask_temporary = False
         finally:
             layer._label_assistant_library_rebinding = False
     from .._component_library import KEY as LIBRARY_KEY
@@ -296,12 +304,16 @@ def load_workspace(
     previous_loading = bool(
         getattr(viewer, "_label_assistant_workspace_loading", False)
     )
+    from .._mask_tiles import loading_state, MANAGER
+    mask_state = loading_state(viewer, payload)
     viewer._label_assistant_workspace_loading = True
     try:
         if progress is not None:
             progress(0, total, "Preparing project…")
         if clear_existing:
             _clear_layers(viewer)
+            setattr(viewer, MANAGER, None)
+        viewer._label_assistant_pending_mask_state = mask_state
 
         for index, record in enumerate(load_records):
             name = str(record.get("name") or "layer")
@@ -311,7 +323,14 @@ def load_workspace(
                 layer = _restore_layer(viewer, record, manifest_path=path)
                 if layer is None:
                     raise WorkspaceError("record did not produce a layer")
-                _apply_common_state(layer, record, manifest_path=path)
+                try:
+                    if not hasattr(layer, '_label_assistant_mask_entry'):
+                        _apply_common_state(layer, record, manifest_path=path)
+                except Exception:
+                    # Do not leave an apparently loaded layer at an identity
+                    # transform if restoring its coordinate state failed.
+                    viewer.layers.remove(layer)
+                    raise
                 restored.append(str(getattr(layer, "name", name)))
             except Exception as exc:
                 skipped.append({"name": name, "reason": str(exc)})
@@ -322,6 +341,14 @@ def load_workspace(
         if progress is not None:
             progress(total, total, "Restoring viewer state…")
         _restore_viewer_state(viewer, payload)
+        from .._mask_tiles import manager_for
+        manager = manager_for(viewer)
+        if manager is not None and manager.entries:
+            manager.finish_loading()
+            manager.focus()
+        elif manager is not None:
+            manager.dispose()
+            setattr(viewer, MANAGER, None)
     finally:
         viewer._label_assistant_workspace_loading = previous_loading
     viewer._label_assistant_missing_workspace_layers = list(skipped)
@@ -737,6 +764,11 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
             return layer
         data = zarr.open_array(str(target), mode=mode)
         if layer_type == "Labels":
+            from .._mask_tiles import should_tile, manager_for, MaskTileManager
+            state = getattr(viewer, '_label_assistant_pending_mask_state', {'mode': 'auto'})
+            if should_tile(data, state['mode']):
+                manager = manager_for(viewer) or MaskTileManager(viewer, state)
+                return manager.add(record, data, {'path': store_path, 'array_path': array_path}, manifest_path)
             layer = viewer.add_labels(data, name=name)
             _remember_layer_storage(
                 layer, {"path": store_path, "array_path": array_path}
@@ -1208,6 +1240,16 @@ def _common_record(layer: Any, layer_type: str) -> dict[str, Any]:
             float(value) for value in _as_sequence(getattr(layer, "translate", ()))
         ],
     }
+    # Optional fields keep version-2 scale/translation-only manifests readable.
+    # Store the separate napari transforms, not a composite affine that would
+    # apply the recorded scale/translation a second time on reload.
+    for attribute in ("rotate", "shear"):
+        value = getattr(layer, attribute, None)
+        if value is not None:
+            record[attribute] = np.asarray(value, dtype=float).tolist()
+    affine = getattr(getattr(layer, "affine", None), "affine_matrix", None)
+    if affine is not None:
+        record["affine"] = np.asarray(affine, dtype=float).tolist()
     metadata = getattr(layer, "metadata", {}) or {}
     # Preserve spectral cube links and wavelengths across shared workspace saves.
     if isinstance(metadata, dict) and isinstance(metadata.get("spectral_assistant"), dict):
@@ -1251,10 +1293,17 @@ def _apply_common_state(layer: Any, record: dict[str, Any], *, manifest_path=Non
     for attribute in ("scale", "translate"):
         value = record.get(attribute)
         if value:
-            try:
-                setattr(layer, attribute, tuple(value))
-            except Exception:
-                pass
+            if not np.isfinite(np.asarray(value, dtype=float)).all():
+                raise WorkspaceError(f"Invalid {attribute} transform for {layer.name}.")
+            setattr(layer, attribute, tuple(value))
+    # Coordinate failures must be reported as load failures, never silently
+    # replaced by an identity transform on scientific data.
+    for attribute in ("rotate", "shear", "affine"):
+        if attribute in record:
+            value = np.asarray(record[attribute], dtype=float)
+            if not np.isfinite(value).all():
+                raise WorkspaceError(f"Invalid {attribute} transform for {layer.name}.")
+            setattr(layer, attribute, value)
     if str(record.get("layer_type")) == "Image":
         for attribute in ("contrast_limits", "gamma"):
             if attribute in record:
@@ -1323,6 +1372,10 @@ def _commit_pending_local_edits(viewer: Any) -> None:
                 "Pending local-area edits could not be applied to their "
                 "source Labels layer."
             )
+    from .._mask_tiles import manager_for
+    manager = manager_for(viewer)
+    if manager is not None:
+        manager.flush()
 
 
 def _restore_viewer_state(viewer: Any, payload: dict[str, Any]) -> None:

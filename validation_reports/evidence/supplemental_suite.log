@@ -1,0 +1,83 @@
+FF...                                                                    [100%]
+=================================== FAILURES ===================================
+_____________________ test_A19_copy_collision_has_recovery _____________________
+
+make_napari_viewer = <function make_napari_viewer.<locals>.actual_factory at 0xea7073f8e200>
+qtbot = <pytestqt.qtbot.QtBot object at 0xea707c176d50>
+
+    def test_A19_copy_collision_has_recovery(make_napari_viewer,qtbot):
+        from napari_label_assistant_tools._widget import component_operations_widget
+        viewer=make_napari_viewer()
+        data=np.zeros((16,20),np.uint16); data[2:5,4:8]=7
+        source=viewer.add_labels(data,name='candidate')
+        destination=np.zeros_like(data); destination[2:5,4:8]=9
+        target=viewer.add_labels(destination,name='curated')
+        widget=component_operations_widget(viewer);qtbot.addWidget(widget)
+        widget._target_combo.setCurrentText(source.name)
+        widget._analyze_button.click()
+        qtbot.waitUntil(lambda:widget._component_table.rowCount()>0)
+        widget._component_table.selectRow(0)
+        widget._copy_target_combo.setCurrentIndex(widget._copy_target_combo.findData(target))
+        widget._copy_button.click()
+        observe('A19_copy_collision',before_value=9,after_values=np.unique(target.data).tolist(),
+                deletion_undo_available=widget._undo_delete_button.isEnabled(),
+                status=widget._status_label.text(),scope='programmatic Qt button activation; no human usability study')
+>       assert np.all(target.data[2:5,4:8]==9) or widget._undo_delete_button.isEnabled(), 'Copy overwrote curated values without collision confirmation or plugin recovery'
+E       AssertionError: Copy overwrote curated values without collision confirmation or plugin recovery
+E       assert (np.False_ or False)
+E        +  where np.False_ = <function all at 0xea708f863470>(array([[7, 7, 7, 7],\n       [7, 7, 7, 7],\n       [7, 7, 7, 7]], dtype=uint16) == 9)
+E        +    where <function all at 0xea708f863470> = np.all
+E        +  and   False = <built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0>()
+E        +    where <built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0> = <PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0>.isEnabled
+E        +      where <PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0> = <PySide6.QtWidgets.QWidget(0xb4eea23ffa00) at 0xea7073fb78c0>._undo_delete_button
+
+validation_reports/repro/test_supplemental_audit.py:32: AssertionError
+----------------------------- Captured stderr call -----------------------------
+WARNING: QOpenGLWidget is not supported on this platform.
+------------------------------ Captured log call -------------------------------
+WARNING  vispy:_qt.py:235 QOpenGLWidget is not supported on this platform.
+_________ test_A20_single_pair_predictions_require_review_confirmation _________
+
+make_napari_viewer = <function make_napari_viewer.<locals>.actual_factory at 0xea704cbda200>
+qtbot = <pytestqt.qtbot.QtBot object at 0xea7074083990>
+
+    def test_A20_single_pair_predictions_require_review_confirmation(make_napari_viewer,qtbot):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        yy,xx=np.indices((128,160)); target=((xx//4+yy//8)%2).astype(np.uint8)
+        viewer=make_napari_viewer(); viewer.add_image((target*130+yy%7).astype(np.uint8))
+        viewer.add_labels(target,name='Model Training prediction — Image',metadata={'quick_train':{'experimental':True}})
+        widget=QuickTrainWidget(viewer);qtbot.addWidget(widget)
+        widget.annotation_combo.setCurrentIndex(widget.annotation_combo.findData('complete'))
+        for combo in (widget.crop_combo,widget.resolution_combo):
+            combo.addItem('32 px',32);combo.setCurrentIndex(combo.findData(32))
+        widget.prepare_button.click();qtbot.waitUntil(lambda:widget.worker is None,timeout=15000)
+        observe('A20_prediction_as_ground_truth',accepted=widget.prepared is not None,
+                status=widget.status_label.text(),explicit_review_confirmation_requested=False)
+>       assert widget.prepared is None,'Current-pair path accepted an experimental prediction without the explicit confirmation required by Manage pairs'
+E       AssertionError: Current-pair path accepted an experimental prediction without the explicit confirmation required by Manage pairs
+E       assert IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) is None
+E        +  where IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) = <napari_label_assistant_tools._quick_train_widget.QuickTrainWidget(0xb4eea1d467d0) at 0xea704728bbc0>.prepared
+
+validation_reports/repro/test_supplemental_audit.py:47: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=============================== warnings summary ===============================
+validation_reports/repro/test_supplemental_audit.py: 16 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.13/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+validation_reports/repro/test_supplemental_audit.py::test_A19_copy_collision_has_recovery
+validation_reports/repro/test_supplemental_audit.py::test_A19_copy_collision_has_recovery
+  /home/wteox/Projects/napari/napari-label-assistant/validation_reports/repro/test_supplemental_audit.py:22: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget=component_operations_widget(viewer);qtbot.addWidget(widget)
+
+validation_reports/repro/test_supplemental_audit.py::test_A20_single_pair_predictions_require_review_confirmation
+validation_reports/repro/test_supplemental_audit.py::test_A20_single_pair_predictions_require_review_confirmation
+  /tmp/label-assistant-test-deps/pytestqt/qt_compat.py:160: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    return obj.exec(*args, **kwargs)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED validation_reports/repro/test_supplemental_audit.py::test_A19_copy_collision_has_recovery
+FAILED validation_reports/repro/test_supplemental_audit.py::test_A20_single_pair_predictions_require_review_confirmation
+2 failed, 3 passed, 20 warnings in 2.73s

@@ -1,0 +1,96 @@
+{
+  "mode": "binary",
+  "config": {
+    "crop_pixels": 32,
+    "input_pixels": 32,
+    "samples": 8,
+    "steps": 1,
+    "batch_size": 2,
+    "base_channels": 4,
+    "device": "cpu",
+    "seed": 71,
+    "augment_rotations": true,
+    "augment_flips": true,
+    "augment_intensity": true,
+    "contrast_jitter": 0.1,
+    "brightness_jitter": 0.03,
+    "model_spec": null,
+    "class_names": [],
+    "multilabel": false
+  },
+  "shape": [
+    96,
+    128
+  ],
+  "training_steps": 24,
+  "train_image_ids": [
+    "synthetic-71",
+    "synthetic-72"
+  ],
+  "validation_image_ids": [
+    "synthetic-73"
+  ],
+  "patch_summary": {
+    "training": {
+      "total": 24,
+      "positive": 22,
+      "background": 2,
+      "reviewed_pixels": 24576
+    },
+    "validation": {
+      "total": 12,
+      "positive": 11,
+      "background": 1,
+      "reviewed_pixels": 12288
+    }
+  },
+  "retained_validation": {
+    "loss": 1.5587782859802246,
+    "precision": 0.10954522738630684,
+    "recall": 0.9733570159857904,
+    "dice": 0.19692749977540203,
+    "iou": 0.10921773791728949
+  },
+  "independent_reserved_patch_metrics": {
+    "dice": 0.19692749977540203,
+    "iou": 0.10921773791728949,
+    "counts": [
+      [
+        1096,
+        8909,
+        30
+      ]
+    ]
+  },
+  "full_image_resubstitution_metrics": [
+    {
+      "tp": 1109,
+      "fp": 8762,
+      "fn": 17,
+      "dice": 0.2016913703737383,
+      "iou": 0.11215614886731391
+    }
+  ],
+  "initial_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352"
+  ],
+  "final_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "5c64a4f23a02355bec6407ddf3ec03e652932a4bd47f095974518c09286d9496"
+  ],
+  "model_reload_max_absolute_difference": 0.0,
+  "initial_and_final_pixel_roundtrips": true,
+  "component_copy_pixels": 215,
+  "checkpoint_workspace_reference_relinking": "covered by existing suite; direct checkpoint reload exercised here",
+  "biological_generalization": "not tested; these scores are pipeline checks only"
+}

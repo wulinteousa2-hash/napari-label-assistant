@@ -1,6 +1,6 @@
 [project]
 name = "napari-label-assistant"
-version = "4.3.0"
+version = "5.3.0"
 description = "Performance-aware 2D mask annotation, component curation, and grid-addressed quality control"
 keywords = [
     "napari",

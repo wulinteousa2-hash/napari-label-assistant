@@ -1,0 +1,25 @@
+...                                                                      [100%]
+=============================== warnings summary ===============================
+../../../miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: 16 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.13/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+validation_reports/repro/test_independent_audit.py::test_A02_edit_tile_matches_rotated_sheared_source
+validation_reports/repro/test_independent_audit.py::test_A02_edit_tile_matches_rotated_sheared_source
+  /home/wteox/Projects/napari/napari-label-assistant/validation_reports/repro/test_independent_audit.py:108: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+
+validation_reports/repro/test_independent_audit.py::test_A02_edit_tile_matches_rotated_sheared_source
+validation_reports/repro/test_independent_audit.py::test_A02_edit_tile_matches_rotated_sheared_source
+validation_reports/repro/test_independent_audit.py::test_A04_copy_rejects_spatially_incompatible_destination
+validation_reports/repro/test_independent_audit.py::test_A04_copy_rejects_spatially_incompatible_destination
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/_pytest/python.py:167: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    result = testfunction(**testargs)
+
+validation_reports/repro/test_independent_audit.py::test_A04_copy_rejects_spatially_incompatible_destination
+validation_reports/repro/test_independent_audit.py::test_A04_copy_rejects_spatially_incompatible_destination
+  /home/wteox/Projects/napari/napari-label-assistant/validation_reports/repro/test_independent_audit.py:147: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3 passed, 18 deselected, 24 warnings in 3.15s

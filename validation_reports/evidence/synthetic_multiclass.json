@@ -1,0 +1,119 @@
+{
+  "mode": "multiclass",
+  "config": {
+    "crop_pixels": 32,
+    "input_pixels": 32,
+    "samples": 8,
+    "steps": 1,
+    "batch_size": 2,
+    "base_channels": 4,
+    "device": "cpu",
+    "seed": 71,
+    "augment_rotations": true,
+    "augment_flips": true,
+    "augment_intensity": true,
+    "contrast_jitter": 0.1,
+    "brightness_jitter": 0.03,
+    "model_spec": null,
+    "class_names": [
+      "axon",
+      "myelin"
+    ],
+    "multilabel": false
+  },
+  "shape": [
+    96,
+    128
+  ],
+  "training_steps": 24,
+  "train_image_ids": [
+    "synthetic-71",
+    "synthetic-72"
+  ],
+  "validation_image_ids": [
+    "synthetic-73"
+  ],
+  "patch_summary": {
+    "training": {
+      "total": 24,
+      "positive": 22,
+      "background": 2,
+      "reviewed_pixels": 24576
+    },
+    "validation": {
+      "total": 12,
+      "positive": 11,
+      "background": 1,
+      "reviewed_pixels": 12288
+    }
+  },
+  "retained_validation": {
+    "loss": 2.2463156978289285,
+    "precision": 0.07483306747643814,
+    "recall": 0.49920770202020204,
+    "dice": 0.073739149049067,
+    "iou": 0.038337036907918606,
+    "class_1_precision": 0.1036036036036036,
+    "class_1_recall": 0.04181818181818182,
+    "class_1_dice": 0.05958549222797927,
+    "class_1_iou": 0.030707610146862484,
+    "class_2_precision": 0.0460625313492727,
+    "class_2_recall": 0.9565972222222222,
+    "class_2_dice": 0.08789280587015473,
+    "class_2_iou": 0.04596646366897472
+  },
+  "independent_reserved_patch_metrics": {
+    "dice": 0.073739149049067,
+    "iou": 0.038337036907918606,
+    "counts": [
+      [
+        23,
+        199,
+        527
+      ],
+      [
+        551,
+        11411,
+        25
+      ]
+    ]
+  },
+  "full_image_resubstitution_metrics": [
+    {
+      "tp": 3,
+      "fp": 75,
+      "fn": 547,
+      "dice": 0.009554140127388535,
+      "iou": 0.0048
+    },
+    {
+      "tp": 574,
+      "fp": 11611,
+      "fn": 2,
+      "dice": 0.08996160175534833,
+      "iou": 0.04709936817920735
+    }
+  ],
+  "initial_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14"
+  ],
+  "final_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "05df043ca27a23b28b4762acbc139a416e724aa972aa646a771da15026ceced4"
+  ],
+  "model_reload_max_absolute_difference": 0.0,
+  "initial_and_final_pixel_roundtrips": true,
+  "component_copy_pixels": 101,
+  "checkpoint_workspace_reference_relinking": "covered by existing suite; direct checkpoint reload exercised here",
+  "biological_generalization": "not tested; these scores are pipeline checks only"
+}

@@ -1,0 +1,10 @@
+{
+  "before_value": 9,
+  "after_values": [
+    0,
+    7
+  ],
+  "deletion_undo_available": false,
+  "status": "Copied 1 component(s) (12 px) from candidate to curated. Source layer remains active.",
+  "scope": "programmatic Qt button activation; no human usability study"
+}

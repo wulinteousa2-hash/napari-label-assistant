@@ -1,0 +1,76 @@
+[
+  {
+    "shape": [
+      512,
+      768
+    ],
+    "dtype": "uint16",
+    "components": 84,
+    "tile_size": 256,
+    "source_bytes": 786432,
+    "cache_bytes": 4128,
+    "progress_events": 12,
+    "kind": "components-1",
+    "elapsed_seconds": 0.7795128689613193,
+    "rss_before_bytes": 30543872,
+    "rss_after_bytes": 295129088,
+    "peak_process_rss_bytes": 294682624,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "shape": [
+      1024,
+      1536
+    ],
+    "dtype": "uint16",
+    "components": 345,
+    "tile_size": 256,
+    "source_bytes": 3145728,
+    "cache_bytes": 16902,
+    "progress_events": 48,
+    "kind": "components-2",
+    "elapsed_seconds": 0.8578995650168508,
+    "rss_before_bytes": 30543872,
+    "rss_after_bytes": 295723008,
+    "peak_process_rss_bytes": 295538688,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "shape": [
+      2048,
+      3072
+    ],
+    "dtype": "uint16",
+    "components": 1334,
+    "tile_size": 256,
+    "source_bytes": 12582912,
+    "cache_bytes": 67040,
+    "progress_events": 192,
+    "kind": "components-4",
+    "elapsed_seconds": 1.0081626910250634,
+    "rss_before_bytes": 30531584,
+    "rss_after_bytes": 307081216,
+    "peak_process_rss_bytes": 306728960,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "kind": "logical100k",
+    "error": "Traceback (most recent call last):\n  File \"/home/wteox/Projects/napari/napari-label-assistant/validation_reports/repro/benchmark.py\", line 84, in <module>\n    print(json.dumps(run(sys.argv[1])))\n                     ^^^^^^^^^^^^^^^^\n  File \"/home/wteox/Projects/napari/napari-label-assistant/validation_reports/repro/benchmark.py\", line 47, in run\n    from napari_label_assistant_tools._dynamic_edit import DynamicEditController,TileBounds\nImportError: cannot import name 'DynamicEditController' from 'napari_label_assistant_tools._dynamic_edit' (/home/wteox/Projects/napari/napari-label-assistant/src/napari_label_assistant_tools/_dynamic_edit.py)\n",
+    "returncode": 1
+  },
+  {
+    "shape": [
+      1024,
+      1536
+    ],
+    "tiles": 40,
+    "probability_bytes": 6291456,
+    "scope": "constant network; tests stitching and allocation, not U-Net throughput",
+    "kind": "prediction",
+    "elapsed_seconds": 1.3725551730021834,
+    "rss_before_bytes": 30547968,
+    "rss_after_bytes": 786259968,
+    "peak_process_rss_bytes": 798212096,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  }
+]

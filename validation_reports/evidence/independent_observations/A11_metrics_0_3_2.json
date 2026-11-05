@@ -1,0 +1,15 @@
+{
+  "expected": {
+    "precision": 0.0,
+    "recall": 0.0,
+    "dice": 0.0,
+    "iou": 0.0
+  },
+  "actual": {
+    "precision": 0.0,
+    "recall": 0.0,
+    "dice": 0.0,
+    "iou": 0.0
+  },
+  "empty_convention": "zero, not perfect score, when both foreground sets are empty"
+}

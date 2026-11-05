@@ -1,0 +1,33 @@
+...........................                                              [100%]
+=============================== warnings summary ===============================
+../../../miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: 16 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.13/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+tests/test_coordinate_contract.py: 11 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/napari/layers/utils/_slice_input.py:194: UserWarning: Non-orthogonal slicing is being requested, but is not fully supported. Data is displayed without applying an out-of-slice rotation or shear component.
+    warnings.warn(
+
+tests/test_coordinate_contract.py::test_A02_local_crop_paint_boundary_and_live_transform_changes
+tests/test_coordinate_contract.py::test_A02_local_crop_paint_boundary_and_live_transform_changes
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_coordinate_contract.py:111: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+
+tests/test_coordinate_contract.py::test_A02_local_crop_paint_boundary_and_live_transform_changes
+tests/test_coordinate_contract.py::test_A02_local_crop_paint_boundary_and_live_transform_changes
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[False]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[False]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[True]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[True]
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/_pytest/python.py:167: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    result = testfunction(**testargs)
+
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[False]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[False]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[True]
+tests/test_coordinate_contract.py::test_A04_copy_filters_and_rejects_misaligned_targets_and_inherits_transform[True]
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_coordinate_contract.py:159: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+27 passed, 39 warnings in 31.40s

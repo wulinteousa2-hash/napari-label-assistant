@@ -1,0 +1,16 @@
+{
+  "remaining_names": [],
+  "result": {
+    "storage_state": "portable",
+    "path": "/tmp/nla-audit-cb95a5e/independent-tests/test_A06_failed_open_retains_p0/missing.label-assistant.json",
+    "restored_layers": [],
+    "skipped_layers": [
+      {
+        "name": "unavailable",
+        "reason": "/tmp/nla-audit-cb95a5e/independent-tests/test_A06_failed_open_retains_p0/absent.zarr does not exist"
+      }
+    ],
+    "imported_legacy": false
+  },
+  "qualified_scope": "service path; Workspace UI asks confirmation before removing existing layers"
+}

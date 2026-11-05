@@ -1,0 +1,12 @@
+{
+  "target_nonzero": 12,
+  "source_world": [
+    2.0,
+    4.0
+  ],
+  "target_world": [
+    22.0,
+    34.0
+  ],
+  "status": "Copied 1 component(s) (12 px) from source to shifted target. Source layer remains active."
+}

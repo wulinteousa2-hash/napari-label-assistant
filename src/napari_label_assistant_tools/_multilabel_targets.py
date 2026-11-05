@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
 from ._dataset_pairs import source_layers, is_prediction
 from ._model_project import layer_id
 from ._quick_train import array_2d
+from ._mask_tiles import full_data, full_source
 
 
 def suggest_channels(viewer, names, definitions=()):
@@ -83,9 +84,9 @@ def resolve_channels(viewer, names, definitions):
                 if state.get('image_id') != row['image_id'] or state.get('truth_id') != assignment['target_id']:
                     raise ValueError(f'{image.name}: reviewed coverage for {name!r} belongs to a different target.')
             for layer in [target] + ([mask] if mask is not None else []):
-                if tuple(array_2d(layer.data).shape) != shape or not np.allclose(
+                if tuple(array_2d(full_data(layer)).shape) != shape or not np.allclose(
                     [image.data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))],
-                    [layer.data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))]):
+                    [full_source(layer).data_to_world(p) for p in ((0, 0), (1, 0), (0, 1))]):
                     raise ValueError(f'{image.name}: channel {name!r} masks must match the image shape and transform.')
             targets.append((assignment, target, mask))
         if not any(target is not None for target in targets):

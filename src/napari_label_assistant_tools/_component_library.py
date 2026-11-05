@@ -368,11 +368,19 @@ class _RegionSource:
 
 
 def library_for(layer):
+    from ._mask_tiles import full_source
+    layer = full_source(layer)
     state = getattr(layer, "metadata", {}).get(KEY)
     return ComponentLibrary(state["path"]) if state else None
 
 
 def ensure_library(layer, path=None):
+    if hasattr(layer, '_label_assistant_mask_entry'):
+        from ._reviewed_regions import identity
+        identity(layer)
+        entry = layer._label_assistant_mask_entry
+        entry.sync_metadata()
+        return ensure_library(entry.source, path)
     library = library_for(layer)
     if library is not None:
         return library
@@ -402,6 +410,9 @@ def notify_library(layer):
 
 
 def annotation_changed(viewer, layer, bounds=None):
+    if hasattr(layer, '_label_assistant_mask_entry'):
+        layer._label_assistant_mask_entry.manager.schedule_flush()
+        return  # The manager invalidates global bounds only after a durable write.
     for widget in getattr(viewer, "_label_assistant_library_widgets", ()):
         if widget.layer is layer and widget.cancel_event is not None:
             widget.cancel_event.set()

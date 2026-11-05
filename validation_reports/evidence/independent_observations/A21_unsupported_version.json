@@ -1,0 +1,6 @@
+{
+  "rejected": true,
+  "error_type": "ValueError",
+  "message": "Choose a checkpoint saved by napari-label-assistant Model Training (formerly Quick Train).",
+  "scope": "loader rejection; native error text may still require user guidance"
+}

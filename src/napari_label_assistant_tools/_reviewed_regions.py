@@ -328,6 +328,8 @@ class ReviewedAreaWidget(QGroupBox):
                 raise ValueError("The source or grid changed. Click a cell again.")
         elif c.bounds is None or c.tile is None or c.source is None or c.loading:
             raise ValueError("Enable mouse review and click a grid cell, or load a local editable area first.")
+        if hasattr(truth, '_label_assistant_mask_entry'):
+            raise ValueError('Use grid-tile navigation to record completion. Full-image reviewed-cell coverage requires Local-area or Full-layer editing; tile completion alone is not training supervision.')
         if c.stroke_active:
             raise ValueError("Finish the current stroke first.")
         if truth.metadata.get(KEY, {}).get("role") in ("reviewed_regions", "reviewed_annotations"):

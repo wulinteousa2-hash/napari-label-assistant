@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="9" skipped="0" tests="21" time="7.179" timestamp="2026-11-03T14:40:21.029262-06:00" hostname="spark-1ee2"><testcase classname="validation_reports.repro.test_independent_audit" name="test_A01_prediction_world_coordinates_survive_workspace_roundtrip" time="1.444"><failure message="AssertionError: &#10;Not equal to tolerance rtol=1e-07, atol=1e-09&#10;&#10;Mismatched elements: 8 / 8 (100%)&#10;First 5 mismatches are at indices:&#10; [0, 0]: 0.0 (ACTUAL), 13.90062869765829 (DESIRED)&#10; [0, 1]: 0.0 (ACTUAL), 57.24955484733939 (DESIRED)&#10; [1, 0]: 1.0 (ACTUAL), 15.71324427173159 (DESIRED)&#10; [1, 1]: 0.0 (ACTUAL), 58.094791370820786 (DESIRED)&#10; [2, 0]: 0.0 (ACTUAL), 13.176558584658181 (DESIRED)&#10;Max absolute difference among violations: 72.46546685&#10;Max relative difference among violations: 1.&#10; ACTUAL: array([[0., 0.],&#10;       [1., 0.],&#10;       [0., 1.],&#10;       [4., 6.]])&#10; DESIRED: array([[13.900629, 57.249555],&#10;       [15.713244, 58.094791],&#10;       [13.176559, 60.222049],&#10;       [16.80667 , 78.465467]])">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed5086e0c0&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xfaed5120c3d0&gt;
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/independent-tests/test_A01_prediction_world_coor0')
+
+    def test_A01_prediction_world_coordinates_survive_workspace_roundtrip(make_napari_viewer, qtbot, tmp_path):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        viewer = make_napari_viewer()
+        image = viewer.add_image(np.arange(32*40, dtype=np.uint16).reshape(32, 40),
+                                 scale=(2, 3), translate=(7, 11), rotate=25, shear=(.2,))
+        widget = QuickTrainWidget(viewer); qtbot.addWidget(widget)
+        widget._prediction_done(image, .5, QuickTrainPrediction(np.ones((5, 7), np.float32), (9, 13)))
+        prediction = viewer.layers[-1]
+        points = [(0, 0), (1, 0), (0, 1), (4, 6)]
+        before = np.asarray([prediction.data_to_world(p) for p in points])
+        pixels = prediction.data.copy()
+        path = tmp_path / 'prediction.label-assistant.json'
+        save_workspace(viewer, path, complete_package=True)
+        restored = make_napari_viewer(); load_workspace(restored, path)
+        after = np.asarray([restored.layers[-1].data_to_world(p) for p in points])
+        observe('A01_affine_roundtrip', expected_world=before, actual_world=after,
+                pixels_equal=np.array_equal(restored.layers[-1].data[:], pixels),
+                stored_prediction_record=json.loads(path.read_text())['layers'][-1])
+&gt;       np.testing.assert_allclose(after, before, atol=1e-9)
+E       AssertionError: 
+E       Not equal to tolerance rtol=1e-07, atol=1e-09
+E       
+E       Mismatched elements: 8 / 8 (100%)
+E       First 5 mismatches are at indices:
+E        [0, 0]: 0.0 (ACTUAL), 13.90062869765829 (DESIRED)
+E        [0, 1]: 0.0 (ACTUAL), 57.24955484733939 (DESIRED)
+E        [1, 0]: 1.0 (ACTUAL), 15.71324427173159 (DESIRED)
+E        [1, 1]: 0.0 (ACTUAL), 58.094791370820786 (DESIRED)
+E        [2, 0]: 0.0 (ACTUAL), 13.176558584658181 (DESIRED)
+E       Max absolute difference among violations: 72.46546685
+E       Max relative difference among violations: 1.
+E        ACTUAL: array([[0., 0.],
+E              [1., 0.],
+E              [0., 1.],
+E              [4., 6.]])
+E        DESIRED: array([[13.900629, 57.249555],
+E              [15.713244, 58.094791],
+E              [13.176559, 60.222049],
+E              [16.80667 , 78.465467]])
+
+validation_reports/repro/test_independent_audit.py:101: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A02_edit_tile_matches_rotated_sheared_source" time="0.480"><failure message="AssertionError: &#10;Not equal to tolerance rtol=1e-07, atol=1e-09&#10;&#10;Mismatched elements: 6 / 8 (75%)&#10;First 5 mismatches are at indices:&#10; [1, 0]: 9.0 (ACTUAL), 8.732050807568877 (DESIRED)&#10; [1, 1]: 11.0 (ACTUAL), 12.0 (DESIRED)&#10; [2, 0]: 7.0 (ACTUAL), 6.019615242270663 (DESIRED)&#10; [2, 1]: 14.0 (ACTUAL), 13.898076211353317 (DESIRED)&#10; [3, 0]: 19.0 (ACTUAL), 8.568842025849234 (DESIRED)&#10;Max absolute difference among violations: 10.43115797&#10;Max relative difference among violations: 1.21733578&#10; ACTUAL: array([[ 7., 11.],&#10;       [ 9., 11.],&#10;       [ 7., 14.],&#10;       [19., 38.]])&#10; DESIRED: array([[ 7.      , 11.      ],&#10;       [ 8.732051, 12.      ],&#10;       [ 6.019615, 13.898076],&#10;       [ 8.568842, 43.082686]])">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed216a1a80&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xfaed5120ee90&gt;
+
+    def test_A02_edit_tile_matches_rotated_sheared_source(make_napari_viewer, qtbot):
+        viewer = make_napari_viewer()
+        source = viewer.add_labels(np.zeros((64, 80), np.uint32), scale=(2, 3),
+                                   translate=(7, 11), rotate=30, shear=(.2,))
+        widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+        widget._editing_strategy_combo.setCurrentIndex(widget._editing_strategy_combo.findData('tiled'))
+        controller = widget._dynamic_edit_controller
+        qtbot.waitUntil(lambda: controller.tile is not None, timeout=10000)
+        points = [(0, 0), (1, 0), (0, 1), (6, 9)]
+        expected = np.asarray([source.data_to_world((p[0]+controller.bounds.y0, p[1]+controller.bounds.x0)) for p in points])
+        actual = np.asarray([controller.tile.data_to_world(p) for p in points])
+        observe('A02_edit_transform', expected_world=expected, actual_world=actual)
+&gt;       np.testing.assert_allclose(actual, expected, atol=1e-9)
+E       AssertionError: 
+E       Not equal to tolerance rtol=1e-07, atol=1e-09
+E       
+E       Mismatched elements: 6 / 8 (75%)
+E       First 5 mismatches are at indices:
+E        [1, 0]: 9.0 (ACTUAL), 8.732050807568877 (DESIRED)
+E        [1, 1]: 11.0 (ACTUAL), 12.0 (DESIRED)
+E        [2, 0]: 7.0 (ACTUAL), 6.019615242270663 (DESIRED)
+E        [2, 1]: 14.0 (ACTUAL), 13.898076211353317 (DESIRED)
+E        [3, 0]: 19.0 (ACTUAL), 8.568842025849234 (DESIRED)
+E       Max absolute difference among violations: 10.43115797
+E       Max relative difference among violations: 1.21733578
+E        ACTUAL: array([[ 7., 11.],
+E              [ 9., 11.],
+E              [ 7., 14.],
+E              [19., 38.]])
+E        DESIRED: array([[ 7.      , 11.      ],
+E              [ 8.732051, 12.      ],
+E              [ 6.019615, 13.898076],
+E              [ 8.568842, 43.082686]])
+
+validation_reports/repro/test_independent_audit.py:116: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A03_large_copy_cannot_silently_wrap_label_values" time="0.439"><failure message="AssertionError: 300 wrapped to 44 in uint8 destination without rejection/promotion&#10;assert 44 not in [0, 44]">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed481c07c0&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xfaed51228d50&gt;
+
+    def test_A03_large_copy_cannot_silently_wrap_label_values(make_napari_viewer, qtbot):
+        from qtpy.QtWidgets import QPushButton, QProgressBar
+        from napari_label_assistant_tools._large_component_controller import LargeComponentController
+        viewer = make_napari_viewer()
+        source_data = np.zeros((8, 9), np.uint16); source_data[1:4, 2:6] = 300
+        source = viewer.add_labels(source_data)
+        target = viewer.add_labels(np.zeros(source_data.shape, np.uint8))
+        index = consume(build_large_component_index(source_data, tile_size=4))
+        status, done = [], []
+        controller = LargeComponentController(progress=QProgressBar(), cancel_button=QPushButton(),
+            analyze_button=QPushButton(), status=status.append, on_ready=lambda *args: None)
+        try:
+            controller.edit_components(index=index, source_layer=source, target_layer=target,
+                component_ids=list(index.records), delete=False, on_done=done.append)
+            qtbot.waitUntil(lambda: not controller.busy, timeout=10000)
+            values = np.unique(target.data).tolist()
+            observe('A03_large_copy_overflow', source_value=300, target_dtype=str(target.data.dtype),
+                    actual_values=values, completed_pixels=done, status=status)
+&gt;           assert 44 not in values, '300 wrapped to 44 in uint8 destination without rejection/promotion'
+E           AssertionError: 300 wrapped to 44 in uint8 destination without rejection/promotion
+E           assert 44 not in [0, 44]
+
+validation_reports/repro/test_independent_audit.py:137: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A04_copy_rejects_spatially_incompatible_destination" time="0.434"><failure message="AssertionError: Copy accepted equal shapes with different spatial transforms&#10;assert not np.True_&#10; +  where np.True_ = &lt;built-in method any of numpy.ndarray object at 0xfaed20691350&gt;()&#10; +    where &lt;built-in method any of numpy.ndarray object at 0xfaed20691350&gt; = array([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,..., 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],\n      dtype=uint16).any&#10; +      where array([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,..., 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],\n      dtype=uint16) = &lt;Labels layer 'shifted target' at 0xfaed2129d050&gt;.data">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed5061c180&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xfaed5122a890&gt;
+
+    def test_A04_copy_rejects_spatially_incompatible_destination(make_napari_viewer, qtbot):
+        viewer = make_napari_viewer()
+        data = np.zeros((16, 20), np.uint16); data[2:5, 4:8] = 7
+        source = viewer.add_labels(data, name='source')
+        target = viewer.add_labels(np.zeros_like(data), name='shifted target', translate=(20, 30))
+        widget = component_operations_widget(viewer); qtbot.addWidget(widget)
+        widget._target_combo.setCurrentText(source.name)
+        widget._analyze_button.click()
+        qtbot.waitUntil(lambda: widget._component_table.rowCount() &gt; 0)
+        widget._component_table.selectRow(0)
+        widget._copy_target_combo.setCurrentIndex(widget._copy_target_combo.findData(target))
+        widget._copy_button.click()
+        observe('A04_copy_alignment', target_nonzero=int(np.count_nonzero(target.data)),
+                source_world=source.data_to_world((2,4)), target_world=target.data_to_world((2,4)),
+                status=widget._status_label.text())
+&gt;       assert not target.data.any(), 'Copy accepted equal shapes with different spatial transforms'
+E       AssertionError: Copy accepted equal shapes with different spatial transforms
+E       assert not np.True_
+E        +  where np.True_ = &lt;built-in method any of numpy.ndarray object at 0xfaed20691350&gt;()
+E        +    where &lt;built-in method any of numpy.ndarray object at 0xfaed20691350&gt; = array([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,..., 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],\n      dtype=uint16).any
+E        +      where array([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,..., 0, 0, 0, 0, 0, 0, 0, 0, 0],\n       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],\n      dtype=uint16) = &lt;Labels layer 'shifted target' at 0xfaed2129d050&gt;.data
+
+validation_reports/repro/test_independent_audit.py:157: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A05_zarr_replacement_does_not_save_stale_original_store" time="0.890"><failure message="AssertionError: &#10;Arrays are not equal&#10;&#10;Mismatched elements: 156 / 156 (100%)&#10;First 5 mismatches are at indices:&#10; [0, 0]: 2 (ACTUAL), 9 (DESIRED)&#10; [0, 1]: 2 (ACTUAL), 9 (DESIRED)&#10; [0, 2]: 2 (ACTUAL), 9 (DESIRED)&#10; [0, 3]: 2 (ACTUAL), 9 (DESIRED)&#10; [0, 4]: 2 (ACTUAL), 9 (DESIRED)&#10;Max absolute difference among violations: 7&#10;Max relative difference among violations: 0.77777778&#10; ACTUAL: array([[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],&#10;       [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],&#10;       [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],...&#10; DESIRED: array([[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],&#10;       [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],&#10;       [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],...">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed4820e700&gt;
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/independent-tests/test_A05_zarr_replacement_does0')
+
+    def test_A05_zarr_replacement_does_not_save_stale_original_store(make_napari_viewer, tmp_path):
+        import zarr
+        first = zarr.open_array(str(tmp_path/'first.zarr'), mode='w', shape=(12,13), chunks=(4,5), dtype='uint32')
+        second = zarr.open_array(str(tmp_path/'second.zarr'), mode='w', shape=(12,13), chunks=(4,5), dtype='uint32')
+        first[:] = 2; second[:] = 9
+        viewer = make_napari_viewer(); layer = viewer.add_labels(first)
+        path = tmp_path/'case.label-assistant.json'
+        save_workspace(viewer, path)
+        layer.data = second
+        save_workspace(viewer, path)
+        restored = make_napari_viewer(); load_workspace(restored, path)
+        actual = restored.layers[0].data[:]
+        observe('A05_stale_zarr_binding', expected_value=9, actual_values=np.unique(actual),
+                storage=json.loads(path.read_text())['layers'][0]['storage'])
+&gt;       np.testing.assert_array_equal(actual, np.full((12,13),9,np.uint32))
+E       AssertionError: 
+E       Arrays are not equal
+E       
+E       Mismatched elements: 156 / 156 (100%)
+E       First 5 mismatches are at indices:
+E        [0, 0]: 2 (ACTUAL), 9 (DESIRED)
+E        [0, 1]: 2 (ACTUAL), 9 (DESIRED)
+E        [0, 2]: 2 (ACTUAL), 9 (DESIRED)
+E        [0, 3]: 2 (ACTUAL), 9 (DESIRED)
+E        [0, 4]: 2 (ACTUAL), 9 (DESIRED)
+E       Max absolute difference among violations: 7
+E       Max relative difference among violations: 0.77777778
+E        ACTUAL: array([[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+E              [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+E              [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],...
+E        DESIRED: array([[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
+E              [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
+E              [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],...
+
+validation_reports/repro/test_independent_audit.py:174: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A06_failed_open_retains_previous_live_layers" time="0.478"><failure message="AssertionError: All requested layers failed after current live layers were cleared&#10;assert False&#10; +  where False = any(&lt;generator object test_A06_failed_open_retains_previous_live_layers.&lt;locals&gt;.&lt;genexpr&gt; at 0xfaed21529b60&gt;)">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed484b72e0&gt;
+tmp_path = PosixPath('/tmp/nla-audit-cb95a5e/independent-tests/test_A06_failed_open_retains_p0')
+
+    def test_A06_failed_open_retains_previous_live_layers(make_napari_viewer, tmp_path):
+        viewer = make_napari_viewer(); previous = viewer.add_labels(np.full((12,13),7,np.uint16), name='unsaved')
+        path = tmp_path/'missing.label-assistant.json'
+        path.write_text(json.dumps(dict(format=WORKSPACE_FORMAT, version=2, layers=[
+            dict(layer_type='Labels', name='unavailable', storage=dict(kind='zarr', path='absent.zarr',array_path=''))])))
+        result = load_workspace(viewer, path)
+        observe('A06_failed_open', remaining_names=[x.name for x in viewer.layers], result=result,
+                qualified_scope='service path; Workspace UI asks confirmation before removing existing layers')
+&gt;       assert any(layer is previous for layer in viewer.layers), 'All requested layers failed after current live layers were cleared'
+E       AssertionError: All requested layers failed after current live layers were cleared
+E       assert False
+E        +  where False = any(&lt;generator object test_A06_failed_open_retains_previous_live_layers.&lt;locals&gt;.&lt;genexpr&gt; at 0xfaed21529b60&gt;)
+
+validation_reports/repro/test_independent_audit.py:185: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A07_current_pair_preparation_rejects_misaligned_labels" time="0.448"><failure message="AssertionError: Current-pair preparation accepted a world-shifted target&#10;assert IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) is None&#10; +  where IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) = &lt;napari_label_assistant_tools._quick_train_widget.QuickTrainWidget(0xbb2acf6b6470) at 0xfaed2118e280&gt;.prepared">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xfaed21818400&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xfaed24e1f090&gt;
+
+    def test_A07_current_pair_preparation_rejects_misaligned_labels(make_napari_viewer, qtbot):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        image, truth = striped()
+        viewer = make_napari_viewer(); viewer.add_image(image)
+        labels = viewer.add_labels(truth, translate=(9,11))
+        widget = QuickTrainWidget(viewer); qtbot.addWidget(widget)
+        widget.annotation_combo.setCurrentIndex(widget.annotation_combo.findData('complete'))
+        for combo in (widget.crop_combo,widget.resolution_combo):
+            combo.addItem('32 px',32); combo.setCurrentIndex(combo.findData(32))
+        widget.prepare_button.click()
+        qtbot.waitUntil(lambda: widget.worker is None, timeout=15000)
+        observe('A07_current_pair_alignment', accepted=widget.prepared is not None,
+                label_world=labels.data_to_world((0,0)), image_world=viewer.layers[0].data_to_world((0,0)),
+                status=widget.status_label.text())
+&gt;       assert widget.prepared is None, 'Current-pair preparation accepted a world-shifted target'
+E       AssertionError: Current-pair preparation accepted a world-shifted target
+E       assert IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) is None
+E        +  where IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) = &lt;napari_label_assistant_tools._quick_train_widget.QuickTrainWidget(0xbb2acf6b6470) at 0xfaed2118e280&gt;.prepared
+
+validation_reports/repro/test_independent_audit.py:202: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A08_dataset_fingerprint_changes_with_image_pixels" time="0.003"><failure message="AssertionError: Normal training dataset identity omitted actual image pixels&#10;assert '9196525a773636cc04cff93cc00e5d3b4c2c72c1163f00079afb8292eb583830' != '9196525a773636cc04cff93cc00e5d3b4c2c72c1163f00079afb8292eb583830'">def test_A08_dataset_fingerprint_changes_with_image_pixels():
+        from napari_label_assistant_tools._model_comparison import dataset_snapshot
+        image, truth = striped()
+        before = dataset_snapshot(consume(index_patches(image,truth,cfg())))['id']
+        changed = image.copy(); changed[3:6,7:12] += 1
+        after = dataset_snapshot(consume(index_patches(changed,truth,cfg())))['id']
+        observe('A08_snapshot_identity', before=before, after=after, raw_images_equal=False)
+&gt;       assert before != after, 'Normal training dataset identity omitted actual image pixels'
+E       AssertionError: Normal training dataset identity omitted actual image pixels
+E       assert '9196525a773636cc04cff93cc00e5d3b4c2c72c1163f00079afb8292eb583830' != '9196525a773636cc04cff93cc00e5d3b4c2c72c1163f00079afb8292eb583830'
+
+validation_reports/repro/test_independent_audit.py:212: AssertionError</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A09_components_agree_with_independent_bfs" time="0.004" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A10_topology_convention_matches_four_connected_foreground" time="0.011"><failure message="assert 0 == 1">def test_A10_topology_convention_matches_four_connected_foreground():
+        # Center background connects diagonally to outside: no hole under the dual
+        # 8-connected-background convention for 4-connected foreground.
+        mask=np.array([[1,1,1],[1,0,1],[1,1,0]],np.uint8)
+        actual=next(iter(_build_fast_component_index(mask).records.values())).euler
+        observe('A10_connectivity', mask=mask, foreground_neighbors=4, expected_dual_euler=1,
+                actual_euler=actual, qualification='The implementation explicitly computes 8-foreground Euler while identifying components with 4-neighbor connectivity.')
+&gt;       assert actual==1
+E       assert 0 == 1
+
+validation_reports/repro/test_independent_audit.py:237: AssertionError</failure></testcase><testcase classname="validation_reports.repro.test_independent_audit" name="test_A11_independent_metric_arithmetic[2-1-1]" time="0.000" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A11_independent_metric_arithmetic[0-0-0]" time="0.000" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A11_independent_metric_arithmetic[0-3-2]" time="0.000" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A11_independent_metric_arithmetic[7-0-0]" time="0.000" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A12_unknown_multilabel_pixels_have_zero_gradient" time="0.709" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A13_augmentation_geometry_is_joint_and_sources_unchanged" time="0.001" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A14_tile_edges_overlap_and_cancellation" time="0.002" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A15_huge_inference_allocation_guard" time="0.001" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A16_grid_boundaries_and_deletion_recovery" time="0.001" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A17_grouped_validation_requires_explicit_correct_specimen_ids" time="0.003" /><testcase classname="validation_reports.repro.test_independent_audit" name="test_A18_plain_roundtrip_preserves_uint64_labels_and_raw_intensity" time="1.105" /></testsuite></testsuites>

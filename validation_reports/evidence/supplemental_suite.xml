@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="5" time="2.732" timestamp="2026-11-03T14:51:55.845685-06:00" hostname="spark-1ee2"><testcase classname="validation_reports.repro.test_supplemental_audit" name="test_A19_copy_collision_has_recovery" time="1.548"><failure message="AssertionError: Copy overwrote curated values without collision confirmation or plugin recovery&#10;assert (np.False_ or False)&#10; +  where np.False_ = &lt;function all at 0xea708f863470&gt;(array([[7, 7, 7, 7],\n       [7, 7, 7, 7],\n       [7, 7, 7, 7]], dtype=uint16) == 9)&#10; +    where &lt;function all at 0xea708f863470&gt; = np.all&#10; +  and   False = &lt;built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0&gt;()&#10; +    where &lt;built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0&gt; = &lt;PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0&gt;.isEnabled&#10; +      where &lt;PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0&gt; = &lt;PySide6.QtWidgets.QWidget(0xb4eea23ffa00) at 0xea7073fb78c0&gt;._undo_delete_button">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xea7073f8e200&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xea707c176d50&gt;
+
+    def test_A19_copy_collision_has_recovery(make_napari_viewer,qtbot):
+        from napari_label_assistant_tools._widget import component_operations_widget
+        viewer=make_napari_viewer()
+        data=np.zeros((16,20),np.uint16); data[2:5,4:8]=7
+        source=viewer.add_labels(data,name='candidate')
+        destination=np.zeros_like(data); destination[2:5,4:8]=9
+        target=viewer.add_labels(destination,name='curated')
+        widget=component_operations_widget(viewer);qtbot.addWidget(widget)
+        widget._target_combo.setCurrentText(source.name)
+        widget._analyze_button.click()
+        qtbot.waitUntil(lambda:widget._component_table.rowCount()&gt;0)
+        widget._component_table.selectRow(0)
+        widget._copy_target_combo.setCurrentIndex(widget._copy_target_combo.findData(target))
+        widget._copy_button.click()
+        observe('A19_copy_collision',before_value=9,after_values=np.unique(target.data).tolist(),
+                deletion_undo_available=widget._undo_delete_button.isEnabled(),
+                status=widget._status_label.text(),scope='programmatic Qt button activation; no human usability study')
+&gt;       assert np.all(target.data[2:5,4:8]==9) or widget._undo_delete_button.isEnabled(), 'Copy overwrote curated values without collision confirmation or plugin recovery'
+E       AssertionError: Copy overwrote curated values without collision confirmation or plugin recovery
+E       assert (np.False_ or False)
+E        +  where np.False_ = &lt;function all at 0xea708f863470&gt;(array([[7, 7, 7, 7],\n       [7, 7, 7, 7],\n       [7, 7, 7, 7]], dtype=uint16) == 9)
+E        +    where &lt;function all at 0xea708f863470&gt; = np.all
+E        +  and   False = &lt;built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0&gt;()
+E        +    where &lt;built-in method isEnabled of PySide6.QtWidgets.QPushButton object at 0xea7046f498c0&gt; = &lt;PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0&gt;.isEnabled
+E        +      where &lt;PySide6.QtWidgets.QPushButton(0xb4eea24a34a0) at 0xea7046f498c0&gt; = &lt;PySide6.QtWidgets.QWidget(0xb4eea23ffa00) at 0xea7073fb78c0&gt;._undo_delete_button
+
+validation_reports/repro/test_supplemental_audit.py:32: AssertionError</failure></testcase><testcase classname="validation_reports.repro.test_supplemental_audit" name="test_A20_single_pair_predictions_require_review_confirmation" time="0.466"><failure message="AssertionError: Current-pair path accepted an experimental prediction without the explicit confirmation required by Manage pairs&#10;assert IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) is None&#10; +  where IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) = &lt;napari_label_assistant_tools._quick_train_widget.QuickTrainWidget(0xb4eea1d467d0) at 0xea704728bbc0&gt;.prepared">make_napari_viewer = &lt;function make_napari_viewer.&lt;locals&gt;.actual_factory at 0xea704cbda200&gt;
+qtbot = &lt;pytestqt.qtbot.QtBot object at 0xea7074083990&gt;
+
+    def test_A20_single_pair_predictions_require_review_confirmation(make_napari_viewer,qtbot):
+        from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+        yy,xx=np.indices((128,160)); target=((xx//4+yy//8)%2).astype(np.uint8)
+        viewer=make_napari_viewer(); viewer.add_image((target*130+yy%7).astype(np.uint8))
+        viewer.add_labels(target,name='Model Training prediction — Image',metadata={'quick_train':{'experimental':True}})
+        widget=QuickTrainWidget(viewer);qtbot.addWidget(widget)
+        widget.annotation_combo.setCurrentIndex(widget.annotation_combo.findData('complete'))
+        for combo in (widget.crop_combo,widget.resolution_combo):
+            combo.addItem('32 px',32);combo.setCurrentIndex(combo.findData(32))
+        widget.prepare_button.click();qtbot.waitUntil(lambda:widget.worker is None,timeout=15000)
+        observe('A20_prediction_as_ground_truth',accepted=widget.prepared is not None,
+                status=widget.status_label.text(),explicit_review_confirmation_requested=False)
+&gt;       assert widget.prepared is None,'Current-pair path accepted an experimental prediction without the explicit confirmation required by Manage pairs'
+E       AssertionError: Current-pair path accepted an experimental prediction without the explicit confirmation required by Manage pairs
+E       assert IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) is None
+E        +  where IndexedPatches(image=array([[  0,   0,   0, ..., 130, 130, 130],\n       [  1,   1,   1, ..., 131, 131, 131],\n       [ ...action': 0.25, 'seed': 42, 'fold_count': 1, 'folds': []}, class_names=(), sources=[], source_info=[], multilabel=False) = &lt;napari_label_assistant_tools._quick_train_widget.QuickTrainWidget(0xb4eea1d467d0) at 0xea704728bbc0&gt;.prepared
+
+validation_reports/repro/test_supplemental_audit.py:47: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.</failure></testcase><testcase classname="validation_reports.repro.test_supplemental_audit" name="test_A21_bad_checkpoints_are_rejected[corrupt]" time="0.651" /><testcase classname="validation_reports.repro.test_supplemental_audit" name="test_A21_bad_checkpoints_are_rejected[unsupported_version]" time="0.001" /><testcase classname="validation_reports.repro.test_supplemental_audit" name="test_A21_bad_checkpoints_are_rejected[incompatible_contract]" time="0.001" /></testsuite></testsuites>

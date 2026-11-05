@@ -1,0 +1,83 @@
+..............................................                           [100%]
+=============================== warnings summary ===============================
+../../../miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: 16 warnings
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:325: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.13/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    warnings.warn(
+
+tests/test_mask_tiles.py::test_tile_controls_and_existing_mode_selector
+tests/test_mask_tiles.py::test_tile_controls_and_existing_mode_selector
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_mask_tiles.py:184: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    viewer=make_napari_viewer();widget=component_operations_widget(viewer);qtbot.addWidget(widget)
+
+tests/test_mask_tiles.py::test_tile_controls_and_existing_mode_selector
+tests/test_mask_tiles.py::test_tile_controls_and_existing_mode_selector
+  /home/wteox/miniforge3/envs/napari-dev2/lib/python3.11/site-packages/_pytest/python.py:167: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    result = testfunction(**testargs)
+
+tests/test_mask_tiles.py::test_global_library_uses_full_store_and_global_dirty_bounds
+tests/test_mask_tiles.py::test_global_library_uses_full_store_and_global_dirty_bounds
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_mask_tiles.py:300: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget._locate(index,1)
+
+tests/test_workspace_widget.py::test_last_recent_project_is_not_assumed_active
+tests/test_workspace_widget.py::test_last_recent_project_is_not_assumed_active
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:26: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(viewer, settings=settings)
+
+tests/test_workspace_widget.py::test_removing_all_project_layers_detaches_save_target
+tests/test_workspace_widget.py::test_removing_all_project_layers_detaches_save_target
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:40: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(
+
+tests/test_workspace_widget.py::test_large_image_optimization_preference_is_explicit_and_persistent
+tests/test_workspace_widget.py::test_large_image_optimization_preference_is_explicit_and_persistent
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:57: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(
+
+tests/test_workspace_widget.py::test_large_image_optimization_preference_is_explicit_and_persistent
+tests/test_workspace_widget.py::test_large_image_optimization_preference_is_explicit_and_persistent
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:67: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    restored = WorkspaceManagerWidget(viewer, settings=settings)
+
+tests/test_workspace_widget.py::test_save_as_requests_local_mask_copy
+tests/test_workspace_widget.py::test_save_as_requests_local_mask_copy
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:112: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=_settings(tmp_path / "settings.ini"))
+
+tests/test_workspace_widget.py::test_save_failure_is_visible_and_preserves_project
+tests/test_workspace_widget.py::test_save_failure_is_visible_and_preserves_project
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:123: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=_settings(tmp_path / "settings.ini"))
+
+tests/test_workspace_widget.py::test_complete_package_setting_persists_and_reaches_save
+tests/test_workspace_widget.py::test_complete_package_setting_persists_and_reaches_save
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:140: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
+
+tests/test_workspace_widget.py::test_complete_package_setting_persists_and_reaches_save
+tests/test_workspace_widget.py::test_complete_package_setting_persists_and_reaches_save
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:143: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    restored = WorkspaceManagerWidget(viewer, settings=_settings(settings_path))
+
+tests/test_workspace_widget.py::test_partial_load_warns_about_missing_layers
+tests/test_workspace_widget.py::test_partial_load_warns_about_missing_layers
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:158: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+
+tests/test_workspace_widget.py::test_saved_state_is_independent_of_next_save_mode
+tests/test_workspace_widget.py::test_saved_state_is_independent_of_next_save_mode
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:203: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+
+tests/test_workspace_widget.py::test_incomplete_workspace_stays_protected_after_panel_recreation
+tests/test_workspace_widget.py::test_incomplete_workspace_stays_protected_after_panel_recreation
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:214: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / "settings.ini"))
+
+tests/test_workspace_widget.py::test_recent_entries_keep_paths_and_menu_disables_unavailable_files
+tests/test_workspace_widget.py::test_recent_entries_keep_paths_and_menu_disables_unavailable_files
+  /home/wteox/Projects/napari/napari-label-assistant/tests/test_workspace_widget.py:231: DeprecationWarning: viewer.camera is a deprecated attribute since 0.9.0. Use viewer.scene.camera instead. There is currently no planned date for removal of the legacy attribute.
+    widget = WorkspaceManagerWidget(make_napari_viewer(), settings=settings)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+46 passed, 46 warnings in 35.32s

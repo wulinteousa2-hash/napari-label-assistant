@@ -1,0 +1,12 @@
+{
+  "target_nonzero": 0,
+  "source_world": [
+    2.0,
+    4.0
+  ],
+  "target_world": [
+    22.0,
+    34.0
+  ],
+  "status": "Choose a valid destination labels layer."
+}

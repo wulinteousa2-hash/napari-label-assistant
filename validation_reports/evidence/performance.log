@@ -1,0 +1,96 @@
+[
+  {
+    "shape": [
+      512,
+      768
+    ],
+    "dtype": "uint16",
+    "components": 84,
+    "tile_size": 256,
+    "source_bytes": 786432,
+    "cache_bytes": 4128,
+    "progress_events": 12,
+    "operation_seconds": 0.01791193406097591,
+    "kind": "components-1",
+    "elapsed_seconds": 0.7828018108848482,
+    "rss_before_bytes": 30535680,
+    "rss_after_bytes": 295137280,
+    "peak_process_rss_bytes": 294850560,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "shape": [
+      1024,
+      1536
+    ],
+    "dtype": "uint16",
+    "components": 345,
+    "tile_size": 256,
+    "source_bytes": 3145728,
+    "cache_bytes": 16902,
+    "progress_events": 48,
+    "operation_seconds": 0.06825293996371329,
+    "kind": "components-2",
+    "elapsed_seconds": 0.8432247778400779,
+    "rss_before_bytes": 30552064,
+    "rss_after_bytes": 295677952,
+    "peak_process_rss_bytes": 295342080,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "shape": [
+      2048,
+      3072
+    ],
+    "dtype": "uint16",
+    "components": 1334,
+    "tile_size": 256,
+    "source_bytes": 12582912,
+    "cache_bytes": 67040,
+    "progress_events": 192,
+    "operation_seconds": 0.2646726150996983,
+    "kind": "components-4",
+    "elapsed_seconds": 1.03297897009179,
+    "rss_before_bytes": 30552064,
+    "rss_after_bytes": 307126272,
+    "peak_process_rss_bytes": 306855936,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "logical_shape": [
+      100000,
+      100000
+    ],
+    "logical_bytes": 40000000000,
+    "tile_shape": [
+      512,
+      512
+    ],
+    "tile_bytes": 1048576,
+    "stored_bytes": 727,
+    "operation_seconds": 0.0024462288711220026,
+    "scope": "one bounded edge read; no full analysis/render/inference performed",
+    "kind": "logical100k",
+    "elapsed_seconds": 0.7868119578342885,
+    "rss_before_bytes": 30552064,
+    "rss_after_bytes": 305995776,
+    "peak_process_rss_bytes": 305414144,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  },
+  {
+    "shape": [
+      1024,
+      1536
+    ],
+    "tiles": 40,
+    "probability_bytes": 6291456,
+    "operation_seconds": 0.05170309799723327,
+    "scope": "constant network; tests stitching and allocation, not U-Net throughput",
+    "kind": "prediction",
+    "elapsed_seconds": 1.3687056379858404,
+    "rss_before_bytes": 30556160,
+    "rss_after_bytes": 786296832,
+    "peak_process_rss_bytes": 798240768,
+    "measurement": "Linux process high-water RSS includes imports; cold independent subprocess"
+  }
+]

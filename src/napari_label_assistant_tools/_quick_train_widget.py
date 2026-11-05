@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
 from superqt.utils import create_worker
 
 from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY, is_internal_layer
+from ._mask_tiles import full_data
 from ._quick_train import (
     QuickTrainCancelled, QuickTrainConfig, array_2d, build_crop_atlas, crop_summary,
     load_model, predict_area, predict_region, prediction_labels, prepare_crops, save_model, train_prepared_unet,
@@ -1404,13 +1405,15 @@ class QuickTrainWidget(QWidget):
         return crops
 
     def _start_preparing(self):
+        from .workspace.service import _commit_pending_local_edits
+        _commit_pending_local_edits(self.viewer)
         if self._is_multilabel():
             return self._start_preparing_channels()
         if self._multiple_pairs():
             return self._start_preparing_pairs()
         image = self._layer(self.image_combo)
         truth = self._layer(self.truth_combo)
-        image_data, truth_data = array_2d(image.data), array_2d(truth.data)
+        image_data, truth_data = array_2d(image.data), array_2d(full_data(truth))
         if tuple(image_data.shape) != tuple(truth_data.shape):
             raise ValueError("Training image and ground truth must have the same 2D shape.")
         config = self._config()
@@ -1428,7 +1431,7 @@ class QuickTrainWidget(QWidget):
                 raise ValueError("Select the Curated ground-truth layer associated with these reviewed areas.")
         if reviewed_layer is truth:
             raise ValueError("Use a separate reviewed-region mask, not the target ground-truth layer.")
-        reviewed_data = array_2d(reviewed_layer.data) if reviewed_layer is not None else None
+        reviewed_data = array_2d(full_data(reviewed_layer)) if reviewed_layer is not None else None
         if partial:
             from ._component_library import library_for, TrainingSupervision
             library = library_for(truth)
@@ -1494,7 +1497,7 @@ class QuickTrainWidget(QWidget):
                 if library is not None and library.state()['pending']:
                     raise ValueError(f'{image.name}: update the component library after editing labels.')
                 state = mask.metadata.get(KEY, {})
-                reviewed = TrainingSupervision(array_2d(truth.data), array_2d(mask.data), library=library,
+                reviewed = TrainingSupervision(array_2d(full_data(truth)), array_2d(full_data(mask)), library=library,
                                                invalid_regions=state.get('invalid_regions', []),
                                                reviewed_areas=state.get('areas'))
             info = dict(image_id=row['image_id'], ground_truth_id=row['truth_id'],
@@ -1504,7 +1507,7 @@ class QuickTrainWidget(QWidget):
             if reviewed is not None and getattr(reviewed, 'library', None) is not None:
                 info['component_library'] = dict(source_id=reviewed.snapshot['source_id'],
                                                  revision=reviewed.snapshot['revision'], selected_ids=list(reviewed.selected))
-            pairs.append(dict(image=array_2d(image.data), ground_truth=array_2d(truth.data), reviewed=reviewed, info=info))
+            pairs.append(dict(image=array_2d(image.data), ground_truth=array_2d(full_data(truth)), reviewed=reviewed, info=info))
         signature, generation = self._signature(), self._generation
         self._lock_sources()
         self._status(f'Preparing {len(pairs)} pairs. Entire image/specimen groups are held out for validation.')
@@ -1546,7 +1549,7 @@ class QuickTrainWidget(QWidget):
                     channel_info.append(dict(name=name, coverage='unknown'))
                 else:
                     assignment, layer, mask = target
-                    channels.append(dict(data=array_2d(layer.data), reviewed=array_2d(mask.data) if mask is not None else None,
+                    channels.append(dict(data=array_2d(full_data(layer)), reviewed=array_2d(full_data(mask)) if mask is not None else None,
                                          foreground_mode=assignment.get('foreground_mode', 'binary')))
                     channel_info.append(dict(name=name, **assignment))
             pairs.append(dict(image=array_2d(image.data), channels=channels,
@@ -1929,14 +1932,8 @@ class QuickTrainWidget(QWidget):
         if not any(image_layer is layer for layer in self.viewer.layers):
             self._status("The prediction image was removed; preview discarded.")
             return
-        # Derive the complete 2D pixel-to-world transform, including rotation,
-        # shear and affine transforms, then shift it to the crop's data origin.
-        origin = np.asarray(image_layer.data_to_world(prediction.origin))
-        zero = np.asarray(image_layer.data_to_world((0, 0)))
-        affine = np.eye(3)
-        affine[:2, 0] = np.asarray(image_layer.data_to_world((1, 0))) - zero
-        affine[:2, 1] = np.asarray(image_layer.data_to_world((0, 1))) - zero
-        affine[:2, 2] = origin
+        from ._coordinates import crop_transform_kwargs
+        transform = crop_transform_kwargs(image_layer, prediction.origin)
         names = getattr(getattr(self.model, "config", None), "class_names", ())
         multilabel = getattr(getattr(self.model, 'config', None), 'multilabel', False)
         mask = prediction_labels(prediction.probability, threshold, multilabel=multilabel)
@@ -1945,14 +1942,14 @@ class QuickTrainWidget(QWidget):
             if mask.ndim != 3 or mask.shape[0] != len(names):
                 raise ValueError('Prediction channels do not match the loaded model definition.')
             for channel, name in enumerate(names):
-                self.viewer.add_labels(mask[channel], name=f'Model Training prediction — {image_layer.name} — {name}', affine=affine,
+                self.viewer.add_labels(mask[channel], name=f'Model Training prediction — {image_layer.name} — {name}', **transform,
                     metadata={'quick_train': dict(experimental=True, source=image_layer.name, source_id=layer_id(image_layer),
                         origin_yx=list(prediction.origin), scope=scope, threshold=threshold, multilabel=True,
                         channel_name=name, channel_index=channel, class_names=list(names), label_names={'0': 'background', '1': name})})
             self._status(f'Added {len(names)} independent {mask.shape[-2]} × {mask.shape[-1]} channel masks. Overlaps are preserved; review each output before reuse.')
             return
         self.viewer.add_labels(
-            mask, name=f"Model Training {'preview' if scope == 'area' else 'prediction'} — {image_layer.name}", affine=affine,
+            mask, name=f"Model Training {'preview' if scope == 'area' else 'prediction'} — {image_layer.name}", **transform,
             metadata={"quick_train": {"experimental": True, "source": image_layer.name, "source_id": layer_id(image_layer),
                                       "origin_yx": list(prediction.origin), "threshold": None if names else threshold, "scope": scope,
                                       "class_names": list(names), "label_names": {"0": "background", **{str(i): name for i, name in enumerate(names, 1)}}}},

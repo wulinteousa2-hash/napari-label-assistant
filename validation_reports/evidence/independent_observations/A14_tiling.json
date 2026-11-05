@@ -1,0 +1,17 @@
+{
+  "full_shape": [
+    43,
+    97
+  ],
+  "probability_min": 0.7999998927116394,
+  "probability_max": 0.8000001311302185,
+  "crop_shape": [
+    37,
+    86
+  ],
+  "crop_origin": [
+    3,
+    5
+  ],
+  "cancelled": true
+}

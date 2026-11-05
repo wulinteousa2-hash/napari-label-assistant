@@ -1,0 +1,15 @@
+{
+  "source_value": 300,
+  "target_dtype": "uint8",
+  "actual_values": [
+    0,
+    44
+  ],
+  "completed_pixels": [
+    12
+  ],
+  "status": [
+    "Updated 1 tile(s), 6 selected pixels.",
+    "Updated 2 tile(s), 12 selected pixels."
+  ]
+}

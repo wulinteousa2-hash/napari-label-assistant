@@ -210,7 +210,11 @@ class ComponentLibraryWidget(QGroupBox):
         if row >= len(records):
             return
         record = records[row]
-        position = self.layer.data_to_world((record["cy"], record["cx"]))
+        from ._mask_tiles import full_source
+        entry = getattr(self.layer, '_label_assistant_mask_entry', None)
+        if entry is not None:
+            entry.manager.go(int(record['cy'])//entry.manager.size, int(record['cx'])//entry.manager.size)
+        position = full_source(self.layer).data_to_world((record["cy"], record["cx"]))
         center = list(self.viewer.camera.center)
         center[-2:] = position[-2:]
         self.viewer.camera.center = tuple(center)
@@ -224,7 +228,8 @@ class ComponentLibraryWidget(QGroupBox):
             from .workspace.service import _commit_pending_local_edits
             _commit_pending_local_edits(self.viewer)
             self.library = ensure_library(self.layer)
-            source = array_2d(self.layer.data)
+            from ._mask_tiles import full_data
+            source = array_2d(full_data(self.layer))
             self.cancel_event = Event()
             self.layer._label_assistant_library_indexing = True
             self._locked = [(self.layer, self.layer.editable)]

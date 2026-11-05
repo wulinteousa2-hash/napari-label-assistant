@@ -1,0 +1,5 @@
+{
+  "accepted": true,
+  "status": "Dataset ready. Train now or inspect the optional patch preview. Every training patch is visited each epoch; validation regions are excluded from training.",
+  "explicit_review_confirmation_requested": false
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "existing",
+    "collected": 289,
+    "passed": 289,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 139.798
+  },
+  {
+    "name": "independent",
+    "collected": 21,
+    "passed": 12,
+    "failed": 9,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 7.179
+  },
+  {
+    "name": "supplemental",
+    "collected": 5,
+    "passed": 3,
+    "failed": 2,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 2.732
+  },
+  {
+    "name": "synthetic",
+    "collected": 3,
+    "passed": 3,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 16.146
+  },
+  {
+    "name": "cuda",
+    "collected": 1,
+    "passed": 1,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 2.64
+  }
+]

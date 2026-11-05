@@ -13,7 +13,23 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Development: overlapping multilabel masks
+## Version 5.3.0: Low-memory editing, safer copying, and overlapping masks
+
+- **Grid tile editing (low memory):** keep complete large Zarr masks on disk
+  and edit bounded grid crops. Save & Next and workspace reopening preserve
+  tile progress and full-mask coordinates. See the editing instructions below.
+- **Actionable copy destinations:** Copy prepares Curated when needed. Manual
+  destinations show a Copy/Cancel confirmation; matching replacements retain
+  the original with a restore action. Registered crops copy into full masks
+  without shrinking them.
+- **Coordinate integrity:** workspace round trips and local crops preserve
+  complete affine transforms. Older workspaces and checkpoints remain readable.
+- **Validation evidence:** see the [audit and follow-up reports](validation_reports/README.md)
+  for executed tests, remaining findings, and limits. Large logical dimensions
+  do not imply every operation fits in memory or that full-image performance
+  has been benchmarked on ordinary computers.
+
+### Overlapping multilabel masks
 
 Training now supports three annotation formats:
 
@@ -52,7 +68,7 @@ overlap but does not enforce containment or assign organelles to cell instances.
 Channel definitions, assignments, checkpoints, and output metadata persist with
 the workspace. Existing one-mask workflows remain available.
 
-## Version 4.3.0: Multiple-image datasets, multiclass training, and tiled inference
+## Multiple-image datasets, multiclass training, and tiled inference
 
 - **Train across image–label pairs:** in **1. Dataset**, choose **Multiple pairs**
   and open **Manage pairs…**. Select pairs, configure annotation coverage per
@@ -273,6 +289,46 @@ into the curated layer.
 
 ## 100,000 × 100,000-pixel workflows
 
+**Automatic mask loading now keeps large 2D Zarr masks outside napari's layer
+list.** Open the existing workspace normally: the multiscale image remains
+available, while Curated and review masks appear as editable 1024 × 1024 crops.
+The complete masks stay in their original on-disk stores; no manual crop files
+or final stitching step is needed.
+
+Under **Labels → Local Editing → Editing mode**, choose **Grid tile editing
+(low memory)** to force this behavior, **Automatic** to decide from mask size
+and available memory, or the existing **Local-area / Full-layer editing** modes
+to load whole source layers. The grid controls offer 512–4096-pixel tiles,
+zero-based row/column addresses, **Go**, **Previous**, **Save & Next**, and
+**Mark done**. Navigation shows the tile's global pixel bounds and saves changes
+before switching. Workspace Save remembers the mode, size, address and progress.
+
+Edits, including erasures, update only their changed bounding region in the full
+mask. Writes use a bounded recovery journal and reject conflicting external
+edits or out-of-range label values. Paint changes normally flush after a short
+idle delay, and saving/navigating/closing also flushes pending edits. If storage
+fails, retain the reported recovery files and resolve the error; unresolved
+conflicts are not silently overwritten. Undo history is local to the active tile
+and is reset when its pixel buffer is replaced.
+Use one editing session per mask store; conflict checks are not a multi-user
+locking protocol.
+
+**Include all data (portable)** still copies the complete source masks, not only
+the visible crops. New aligned masks matching the active tile are backed by
+sparse full-size stores and become durable with workspace Save. Full-image
+training reads the backing masks rather than mistaking the displayed crop for
+the dataset. Component inspection in grid mode describes only that tile;
+boundary objects may continue in neighboring tiles. The training component
+library still scans the full backing mask in bounded chunks, and selecting a
+library object loads its tile. The existing reviewed-cell coverage editor
+requires Local-area or Full-layer mode; its saved data is preserved. **Mark done** records navigation
+progress and does not automatically declare pixels reviewed for training.
+
+This path applies to 2D Zarr Labels stores. It reduces mask display/working memory;
+source chunk sizes, storage speed, image rendering and other analyses still
+affect responsiveness. It does not establish a hardware-independent performance
+guarantee or remove full-image inference's output-memory requirements.
+
 A 100,000 × 100,000 label mask contains 10 billion pixels. Local-area editing
 avoids creating another full-size editable copy: only a camera-centered region
 is loaded for interaction, and only changed pixels are written back.
@@ -352,13 +408,39 @@ or renamed. **Refresh layers** remains beside the shared Labels-layer selector
 as an always-visible fallback; it is no longer buried among component actions.
 
 Review & QC's **Copy destination** lists other Labels layers with the same 2D
-shape as the selected source. Enable **Choose destination manually** to list
-all other Labels layers or type a new layer name. **Copy selected** automatically
-creates a destination with the source's 2D shape, label data type, scale, and
-translation when the name is new. If the chosen Labels layer has a different
-shape, it creates and selects a new layer named **<destination> (source shape)**,
-preserving the existing layer. Subsequent copies use the new destination.
-The source cannot be its own destination.
+shape and matching spatial transform as the selected source, preferring **Curated**.
+Review/coverage masks and preserved originals are available only through manual
+selection, so they are not accidentally chosen as an annotation destination.
+
+Enable **Choose destination manually** to select any Labels layer or type a new
+name. The first copy to an existing manual destination shows both layer names
+and dimensions, with **Copy** and **Cancel**. Cancel changes no layers or pixels;
+repeated copies to the confirmed destination do not keep prompting.
+Switching to a different destination asks again.
+
+Crop-sized masks copy at their original image coordinates into a larger
+destination, including its on-disk full mask in grid mode. **Curated is not shrunk
+to the prediction crop.** Otherwise, a matching destination is prepared under the
+chosen name. The previous layer is preserved, hidden, as **<name> — original**.
+Existing overlapping annotations transfer where their pixel grids align exactly;
+larger transfers run in bounded, cancellable chunks. There is no silent
+resampling. Annotations outside the new canvas or on a different pixel grid remain
+available in the original layer.
+Stopping an in-progress transfer keeps completed pixels; the initial confirmation's
+Cancel button stops before any copying or matching. Existing model/review
+associations stay with the preserved original when a replacement is created.
+
+Right-click selected rows → **Restore original destination before matching** to
+restore the original layer and keep the copied result separately. If there is no
+compatible destination yet, **Copy selected** or the context menu's **Prepare
+matching Curated and copy** starts the matching workflow instead of showing a
+disabled “no same-size targets” dead end. The source cannot copy into itself.
+
+Workspace saves preserve these complete transforms, including crop offsets in
+prediction layers. Older workspaces with only scale and translation remain
+readable. Local editable areas and their boundaries inherit the source mapping;
+changing the source transform updates those helpers without resampling pixels.
+Combine operations also require aligned masks and preserve the reference transform.
 
 To clean isolated specks, run **Find components**, set **Remove below** (default:
 **2 pixels**), and click **Remove small components**. This sets every connected

@@ -1,0 +1,132 @@
+{
+  "mode": "multilabel",
+  "config": {
+    "crop_pixels": 32,
+    "input_pixels": 32,
+    "samples": 8,
+    "steps": 1,
+    "batch_size": 2,
+    "base_channels": 4,
+    "device": "cpu",
+    "seed": 71,
+    "augment_rotations": true,
+    "augment_flips": true,
+    "augment_intensity": true,
+    "contrast_jitter": 0.1,
+    "brightness_jitter": 0.03,
+    "model_spec": null,
+    "class_names": [
+      "whole region",
+      "axon"
+    ],
+    "multilabel": true
+  },
+  "shape": [
+    96,
+    128
+  ],
+  "training_steps": 24,
+  "train_image_ids": [
+    "synthetic-71",
+    "synthetic-72"
+  ],
+  "validation_image_ids": [
+    "synthetic-73"
+  ],
+  "patch_summary": {
+    "training": {
+      "total": 24,
+      "positive": 22,
+      "background": 2,
+      "reviewed_pixels": 45056
+    },
+    "validation": {
+      "total": 12,
+      "positive": 11,
+      "background": 1,
+      "reviewed_pixels": 22528
+    }
+  },
+  "retained_validation": {
+    "loss": 1.6933947602907817,
+    "precision": 0.0757051340027459,
+    "recall": 0.9981818181818182,
+    "dice": 0.13973237002847042,
+    "iou": 0.0757004635040032,
+    "class_1_precision": 0.10081475512579462,
+    "class_1_recall": 1.0,
+    "class_1_dice": 0.18316388775925171,
+    "class_1_iou": 0.10081475512579462,
+    "class_2_precision": 0.050595512879697165,
+    "class_2_recall": 0.9963636363636363,
+    "class_2_dice": 0.09630085229768913,
+    "class_2_iou": 0.05058617188221176
+  },
+  "independent_reserved_patch_metrics": {
+    "dice": 0.13973237002847042,
+    "iou": 0.0757004635040032,
+    "counts": [
+      [
+        1126,
+        10043,
+        0
+      ],
+      [
+        548,
+        10283,
+        2
+      ]
+    ]
+  },
+  "full_image_resubstitution_metrics": [
+    {
+      "tp": 1111,
+      "fp": 10930,
+      "fn": 15,
+      "dice": 0.16875522138680032,
+      "iou": 0.09215328467153285
+    },
+    {
+      "tp": 538,
+      "fp": 11165,
+      "fn": 12,
+      "dice": 0.08781522892352893,
+      "iou": 0.04592402902262057
+    }
+  ],
+  "initial_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b"
+  ],
+  "final_hashes": [
+    "a3bc64d22df650e398233217a9234c8a0779339baabf20cfd47e4eac9f3e74ce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b",
+    "0e3681bceae0f2a1cc89921baeac214685e2354a37a16c7a919a1551fa938cce",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b",
+    "e09a0afeeb92b6b8dd2eb7200d4a08c1c4cc073c46b1aa40c702166ef370ede6",
+    "b6ead7ee9d2e38140d901238fa5bed79434d12ec7794d4c2aa877bdf1cfe4d14",
+    "86189f1accf6740dfd123160eccb76fb896d3e54cc4dc74680e50f99a99e8352",
+    "0ab98bde2e3e280183209ffb5ab8d0d6d44cfe47c29d3098ed162727cf81a00b",
+    "c628d3591881c98f911c0450c030fdd6a5e8980701bbbd3673645c0be2b4b19f",
+    "3f4d54a6ab6a880f1aaeb110175a47478067409752599e4764ba7e1142a94c47"
+  ],
+  "model_reload_max_absolute_difference": 0.0,
+  "initial_and_final_pixel_roundtrips": true,
+  "component_copy_pixels": 101,
+  "checkpoint_workspace_reference_relinking": "covered by existing suite; direct checkpoint reload exercised here",
+  "biological_generalization": "not tested; these scores are pipeline checks only"
+}

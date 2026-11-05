@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-11-04T14:26:23.337662+00:00",
+  "base_commit": "cb95a5e97717aca24db658c488fd810647955bcd",
+  "working_tree_patch": true,
+  "suites": [
+    {
+      "name": "full_suite",
+      "tests": 316,
+      "passed": 316,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 188.096
+    },
+    {
+      "name": "coordinate_regressions",
+      "tests": 27,
+      "passed": 27,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 31.4
+    },
+    {
+      "name": "original_A01_A02_A04",
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 3.157
+    }
+  ],
+  "source_file_sha256": {
+    "CHANGELOG.md": "f1769fddef33fa1986ce052a18cd706da64052f2921231ecb8431d44c5b617bd",
+    "README.md": "a3b4440bedd215d255967ad2cde3b035d35acc13cec2d39783ae4ee7c65cc491",
+    "src/napari_label_assistant_tools/_dynamic_edit.py": "4c95b05819304ebe70ff8af1a3306e6e9469ed02c49b0158a5f68bcdc1c06280",
+    "src/napari_label_assistant_tools/_large_component_controller.py": "9846d776d99c8fbd2e06aa9ce9cd170814e2fb9aef5a20ba9375b1c78111cbcd",
+    "src/napari_label_assistant_tools/_quick_train_widget.py": "d6887be2eb1cfa334d47ca7ea59bcf2b9853191535af2182119cf3ed5d744fd9",
+    "src/napari_label_assistant_tools/_widget.py": "216b3868e351429dcd1607acf74e974f2820f492e45cbc61bbca7a67a6a4d598",
+    "src/napari_label_assistant_tools/workspace/service.py": "930185cff685b6a616dd0537d9b4dbd13befdf09f6d166da303ac47c38898ff3",
+    "tests/test_label_assistant_widget.py": "84323e1be2b929dfe30ed2d3b783ff1fe0c22d7178b9a12541a4f8f17585196e",
+    "src/napari_label_assistant_tools/_coordinates.py": "2da99b12ad483df5a35ca3b0eb6125b7fe5801b0ff3b4a91274a501b4cdbe18f",
+    "tests/test_coordinate_contract.py": "b989cf92714ba43ecf1513b1ff752067b904243c1a8811d09a0cfedc0c8d73dd"
+  },
+  "notes": [
+    "Original audit logs/observations were preserved.",
+    "One old positive-copy fixture was aligned to its source, replacing its formerly misaligned destination.",
+    "Full suite followed by focused coordinate tests covers the final singleton-plane guard.",
+    "ruff executable unavailable; no linter installation performed. git diff --check and Python parsing passed."
+  ]
+}

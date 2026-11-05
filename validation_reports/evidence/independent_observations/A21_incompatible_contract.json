@@ -1,0 +1,6 @@
+{
+  "rejected": true,
+  "error_type": "ValueError",
+  "message": "The checkpoint output channels do not match its class definitions.",
+  "scope": "loader rejection; native error text may still require user guidance"
+}

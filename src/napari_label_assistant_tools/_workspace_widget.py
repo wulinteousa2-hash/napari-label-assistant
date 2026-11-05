@@ -560,6 +560,14 @@ class WorkspaceManagerWidget(QWidget):
         return answer == QMessageBox.Yes
 
     def _has_pending_local_edits(self) -> bool:
+        from ._mask_tiles import manager_for
+        import numpy as np
+        manager = manager_for(self.viewer)
+        if manager is not None and (manager.stroke_active or any(
+            entry.pending_pixels is not None or (entry.original is not None and
+                (entry.layer.data.shape != entry.original.shape or np.any(entry.layer.data != entry.original)))
+            for entry in manager.entries)):
+            return True
         controllers = getattr(
             self.viewer, "_label_assistant_edit_controllers", ()
         )

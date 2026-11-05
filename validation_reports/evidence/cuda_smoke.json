@@ -1,0 +1,25 @@
+{
+  "device": "NVIDIA GB10",
+  "loss": 0.3336963951587677,
+  "shape": [
+    1,
+    1,
+    32,
+    32
+  ],
+  "gpu_repeat_max_abs": 0.0,
+  "gpu_cpu_reload_max_abs": 0.0020110607147216797,
+  "same_gpu_reload_max_abs": 0.0,
+  "strict_gpu_cpu_max_abs": 1.245737075805664e-05,
+  "default_cross_device_within_3e4_tolerance": false,
+  "default_device_threshold_flips": 0,
+  "default_cudnn_allow_tf32": true,
+  "default_matmul_allow_tf32": false,
+  "tolerance": {
+    "same_gpu_atol": 1e-06,
+    "same_gpu_rtol": 1e-06,
+    "strict_cross_device_atol": 0.0003,
+    "strict_cross_device_rtol": 0.0003
+  },
+  "scope": "one optimizer step, repeated and reloaded GPU forwards, CPU reload and TF32-disabled GPU inference; no long-run reproducibility claim"
+}
