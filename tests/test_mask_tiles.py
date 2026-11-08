@@ -32,8 +32,9 @@ def workspace(tmp_path, shape=(1050, 1530), mode='grid', row=0, col=0, size=512)
     return path, arrays
 
 
-def test_automatic_huge_open_never_passes_full_masks_to_napari(tmp_path,make_napari_viewer,monkeypatch):
-    path, arrays = workspace(tmp_path,shape=(84175,79966),mode='auto',size=1024)
+@pytest.mark.parametrize('mode', ['auto', 'full'])
+def test_automatic_huge_open_never_passes_full_masks_to_napari(tmp_path,make_napari_viewer,monkeypatch, mode):
+    path, arrays = workspace(tmp_path,shape=(84175,79966),mode=mode,size=1024)
     viewer = make_napari_viewer()
     original = type(viewer).add_labels
     calls=[]
@@ -98,17 +99,29 @@ def test_include_all_data_copies_entire_masks_and_rebinds_stores(tmp_path,make_n
     assert arrays[0][10,10]==0  # Save As isolates subsequent edits from originals.
     moved=tmp_path/'moved';destination.parent.rename(moved)
     restored=make_napari_viewer();load_workspace(restored,moved/destination.name)
-    for index,layer in enumerate(restored.layers):
+    from napari_label_assistant_tools._dynamic_edit import is_internal_layer
+    for index,layer in enumerate(layer for layer in restored.layers if not is_internal_layer(layer)):
         expected=originals[index]
         if index==0: expected[10,10]=37
         np.testing.assert_array_equal(full_data(layer)[:],expected)
 
 
-def test_plain_and_full_modes_keep_existing_loading_behavior(tmp_path,make_napari_viewer):
+@pytest.mark.parametrize('strategy', ['tiled', 'direct'])
+def test_legacy_full_mode_opens_bounded_without_rewriting_project(tmp_path,make_napari_viewer, strategy):
     path,_=workspace(tmp_path,mode='full')
+    payload = json.loads(path.read_text())
+    payload['mask_view']['editing_strategy'] = strategy
+    path.write_text(json.dumps(payload))
+    original = path.read_bytes()
     viewer=make_napari_viewer();load_workspace(viewer,path)
-    assert manager_for(viewer) is None
-    assert viewer.layers[0].data.shape==(1050,1530)
+    manager = manager_for(viewer)
+    assert manager is not None and manager.follow_enabled
+    assert viewer._label_assistant_editing_strategy == 'grid'
+    assert manager.entries[0].layer.data.shape == (512, 512)
+    assert manager.entries[0].source.data.shape == (1050, 1530)
+    assert path.read_bytes() == original
+    save_workspace(viewer, path)
+    assert json.loads(path.read_text())['mask_view']['mode'] == 'grid'
 
 
 def test_explicit_pre_open_choice_overrides_saved_mode(tmp_path,make_napari_viewer):
@@ -127,6 +140,10 @@ def test_explicit_pre_open_choice_overrides_saved_mode(tmp_path,make_napari_view
     set_mode(viewer,'tiled')
     assert manager_for(viewer) is None
     assert viewer.layers[0].data.shape==(1050,1530)
+    set_mode(viewer, 'direct')
+    load_workspace(viewer, path)
+    assert manager_for(viewer) is None
+    assert viewer._label_assistant_editing_strategy == 'direct'
 
 
 def test_conflicting_writer_is_not_overwritten(tmp_path,make_napari_viewer):
@@ -198,6 +215,7 @@ def test_tile_controls_and_existing_mode_selector(tmp_path,make_napari_viewer,qt
     load_workspace(viewer,path)
     manager=manager_for(viewer)
     controls=widget._grid_tiles
+    widget._edit_advanced_section.setChecked(True)
     qtbot.waitUntil(lambda:widget._edit_tile_size_combo.isHidden(),timeout=2000)
     controls._row.setValue(1);controls._col.setValue(1);controls._size.setCurrentIndex(controls._size.findData(512))
     controls._go.click()
@@ -206,6 +224,78 @@ def test_tile_controls_and_existing_mode_selector(tmp_path,make_napari_viewer,qt
     assert manager.progress['512:1:1']=='done'
     controls._next.click()
     assert (manager.row,manager.col)==(1,2)
+
+
+def test_new_workspace_uses_bounded_editing_without_mode_selection(tmp_path, make_napari_viewer):
+    viewer = make_napari_viewer()
+    viewer.add_labels(np.zeros((64, 80), dtype='uint32'), name='mask')
+    path = tmp_path / 'new.label-assistant.json'
+    save_workspace(viewer, path)
+    payload = json.loads(path.read_text())
+    assert payload['mask_view']['mode'] == 'grid'
+    restored = make_napari_viewer()
+    load_workspace(restored, path)
+    manager = manager_for(restored)
+    assert manager is not None and manager.follow_enabled
+    assert manager.entries[0].source.data.shape == (64, 80)
+
+
+def test_automatic_editing_works_with_advanced_collapsed(tmp_path, make_napari_viewer, qtbot, monkeypatch):
+    from napari_label_assistant_tools._mask_tiles import MaskTileManager
+    from napari_label_assistant_tools._widget import component_operations_widget
+
+    viewer = make_napari_viewer()
+    path = tmp_path / 'mask.zarr'
+    array = zarr.open_array(str(path), mode='w', shape=(80000, 80000),
+                            chunks=(256, 256), dtype='uint32')
+    manager = MaskTileManager(viewer)
+    manager.add({'name': 'mask'}, array, {'path': path, 'array_path': ''})
+    widget = component_operations_widget(viewer)
+    qtbot.addWidget(widget)
+    widget.show()
+    controls = widget._grid_tiles._local_editing
+    adapter = controls.adapter
+    def world_at(point):
+        center = np.asarray(adapter.camera.center)[-2:]
+        offset = np.asarray((point[1]-adapter.native.height()/2,
+                             point[0]-adapter.native.width()/2))
+        return center + offset/adapter.camera.zoom
+    monkeypatch.setattr(adapter, 'world_at', world_at)
+    monkeypatch.setattr(adapter, 'canvas_points',
+                        lambda points: np.asarray(points)[:, ::-1]*adapter.camera.zoom)
+    adapter.camera.center = (0, 10000, 10000)
+    adapter.camera.zoom = 2
+    qtbot.waitUntil(lambda: controls.follow.state == 'following', timeout=10000)
+    assert widget._editing_strategy_combo.currentData() == 'grid'
+    assert not widget._edit_advanced_section.isChecked()
+    assert widget._edit_advanced.isHidden()
+    assert not controls.manual_edit.isHidden() and controls.isVisible()
+    assert controls.auto_follow.isChecked()
+    assert manager.entries[0].bounds[0].start <= 10000 < manager.entries[0].bounds[0].stop
+    widget._edit_advanced_section.setChecked(True)
+    assert widget._edit_advanced.isVisible()
+    assert controls.auto_follow.isVisible()
+
+
+def test_saved_manual_follow_preference_is_preserved(tmp_path, make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._widget import component_operations_widget
+
+    path, _ = workspace(tmp_path)
+    payload = json.loads(path.read_text())
+    payload['mask_view']['camera_follow'] = False
+    path.write_text(json.dumps(payload))
+    viewer = make_napari_viewer()
+    load_workspace(viewer, path)
+    manager = manager_for(viewer)
+    widget = component_operations_widget(viewer)
+    qtbot.addWidget(widget)
+    widget.show()
+    controls = widget._grid_tiles._local_editing
+    qtbot.waitUntil(lambda: controls._manager is manager, timeout=3000)
+    assert manager.follow_enabled is False
+    assert manager.state()['camera_follow'] is False
+    assert not controls.auto_follow.isChecked() and not controls.follow.enabled
+    assert not widget._edit_advanced_section.isChecked()
 
 
 def test_new_crop_mask_is_managed_and_saved_at_full_extent(tmp_path,make_napari_viewer):
@@ -328,5 +418,6 @@ def test_mark_done_marks_workspace_changed(tmp_path,make_napari_viewer,qtbot):
     load_workspace(viewer,path)
     workspace_widget=page._tool_tabs.widget(0)
     workspace_widget.save_state_label.setText('Saved')
+    page._tool_tabs.widget(1)._edit_advanced_section.setChecked(True)
     page._tool_tabs.widget(1)._grid_tiles._done.click()
     assert 'changed since last save' in workspace_widget.save_state_label.text()

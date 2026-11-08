@@ -32,6 +32,7 @@ from qtpy.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QScrollArea,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -48,6 +49,7 @@ from ._dynamic_edit import (
 )
 from ._large_component_controller import LargeComponentController
 from ._mask_validation import looks_like_grayscale_image
+from ._mask_tiles import full_source
 from ._large_components import (
     LARGE_ANALYSIS_PIXEL_THRESHOLD,
     LARGE_TABLE_PAGE_SIZE,
@@ -57,6 +59,19 @@ from ._large_components import (
 
 _PANEL_MIN_WIDTH = 420
 _PANEL_MAX_WIDTH = 520
+
+
+def _collapsible_section(title: str, content: QWidget) -> QGroupBox:
+    """Hide the body as well as its layout space when folded."""
+    section = QGroupBox(title.replace("&", "&&"))
+    section.setCheckable(True)
+    section.setChecked(False)
+    body = QVBoxLayout(section)
+    body.setContentsMargins(4, 4, 4, 4)
+    body.addWidget(content)
+    content.setVisible(False)
+    section.toggled.connect(content.setVisible)
+    return section
 
 
 class _LayerActivityIndicator(QFrame):
@@ -932,15 +947,13 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
     container.setMinimumWidth(_PANEL_MIN_WIDTH)
     container.setMaximumWidth(_PANEL_MAX_WIDTH)
 
-    note = QLabel(
-        "Label-focused operations for one or many layers: reassign class values, merge "
-        "same-type Labels layers, compose distinct classes, or build vote / consensus maps."
-    )
-    note.setWordWrap(True)
-    layout.addWidget(note)
+    layout.setContentsMargins(0, 0, 0, 0)
+    container.setMinimumWidth(0)
 
     form = QFormLayout()
     mode_combo = QComboBox()
+    mode_combo.setMinimumContentsLength(12)
+    mode_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
     mode_combo.addItems(
         [
             "Reassign Label Value",
@@ -950,11 +963,13 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
             "Consensus Map",
         ]
     )
-    form.addRow("Mode", mode_combo)
+    form.addRow("Operation", mode_combo)
     layout.addLayout(form)
 
     layer_list = QListWidget()
     layer_list.setSelectionMode(QAbstractItemView.MultiSelection)
+    layer_list.setMaximumHeight(100)
+    layer_list.setToolTip("Select compatible 2D Labels layers. List order determines class/overlap priority.")
     layout.addWidget(layer_list)
 
     controls = QGroupBox("Operation Settings")
@@ -1019,9 +1034,9 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
         return [
             layer
             for layer in viewer.layers
-            if isinstance(layer, (napari.layers.Image, napari.layers.Labels))
+            if isinstance(layer, napari.layers.Labels)
             and not is_internal_layer(layer)
-            and _supported_2d_mask_shape(getattr(layer, "data", None)) is not None
+            and _supported_2d_mask_shape(getattr(full_source(layer), "data", None)) is not None
         ]
 
     def _refresh_layers() -> None:
@@ -1042,14 +1057,14 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
         layers = []
         for item in layer_list.selectedItems():
             layer = item.data(Qt.UserRole)
-            if isinstance(layer, (napari.layers.Image, napari.layers.Labels)):
+            if isinstance(layer, napari.layers.Labels):
                 with suppress(ValueError):
                     viewer.layers.index(layer)
                     layers.append(layer)
                     continue
             name = item.text()
             for candidate in viewer.layers:
-                if getattr(candidate, "name", "") == name:
+                if isinstance(candidate, napari.layers.Labels) and getattr(candidate, "name", "") == name:
                     layers.append(candidate)
                     break
         return layers
@@ -1077,15 +1092,25 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
         is_compose = mode == "Compose Layers As Distinct Classes"
         is_vote = mode == "Vote Count Map"
         is_consensus = mode == "Consensus Map"
-        source_value_spin.setEnabled(is_reassign)
-        new_value_spin.setEnabled(is_reassign)
-        merge_value_spin.setEnabled(is_merge)
-        class_start_spin.setEnabled(is_compose)
-        min_votes_spin.setEnabled(is_consensus)
-        consensus_value_spin.setEnabled(is_consensus)
+        for control, visible in (
+            (background_spin, not is_vote),
+            (source_value_spin, is_reassign),
+            (new_value_spin, is_reassign),
+            (merge_value_spin, is_merge),
+            (class_start_spin, is_compose),
+            (min_votes_spin, is_consensus),
+            (consensus_value_spin, is_consensus),
+        ):
+            control.setVisible(visible)
+            controls_layout.labelForField(control).setVisible(visible)
         overwrite_check.setEnabled(not is_vote)
+        overwrite_check.setVisible(not is_vote)
+        output_name.setEnabled(not overwrite_check.isChecked() or is_vote)
         layers = _selected_layers()
-        output_name.setCurrentText(_default_output_name(mode, layers))
+        suggested = _default_output_name(mode, layers)
+        if output_name.currentText() in ("label_ops_result", getattr(container, "_suggested_output", "")):
+            output_name.setCurrentText(suggested)
+        container._suggested_output = suggested
         helper.setText(
             {
                 "Reassign Label Value": "Use one layer. Rewrites one non-background value to a new class.",
@@ -1095,12 +1120,68 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
                 "Consensus Map": "Use 2+ layers to keep pixels present in at least N selected Labels layers.",
             }[mode]
         )
+        reason = _validation_error(layers, mode)
+        btn_apply.setEnabled(not reason)
+        btn_apply.setToolTip(reason or "Create a new Labels layer, or overwrite when explicitly selected.")
+        status.setText(reason or "Ready. Output: " + ("first selected layer" if overwrite_check.isChecked() and not is_vote else "new Labels layer"))
 
-    def _write_output(result: np.ndarray, layers: list[napari.layers.Layer], mode: str) -> None:
+    def _validation_error(layers, mode):
+        if mode == "Reassign Label Value" and len(layers) != 1:
+            return "Select exactly one Labels layer for relabeling."
+        minimum = 1 if mode in ("Reassign Label Value", "Merge Layers As Same Class") else 2
+        if len(layers) < minimum:
+            return f"Select at least {minimum} compatible Labels layer(s)."
+        if any(not isinstance(layer, napari.layers.Labels) for layer in layers):
+            return "Only Labels layers are supported."
+        sources = [full_source(layer) for layer in layers]
+        shapes = [_supported_2d_mask_shape(layer.data) for layer in sources]
+        if None in shapes or any(shape != shapes[0] for shape in shapes):
+            return "Selected Labels layers must have the same supported 2D shape."
+        if any(not matching_mask_transforms(sources[0], layer) for layer in sources[1:]):
+            return "Selected masks must have matching spatial transforms. Align the layers first."
+        if mode == "Consensus Map" and min_votes_spin.value() > len(layers):
+            return "Minimum votes cannot exceed selected layer count."
+        return ""
+
+    def _write_output(result, layers, mode, temporary=None) -> None:
         if not layers:
             raise ValueError("Select one or more layers first.")
         ref = layers[0]
         target_name = output_name.currentText().strip() or _default_output_name(mode, layers)
+        if temporary is not None:
+            from pathlib import Path
+            from ._mask_tiles import manager_for, MaskTileManager
+            from .workspace.service import _common_record, _remember_layer_storage
+            reference = {"path": Path(temporary.name) / "mask.zarr", "array_path": ""}
+            if overwrite_check.isChecked() and mode != "Vote Count Map":
+                source = full_source(ref)
+                source.data = result
+                source._label_assistant_mask_temporary = True
+                source._label_assistant_mask_temp_resources = [temporary]
+                _remember_layer_storage(source, reference)
+                entry = getattr(ref, "_label_assistant_mask_entry", None)
+                if entry is not None:
+                    entry.reference = reference
+                    entry.manager._temporary_stores.append(temporary)
+                    entry.manager.loading = True
+                    try:
+                        entry.show()
+                    finally:
+                        entry.manager.loading = False
+                _set_status(f"Updated {ref.name} with {mode.lower()}.")
+            else:
+                manager = manager_for(viewer) or MaskTileManager(viewer)
+                manager._temporary_stores.append(temporary)
+                record = _common_record(full_source(ref), "Labels")
+                record["name"] = target_name
+                record["visible"] = True
+                for key in ("quick_train", "label_assistant_review", "label_assistant_component_library"):
+                    record.pop(key, None)
+                created = manager.add(record, result, reference)
+                full_source(created)._label_assistant_mask_temporary = True
+                _set_status(f"Created {target_name} from {len(layers)} selected layer(s).")
+            _refresh_layers()
+            return
         if overwrite_check.isChecked() and mode != "Vote Count Map":
             ref.data = result
             ref.visible = True
@@ -1117,8 +1198,55 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
     def _apply() -> None:
         layers = _selected_layers()
         mode = mode_combo.currentText()
-        if layers and any(not matching_mask_transforms(layers[0], layer) for layer in layers[1:]):
-            raise ValueError("Selected masks must have matching spatial transforms before combining. Align the layers first.")
+        reason = _validation_error(layers, mode)
+        if reason:
+            raise ValueError(reason)
+        from ._copy_destination import array_data
+        from ._label_tool_tiles import MEMORY_LIMIT, run_label_tool
+        data = [array_data(full_source(layer)) for layer in layers]
+        if any(not isinstance(array, np.ndarray) or isinstance(array, np.memmap)
+               or array.size * array.dtype.itemsize > MEMORY_LIMIT
+               or full_source(layer) is not layer for layer, array in zip(layers, data)):
+            from .workspace.service import _commit_pending_local_edits
+            from napari.qt.threading import thread_worker
+            _commit_pending_local_edits(viewer)
+            settings = dict(background=int(background_spin.value()),
+                source=None if source_value_spin.value() < 0 else int(source_value_spin.value()),
+                new=int(new_value_spin.value()), merge=int(merge_value_spin.value()),
+                start=int(class_start_spin.value()), votes=int(min_votes_spin.value()),
+                consensus=int(consensus_value_spin.value()))
+            editable = [(layer, layer.editable) for layer in layers]
+            for layer, _ in editable:
+                layer.editable = False
+            container.setEnabled(False)
+            _set_status("Processing full Labels sources in bounded tiles…")
+
+            @thread_worker
+            def calculate():
+                return run_label_tool(data, mode, **settings)
+
+            def completed(payload):
+                result, temporary = payload
+                try:
+                    if any(not any(candidate is layer for candidate in viewer.layers) for layer in layers):
+                        raise ValueError("A selected layer was removed during processing; no output applied.")
+                    _write_output(result, layers, mode, temporary)
+                except Exception as error:
+                    temporary.cleanup()
+                    _set_status(str(error))
+
+            def finished():
+                container.setEnabled(True)
+                for layer, was_editable in editable:
+                    layer.editable = was_editable
+
+            worker = calculate()
+            worker.returned.connect(completed)
+            worker.errored.connect(lambda error: _set_status(str(error)))
+            worker.finished.connect(finished)
+            container._operation_worker = worker
+            worker.start()
+            return
         if mode == "Reassign Label Value":
             if len(layers) != 1:
                 raise ValueError("Select exactly one layer for relabeling.")
@@ -1172,11 +1300,19 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
     new_value_spin.valueChanged.connect(lambda _value: _refresh_mode_controls())
     merge_value_spin.valueChanged.connect(lambda _value: _refresh_mode_controls())
     layer_list.itemSelectionChanged.connect(_refresh_mode_controls)
+    min_votes_spin.valueChanged.connect(_refresh_mode_controls)
+    overwrite_check.toggled.connect(_refresh_mode_controls)
 
     container._mode_combo = mode_combo
     container._layer_list = layer_list
     container._merge_value_spin = merge_value_spin
     container._apply_button = btn_apply
+    container._settings_form = controls_layout
+    container._status = status
+    container._source_value_spin = source_value_spin
+    container._new_value_spin = new_value_spin
+    container._overwrite_check = overwrite_check
+    container._output_name = output_name
     container._layer_refresh_timer = _auto_refresh_layer_controls(
         viewer, container, _refresh_layers
     )
@@ -1196,19 +1332,15 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     container.setMinimumWidth(_PANEL_MIN_WIDTH)
     container.setMaximumWidth(_PANEL_MAX_WIDTH)
 
-    note = QLabel(
-        "Quickly compare one image layer and one Labels layer without changing the "
-        "selected editing layer. Use the buttons below instead of selecting layers "
-        "just to press napari's visibility hotkey."
-    )
-    note.setWordWrap(True)
-    layout.addWidget(note)
+    layout.setContentsMargins(0, 0, 0, 0)
+    container.setMinimumWidth(0)
 
     form = QFormLayout()
     image_combo = QComboBox()
     mask_combo = QComboBox()
-    keep_mask_selected = QCheckBox("Keep Labels layer selected for editing")
-    keep_mask_selected.setChecked(True)
+    opacity_spin = QSpinBox()
+    opacity_spin.setRange(0, 100)
+    opacity_spin.setSuffix("%")
     dim_opacity_spin = QSpinBox()
     dim_opacity_spin.setRange(0, 100)
     dim_opacity_spin.setSingleStep(5)
@@ -1218,8 +1350,7 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         effect_seconds_combo.addItem(f"{seconds} second", seconds)
     form.addRow("Image layer", image_combo)
     form.addRow("Labels layer", mask_combo)
-    form.addRow("", keep_mask_selected)
-    form.addRow("Dim Labels opacity (%)", dim_opacity_spin)
+    form.addRow("Labels opacity", opacity_spin)
     form.addRow("Effect duration", effect_seconds_combo)
     layout.addLayout(form)
 
@@ -1228,10 +1359,7 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     btn_refresh = QPushButton("Refresh")
     btn_toggle_mask = QPushButton("Toggle Labels")
     btn_show_both = QPushButton("Show Both")
-    row1_layout.addWidget(btn_refresh)
-    row1_layout.addWidget(btn_toggle_mask)
-    row1_layout.addWidget(btn_show_both)
-    layout.addWidget(row1)
+    btn_show_both.setText("Overlay")
 
     row2 = QWidget()
     row2_layout = QHBoxLayout(row2)
@@ -1239,10 +1367,10 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     btn_mask_only = QPushButton("Labels Only")
     btn_dim_mask = QPushButton("Dim Labels")
     btn_restore = QPushButton("Restore")
+    row2_layout.setContentsMargins(0, 0, 0, 0)
     row2_layout.addWidget(btn_image_only)
+    row2_layout.addWidget(btn_show_both)
     row2_layout.addWidget(btn_mask_only)
-    row2_layout.addWidget(btn_dim_mask)
-    row2_layout.addWidget(btn_restore)
     layout.addWidget(row2)
 
     row3 = QWidget()
@@ -1250,17 +1378,34 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     btn_pulse_mask = QPushButton("Pulse Labels")
     btn_blink_mask = QPushButton("Blink Labels")
     btn_peek_mask = QPushButton("Peek Labels")
-    row3_layout.addWidget(btn_pulse_mask)
+    row3_layout.setContentsMargins(0, 0, 0, 0)
     row3_layout.addWidget(btn_blink_mask)
     row3_layout.addWidget(btn_peek_mask)
     layout.addWidget(row3)
 
-    status = QLabel("Select an image/Labels pair, then use the quick compare buttons.")
+    advanced = QWidget()
+    advanced_layout = QVBoxLayout(advanced)
+    advanced_layout.setContentsMargins(0, 0, 0, 0)
+    advanced_form = QFormLayout()
+    advanced_form.addRow("Dim / pulse opacity (%)", dim_opacity_spin)
+    advanced_layout.addLayout(advanced_form)
+    row1_layout.setContentsMargins(0, 0, 0, 0)
+    row1_layout.addWidget(btn_toggle_mask)
+    row1_layout.addWidget(btn_dim_mask)
+    advanced_layout.addWidget(row1)
+    advanced_row = QHBoxLayout()
+    for button in (btn_pulse_mask, btn_restore, btn_refresh):
+        advanced_row.addWidget(button)
+    advanced_layout.addLayout(advanced_row)
+    layout.addWidget(_collapsible_section("Advanced view effects", advanced))
+
+    status = QLabel("Choose an image and Labels layer to compare.")
     status.setWordWrap(True)
     layout.addWidget(status)
 
     state = SimpleNamespace(
         mask_opacity_by_name={},
+        opacity_layer=None,
         animation_timer=QTimer(container),
         animation_mode=None,
         animation_step=0,
@@ -1303,6 +1448,13 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
             idx = mask_combo.findText(current_mask)
             if idx >= 0:
                 mask_combo.setCurrentIndex(idx)
+        _sync_opacity()
+        available = bool(image_combo.count() and mask_combo.count())
+        for button in (btn_toggle_mask, btn_show_both, btn_image_only, btn_mask_only,
+                       btn_dim_mask, btn_restore, btn_pulse_mask, btn_blink_mask, btn_peek_mask):
+            button.setEnabled(available)
+            button.setToolTip("" if available else "Add an Image layer and a Labels layer to compare.")
+        opacity_spin.setEnabled(bool(mask_combo.count()))
 
     def _target_layer(combo: QComboBox):
         name = combo.currentText().strip()
@@ -1328,9 +1480,25 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         if key not in state.mask_opacity_by_name:
             state.mask_opacity_by_name[key] = float(mask_layer.opacity)
 
-    def _restore_mask_selection(mask_layer) -> None:
-        if keep_mask_selected.isChecked():
-            viewer.layers.selection.active = mask_layer
+    def _sync_opacity(*_args) -> None:
+        mask_layer = _target_layer(mask_combo)
+        if state.opacity_layer is not mask_layer:
+            if state.opacity_layer is not None:
+                state.opacity_layer.events.opacity.disconnect(_sync_opacity)
+            state.opacity_layer = mask_layer
+            if mask_layer is not None:
+                mask_layer.events.opacity.connect(_sync_opacity)
+        if mask_layer is not None:
+            opacity_spin.blockSignals(True)
+            opacity_spin.setValue(round(float(mask_layer.opacity) * 100))
+            opacity_spin.blockSignals(False)
+
+    def _set_opacity(value) -> None:
+        mask_layer = _target_layer(mask_combo)
+        if mask_layer is not None:
+            _stop_animation()
+            mask_layer.opacity = float(value) / 100
+            state.mask_opacity_by_name[mask_layer.name] = mask_layer.opacity
 
     def _effect_seconds() -> int:
         return int(effect_seconds_combo.currentData())
@@ -1347,7 +1515,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
                 mask_layer.opacity = float(
                     state.mask_opacity_by_name[state.animation_mask_layer_name]
                 )
-            _restore_mask_selection(mask_layer)
         state.animation_mode = None
         state.animation_step = 0
         state.animation_steps = 0
@@ -1365,7 +1532,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         state.animation_steps = max(2, int(_effect_seconds() * 10))
         state.animation_mask_layer_name = str(mask_layer.name)
         state.animation_image_layer_name = str(image_layer.name)
-        _restore_mask_selection(mask_layer)
         state.animation_timer.start()
 
     def _tick_animation() -> None:
@@ -1408,7 +1574,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
             _stop_animation()
             return
 
-        _restore_mask_selection(mask_layer)
         state.animation_step += 1
         if state.animation_step >= state.animation_steps:
             finished_mode = state.animation_mode
@@ -1424,7 +1589,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         image_layer.visible = True
         mask_layer.visible = True
         mask_layer.opacity = float(state.mask_opacity_by_name.get(mask_layer.name, mask_layer.opacity))
-        _restore_mask_selection(mask_layer)
         _set_status(f"Showing both {image_layer.name} and {mask_layer.name}.")
 
     def _toggle_mask() -> None:
@@ -1433,7 +1597,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         _remember_mask_opacity(mask_layer)
         image_layer.visible = True
         mask_layer.visible = not bool(mask_layer.visible)
-        _restore_mask_selection(mask_layer)
         state_text = "visible" if mask_layer.visible else "hidden"
         _set_status(f"Labels layer {mask_layer.name} is now {state_text} over {image_layer.name}.")
 
@@ -1443,7 +1606,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         _remember_mask_opacity(mask_layer)
         image_layer.visible = True
         mask_layer.visible = False
-        _restore_mask_selection(mask_layer)
         _set_status(f"Showing image only: {image_layer.name}.")
 
     def _show_mask_only() -> None:
@@ -1453,7 +1615,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         image_layer.visible = False
         mask_layer.visible = True
         mask_layer.opacity = float(state.mask_opacity_by_name.get(mask_layer.name, mask_layer.opacity))
-        _restore_mask_selection(mask_layer)
         _set_status(f"Showing Labels layer only: {mask_layer.name}.")
 
     def _dim_mask() -> None:
@@ -1463,7 +1624,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         image_layer.visible = True
         mask_layer.visible = True
         mask_layer.opacity = float(dim_opacity_spin.value()) / 100.0
-        _restore_mask_selection(mask_layer)
         _set_status(
             f"Dimmed {mask_layer.name} to {int(dim_opacity_spin.value())}% opacity over {image_layer.name}."
         )
@@ -1475,7 +1635,6 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
         mask_layer.visible = True
         if mask_layer.name in state.mask_opacity_by_name:
             mask_layer.opacity = float(state.mask_opacity_by_name[mask_layer.name])
-        _restore_mask_selection(mask_layer)
         _set_status(f"Restored paired view for {image_layer.name} and {mask_layer.name}.")
 
     def _pulse_mask() -> None:
@@ -1507,11 +1666,23 @@ def quick_compare_toggle_widget(viewer=None, **kwargs) -> QWidget:
     btn_pulse_mask.clicked.connect(lambda: _run_safely(_pulse_mask))
     btn_blink_mask.clicked.connect(lambda: _run_safely(_blink_mask))
     btn_peek_mask.clicked.connect(lambda: _run_safely(_peek_mask))
-    container.destroyed.connect(lambda *_args: _stop_animation())
+    opacity_spin.valueChanged.connect(_set_opacity)
+    mask_combo.currentTextChanged.connect(_sync_opacity)
+    def _cleanup(*_args):
+        _stop_animation()
+        if state.opacity_layer is not None:
+            state.opacity_layer.events.opacity.disconnect(_sync_opacity)
+
+    container.destroyed.connect(_cleanup)
     container._layer_refresh_timer = _auto_refresh_layer_controls(
         viewer, container, _refresh_targets
     )
 
+    container._image_combo = image_combo
+    container._mask_combo = mask_combo
+    container._opacity_spin = opacity_spin
+    container._animation_state = state
+    container._tick_animation = _tick_animation
     _refresh_targets()
     return container
 
@@ -1561,7 +1732,11 @@ def component_operations_widget(
     qc_page = QWidget()
     qc_layout = QVBoxLayout(qc_page)
     qc_layout.setContentsMargins(0, 6, 0, 0)
-    workflow_tabs.addTab(annotate_page, "Local Editing")
+    annotate_scroll = QScrollArea()
+    annotate_scroll.setWidgetResizable(True)
+    annotate_scroll.setFrameShape(QFrame.NoFrame)
+    annotate_scroll.setWidget(annotate_page)
+    workflow_tabs.addTab(annotate_scroll, "Local Editing")
     workflow_tabs.addTab(qc_page, "Review & QC")
     workflow_tabs.setTabToolTip(
         0,
@@ -1604,16 +1779,19 @@ def component_operations_widget(
     form.addRow("Cell height (px)", grid_y_spin)
     form.addRow("Cell width (px)", grid_x_spin)
 
-    edit_group = QGroupBox("Memory-controlled editing")
-    edit_form = QFormLayout(edit_group)
+    edit_group = QGroupBox("Mask editing")
+    edit_layout = QVBoxLayout(edit_group)
+    edit_advanced = QWidget()
+    edit_form = QFormLayout(edit_advanced)
     editing_strategy_combo = QComboBox()
-    editing_strategy_combo.addItem("Automatic (recommended)", "auto")
-    editing_strategy_combo.addItem("Grid tile editing (low memory)", "grid")
+    editing_strategy_combo.addItem("Automatic (size-based)", "auto")
+    editing_strategy_combo.addItem("Bounded editing (default)", "grid")
     editing_strategy_combo.addItem("Local-area editing", "tiled")
     editing_strategy_combo.addItem("Full-layer editing", "direct")
+    editing_strategy_combo.setCurrentIndex(editing_strategy_combo.findData("grid"))
     editing_strategy_combo.setToolTip(
-        "Automatic opens large workspace masks as grid crops before loading them into napari. "
-        "Grid tile editing keeps full masks on disk. Local-area and Full-layer editing load complete source layers."
+        "Bounded editing keeps masks on disk and loads editable crops as you navigate. "
+        "Automatic selects by size; Local-area and Full-layer editing load complete source layers."
     )
     edit_tile_size_combo = QComboBox()
     edit_tile_size_combo.addItem(
@@ -1662,15 +1840,20 @@ def component_operations_widget(
     edit_form.addRow("Local area size", edit_tile_size_combo)
     edit_form.addRow("", show_edit_boundary_check)
     edit_form.addRow("", auto_save_edit_check)
-    edit_form.addRow(edit_action_row)
-    edit_form.addRow("Status", dynamic_edit_status)
     from ._mask_tiles import tile_controls
     grid_tiles = tile_controls(viewer, edit_group, editing_strategy_combo)
-    edit_form.addRow(grid_tiles)
+    edit_layout.addWidget(grid_tiles)
+    edit_layout.addWidget(dynamic_edit_status)
+    edit_layout.addWidget(edit_action_row)
+    edit_form.addRow(grid_tiles._advanced)
+    edit_advanced_section = _collapsible_section("Advanced", edit_advanced)
+    edit_layout.addWidget(edit_advanced_section)
     def _show_edit_mode_controls():
         from ._mask_tiles import manager_for
         manager = manager_for(viewer)
         grid_active = manager is not None and bool(manager.entries)
+        grid_tiles._advanced.setVisible(grid_active)
+        dynamic_edit_status.setVisible(not grid_active)
         for field in (edit_tile_size_combo, show_edit_boundary_check, auto_save_edit_check, edit_action_row):
             field.setVisible(not grid_active)
             if field is not edit_action_row:
@@ -2388,10 +2571,17 @@ def component_operations_widget(
     from ._reviewed_regions import ReviewedAreaWidget
     reviewed_area_widget = ReviewedAreaWidget(viewer, dynamic_edit_controller, container)
     # Canvas selection stays with editing; training acceptance lives in Dataset.
-    reviewed_area_widget.hide()
-    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.mouse_review_check)
-    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.editor_summary)
-    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget.next_button)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget)
+    view_compare = quick_compare_toggle_widget(viewer)
+    label_tools = label_operations_widget(viewer)
+    view_section = _collapsible_section("View & Compare", view_compare)
+    tools_section = _collapsible_section("Label Tools", label_tools)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, view_section)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, tools_section)
+    container._view_compare = view_compare
+    container._label_tools = label_tools
+    container._view_compare_section = view_section
+    container._label_tools_section = tools_section
     reviewed_area_widget.configure_grid(_editable_target_layer, grid_y_spin, grid_x_spin, display_grid_check)
     from ._component_library_widget import ComponentLibraryWidget
     component_library_widget = ComponentLibraryWidget(viewer, _editable_target_layer, container)
@@ -2976,6 +3166,7 @@ def component_operations_widget(
 
     def _cleanup_callbacks(*_args) -> None:
         state.closed = True
+        grid_tiles._local_editing.shutdown()
         reviewed_area_widget.shutdown()
         component_library_widget.shutdown()
         with suppress(ValueError, AttributeError):
@@ -3094,6 +3285,8 @@ def component_operations_widget(
     container._cancel_analysis_button = btn_cancel_analysis
     container._editing_strategy_combo = editing_strategy_combo
     container._grid_tiles = grid_tiles
+    container._edit_advanced_section = edit_advanced_section
+    container._edit_advanced = edit_advanced
     container._edit_tile_size_combo = edit_tile_size_combo
     container._show_edit_boundary_check = show_edit_boundary_check
     container._auto_save_edit_check = auto_save_edit_check

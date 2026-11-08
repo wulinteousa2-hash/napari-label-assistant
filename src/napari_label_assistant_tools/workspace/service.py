@@ -200,8 +200,8 @@ def save_workspace(
     from .._mask_tiles import manager_for, MODE
     mask_manager = manager_for(viewer)
     payload['mask_view'] = (mask_manager.state() if mask_manager is not None and mask_manager.entries
-                            else {'mode': getattr(viewer, MODE, 'auto'),
-                                  'editing_strategy': getattr(viewer, '_label_assistant_editing_strategy', 'auto')})
+                            else {'mode': getattr(viewer, MODE, 'grid'),
+                                  'editing_strategy': getattr(viewer, '_label_assistant_editing_strategy', 'grid')})
     from .._model_project import save_project
     payload["model_project"] = save_project(viewer, path, data_root, complete_package)
     spectral_state = _spectral_project_state(viewer, path, data_root)
@@ -234,6 +234,10 @@ def save_workspace(
     from .._component_library import KEY as LIBRARY_KEY
     for layer, state in library_bindings:
         layer.metadata = {**layer.metadata, LIBRARY_KEY: state}
+    from .._mask_tiles import manager_for
+    manager = manager_for(viewer)
+    if manager is not None:
+        manager.refresh_overviews()
     storage_state = _workspace_storage_state(records, path)
     viewer._label_assistant_workspace_storage_state = storage_state
     if widget is not None:
@@ -345,7 +349,10 @@ def load_workspace(
         manager = manager_for(viewer)
         if manager is not None and manager.entries:
             manager.finish_loading()
-            manager.focus()
+            if any(entry.overview is not None for entry in manager.entries):
+                viewer.reset_view()
+            else:
+                manager.focus()
         elif manager is not None:
             manager.dispose()
             setattr(viewer, MANAGER, None)
@@ -577,7 +584,9 @@ def _serialize_layer(
 
     if layer_type == "Labels":
         reference = _zarr_reference(layer)
-        if reference is None or copy_labels or (
+        needs_ome_group = (reference is not None and len(layer.data.shape) == 2
+                           and str(reference.get('array_path', '')).strip('/') != 's0')
+        if reference is None or copy_labels or needs_ome_group or (
             complete_package
             and not Path(reference["path"]).resolve().is_relative_to(data_root.resolve())
         ):
@@ -600,6 +609,8 @@ def _serialize_layer(
             _ensure_writable_zarr_layer(layer, reference)
             array = layer.data
             _remember_layer_storage(layer, reference)
+        from .._label_pyramid import build
+        pyramid = build(reference, scale=tuple(layer.scale), progress=progress)
         record["storage"] = {
             "kind": "zarr",
             "path": _encode_path(reference["path"], manifest_path.parent),
@@ -609,6 +620,8 @@ def _serialize_layer(
             "chunks": [int(value) for value in array.chunks],
             "dtype": str(array.dtype),
         }
+        if len(pyramid) > 1:
+            record['storage'].update(multiscale=True, datasets=pyramid)
         return record
 
     if layer_type == "Image":
@@ -766,7 +779,9 @@ def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
         if layer_type == "Labels":
             from .._mask_tiles import should_tile, manager_for, MaskTileManager
             state = getattr(viewer, '_label_assistant_pending_mask_state', {'mode': 'auto'})
-            if should_tile(data, state['mode']):
+            # Data-only viewer adapters keep writable lazy Zarr references;
+            # interactive crop management requires napari's layer events.
+            if should_tile(data, state['mode']) and hasattr(viewer.layers, 'events'):
                 manager = manager_for(viewer) or MaskTileManager(viewer, state)
                 return manager.add(record, data, {'path': store_path, 'array_path': array_path}, manifest_path)
             layer = viewer.add_labels(data, name=name)
@@ -1152,6 +1167,9 @@ def _persist_labels_to_zarr(
         if progress is not None and (completed == total or completed % max(1, total // 200) == 0):
             progress(completed, total, f"Writing mask: {destination.name}…")
 
+    from .._label_pyramid import build
+    if len(shape) == 2:
+        build({'path': temp, 'array_path': 's0'}, scale=scale, progress=progress)
     temp.replace(destination)
     return zarr.open_array(str(destination / "s0"), mode="r+")
 

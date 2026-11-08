@@ -243,13 +243,21 @@ def test_confirmation_dialog_names_both_layers_and_supports_cancel(accept,make_n
 
 
 @pytest.mark.parametrize('starting_row',[0,1])
-def test_grid_destination_retains_full_extent_when_copying_small_roi(starting_row,tmp_path,make_napari_viewer,qtbot,monkeypatch):
-    store=zarr.open_array(str(tmp_path/'full.zarr'),mode='w',shape=(1000,1300),chunks=(256,256),dtype='uint32')
+@pytest.mark.parametrize('with_overview', [False, True])
+def test_grid_destination_retains_full_extent_when_copying_small_roi(starting_row,with_overview,tmp_path,make_napari_viewer,qtbot,monkeypatch):
+    if with_overview:
+        root = zarr.open_group(str(tmp_path/'full.zarr'), mode='w')
+        store = root.create_array('s0', shape=(1000,1300), chunks=(256,256), dtype='uint32')
+    else:
+        store=zarr.open_array(str(tmp_path/'full.zarr'),mode='w',shape=(1000,1300),chunks=(256,256),dtype='uint32')
     store[0,0]=77
+    if with_overview:
+        from napari_label_assistant_tools._label_pyramid import build
+        build({'path': tmp_path/'full.zarr', 'array_path': 's0'})
     path=tmp_path/'project.label-assistant.json'
     path.write_text(json.dumps(dict(format=WORKSPACE_FORMAT,version=2,
         mask_view=dict(mode='grid',tile_size=512,row=starting_row,col=starting_row),
-        layers=[dict(layer_type='Labels',name='Curated',storage=dict(kind='zarr',path='full.zarr',array_path=''))])))
+        layers=[dict(layer_type='Labels',name='Curated',storage=dict(kind='zarr',path='full.zarr',array_path='s0' if with_overview else ''))])))
     viewer=make_napari_viewer();load_workspace(viewer,path)
     pixels=np.zeros((4,6),np.uint16);pixels[1:3,2:5]=300
     source=viewer.add_labels(pixels,name='Candidates',translate=(520,530))
@@ -267,6 +275,9 @@ def test_grid_destination_retains_full_extent_when_copying_small_roi(starting_ro
     np.testing.assert_array_equal(full_data(target)[521:523,532:535],np.full((2,3),300))
     np.testing.assert_array_equal(target.data[9:11,20:23],np.full((2,3),300))
     assert full_data(target)[0,0]==77
+    if with_overview:
+        assert target._label_assistant_mask_entry.overview is not None
+        assert root['s6'][521//64, 532//64] == 300
     save_workspace(viewer,path)
     assert json.loads(path.read_text())['layers'][0]['storage']['shape']==[1000,1300]
 

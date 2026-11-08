@@ -5,9 +5,7 @@ from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QComboBox, QAbstrac
 
 from ._widget import (
     _LayerActivityIndicator,
-    label_operations_widget,
     component_operations_widget,
-    quick_compare_toggle_widget,
 )
 from ._workspace_widget import WorkspaceManagerWidget
 from ._quick_train_widget import QuickTrainWidget
@@ -39,8 +37,6 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     training = QuickTrainWidget(viewer)
     training.attach_annotation_widgets(components)
     tools.addTab(training, "Training")
-    tools.addTab(quick_compare_toggle_widget(viewer), "Compare")
-    tools.addTab(label_operations_widget(viewer), "Combine")
     for panel in (components, training):
         for control in panel.findChildren(QComboBox):
             control.currentIndexChanged.connect(workspace.mark_changed)
@@ -55,14 +51,6 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
     tools.setTabToolTip(
         1,
         "Edit Labels and review connected components.",
-    )
-    tools.setTabToolTip(
-        3,
-        "Compare an image with its Labels layer while preserving edit focus.",
-    )
-    tools.setTabToolTip(
-        4,
-        "Relabel, merge, compose, or calculate agreement across Labels layers.",
     )
     tools.setTabToolTip(
         2,

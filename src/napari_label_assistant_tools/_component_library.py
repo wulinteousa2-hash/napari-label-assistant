@@ -409,6 +409,17 @@ def notify_library(layer):
     ensure_library_event(layer)(library_selection=True)
 
 
+def annotation_bounds(event):
+    """Extract a local edit rectangle when napari supplies one."""
+    from numbers import Integral
+    offset, data = getattr(event, 'offset', None), getattr(event, 'data', None)
+    shape = getattr(data, 'shape', ())
+    if offset is not None and len(offset) >= 2 and len(shape) == 2 and all(isinstance(v, Integral) for v in offset[-2:]):
+        y, x = map(int, offset[-2:])
+        return y, x, y + shape[0], x + shape[1]
+    return None
+
+
 def annotation_changed(viewer, layer, bounds=None):
     if hasattr(layer, '_label_assistant_mask_entry'):
         layer._label_assistant_mask_entry.manager.schedule_flush()
@@ -420,6 +431,8 @@ def annotation_changed(viewer, layer, bounds=None):
     if library is not None:
         library.mark_dirty(bounds)
     invalidate_reviewed_regions(viewer,layer,bounds)
+    from ._label_pyramid import refresh_layer
+    refresh_layer(layer, bounds)
 
 
 def subtract_rectangle(area, cut):

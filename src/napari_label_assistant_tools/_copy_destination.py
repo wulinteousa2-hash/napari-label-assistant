@@ -224,6 +224,8 @@ def write_region(viewer, target, slices, mask, values, offset):
         patch=object.__new__(MaskEntry)
         patch.manager=entry.manager;patch.source=entry.source;patch.bounds=region
         patch.original=original;patch.pending_pixels=None;patch.pending_invalidations=[]
+        # The destination entry owns its preview and handles display failures.
+        patch.invalidate=entry.invalidate
         patch.layer=Labels(data=pixels,name=target.name,visible=entry.source.visible,
             opacity=target.opacity,blending=target.blending,metadata=deepcopy(entry.source.metadata),
             **crop_transform_kwargs(entry.source,(region[0].start,region[1].start)))

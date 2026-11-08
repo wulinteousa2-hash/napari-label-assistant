@@ -13,17 +13,27 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 5.3.0: Low-memory editing, safer copying, and overlapping masks
+## Version 6.3.0: Automatic editing and fast loading for existing projects
 
-- **Grid tile editing (low memory):** keep complete large Zarr masks on disk
-  and edit bounded grid crops. Save & Next and workspace reopening preserve
-  tile progress and full-mask coordinates. See the editing instructions below.
-- **Actionable copy destinations:** Copy prepares Curated when needed. Manual
-  destinations show a Copy/Cancel confirmation; matching replacements retain
-  the original with a restore action. Registered crops copy into full masks
-  without shrinking them.
-- **Coordinate integrity:** workspace round trips and local crops preserve
-  complete affine transforms. Older workspaces and checkpoints remain readable.
+- **Automatic camera-follow editing:** keep complete Zarr masks on disk and
+  zoom in to paint bounded full-resolution areas. **Edit at View Center** stays
+  visible; editing modes and grid navigation are under collapsed **Advanced**.
+- **Fast opening for older workspaces:** saved full-mask loading settings now
+  migrate to bounded loading before napari constructs the Labels layers. Opening
+  leaves the original JSON and masks unchanged; the next Save records the new mode.
+- **Bounded whole-mask display:** use Spatial Assistant's overview policy to
+  expose only GPU-safe pyramid levels, preserving source alignment, colors, and
+  full-resolution edit crops. Resolution locks cannot expose the full mask.
+- **Simpler annotation and training controls:** main tabs are **Workspace,
+  Labels, Training**. Review stays in Local Editing, with collapsible View &
+  Compare and Label Tools. Dataset summarizes supervision and preparation state;
+  component selections live under **Manage Training Selection**.
+- **Full-source label tools:** relabel, merge, compose, vote, and consensus
+  operations stream disk-backed masks in bounded tiles. Results keep full image
+  dimensions and become durable with workspace Save.
+- **Existing annotation protections:** changed-region writes, interrupted-write
+  recovery, external-edit conflict checks, complete affine transforms, source
+  label IDs, and binary/multiclass/multilabel training remain supported.
 - **Validation evidence:** see the [audit and follow-up reports](validation_reports/README.md)
   for executed tests, remaining findings, and limits. Large logical dimensions
   do not imply every operation fits in memory or that full-image performance
@@ -295,13 +305,35 @@ available, while Curated and review masks appear as editable 1024 × 1024 crops.
 The complete masks stay in their original on-disk stores; no manual crop files
 or final stitching step is needed.
 
-Under **Labels → Local Editing → Editing mode**, choose **Grid tile editing
-(low memory)** to force this behavior, **Automatic** to decide from mask size
-and available memory, or the existing **Local-area / Full-layer editing** modes
-to load whole source layers. The grid controls offer 512–4096-pixel tiles,
-zero-based row/column addresses, **Go**, **Previous**, **Save & Next**, and
-**Mark done**. Navigation shows the tile's global pixel bounds and saves changes
-before switching. Workspace Save remembers the mode, size, address and progress.
+Under **Labels → Local Editing → Mask editing**, zoom in and paint. New
+workspaces use bounded editing with camera follow by default; no editing-mode
+choice is needed. **Edit at View Center** remains visible for manual control.
+The collapsed **Advanced** section contains the editing-mode selector, camera
+follow toggle, and grid controls: 512–4096-pixel tile sizes, zero-based row/column
+addresses, **Go**, **Previous**, **Save & Next**, and **Mark done**. Older projects
+saved with full-mask loading now open through bounded crops automatically.
+Opening a project does not rewrite its JSON or masks; the next Workspace Save
+records the bounded mode. An explicit editing-mode choice in Advanced takes
+precedence for the current session. Saved camera-follow preferences are retained.
+Small in-memory masks can still be painted directly before their first save.
+
+Camera follow loads full-resolution edit windows as you zoom in and pan.
+Windows use at most 4096 × 4096 pixels,
+with a combined mask read limit of 128 MiB. Zooming out switches to a read-only
+overview. Following waits for strokes and navigation drags to finish and saves
+pending edits through the same recovery journal before changing the area.
+**Edit at View Center** and the grid navigation buttons remain available;
+automatic following resumes when the view changes. Workspace Save remembers
+the follow setting. Differently registered masks require manual navigation;
+automatic following pauses with an explanation and retains the current buffers
+if loading or saving fails.
+
+Mask overviews follow Spatial Assistant's display policy: napari receives only
+pyramid levels within the GPU texture limit, capped at 4096 pixels per axis and
+64 MiB per level. An 80,000 × 80,000 mask uses the 2500 × 2500 and smaller
+levels on a GPU that supports 4096-pixel textures. Full-resolution editing stays
+in the local crop. Overview coordinates, crop exclusion, and label colors remain
+aligned; the display policy also applies when previews are rebuilt after Save.
 
 Edits, including erasures, update only their changed bounding region in the full
 mask. Writes use a bounded recovery journal and reject conflicting external
@@ -320,18 +352,19 @@ training reads the backing masks rather than mistaking the displayed crop for
 the dataset. Component inspection in grid mode describes only that tile;
 boundary objects may continue in neighboring tiles. The training component
 library still scans the full backing mask in bounded chunks, and selecting a
-library object loads its tile. The existing reviewed-cell coverage editor
-requires Local-area or Full-layer mode; its saved data is preserved. **Mark done** records navigation
-progress and does not automatically declare pixels reviewed for training.
+library object loads its tile. Creating or approving reviewed-cell coverage
+currently requires **Advanced → Editing mode → Local-area editing** or
+**Full-layer editing** for that session; existing coverage remains preserved.
+**Mark done** records navigation progress and does not approve pixels for training.
 
 This path applies to 2D Zarr Labels stores. It reduces mask display/working memory;
 source chunk sizes, storage speed, image rendering and other analyses still
 affect responsiveness. It does not establish a hardware-independent performance
 guarantee or remove full-image inference's output-memory requirements.
 
-A 100,000 × 100,000 label mask contains 10 billion pixels. Local-area editing
-avoids creating another full-size editable copy: only a camera-centered region
-is loaded for interaction, and only changed pixels are written back.
+A 100,000 × 100,000 label mask contains 10 billion pixels. Default bounded
+editing keeps the source store outside napari's editable layers, displays a
+small overview, and loads only a camera-centered crop for full-resolution edits.
 
 At this scale, the source should use an efficiently sliceable, preferably
 chunked or on-disk array such as Zarr. Actual responsiveness depends on array
@@ -341,7 +374,8 @@ unconditional hardware-independent limit.
 
 ## Interface
 
-The dock widget is organized into four workflow areas:
+The dock widget has three main tabs: **Workspace**, **Labels**, and **Training**.
+Labels contains **Local Editing** and **Review & QC**.
 
 ### Workspace
 
@@ -350,7 +384,7 @@ Open **Plugins → napari-label-assistant → Label Curation**, then use the fir
 without SAM3 Assistant.
 
 - A normal save writes a small `.label-assistant.json` manifest.
-- **Optimize large images for viewing** optionally creates a local, chunked
+- **Optimize large images** optionally creates a local, chunked
   multiscale OME-Zarr pyramid for single-scale images larger than 32,768
   pixels on either axis. The original file remains unchanged; reopen the
   workspace after the first optimized save to use the pyramid. Leave the
@@ -358,14 +392,14 @@ without SAM3 Assistant.
 - New in-memory Labels layers are persisted once as writable, chunked
   OME-Zarr data beside the manifest. Later saves reuse the same store instead
   of copying the full mask again.
-- **Complete package copy (images and masks)** saves every image and mask
-  into the data folder beside the manifest with relative paths. Enable it and
+- **Data storage for next save → Include all data (portable)** saves every image
+  and mask into the data folder beside the manifest with relative paths. Select it and
   use **Save As** in an empty folder, then transfer that **entire folder** to
   another computer. Open the manifest there; original source paths and reader
   plugins are no longer needed. It also supports fileless and multiscale images
   and can be combined with image optimization. Allow time and disk space for
   copying full datasets.
-- With Complete package copy off, **Save As** to a new destination creates writable mask copies beside the
+- With **Link to source data** selected, **Save As** to a new destination creates writable mask copies beside the
   new manifest, including masks opened read-only from shared mounts. Images
   remain linked; keep the shared mount available when reopening locally.
   Saving to the current project path reuses its existing mask stores.
@@ -455,15 +489,10 @@ short states such as **Preparing view**, **View ready**, and **Edit area ready �
 dock or table geometry; the full status and product description remain in the
 header tooltip.
 
-**Memory-controlled editing** appears first because it controls how napari
-accesses the selected layer:
-
-- **Automatic (recommended)** uses standard full-layer editing for ordinary
-  arrays and local-area editing when the layer is large relative to available
-  memory.
-- **Local-area editing** always loads a bounded region around the current
-  camera position.
-- **Full-layer editing** uses napari's standard direct editing behavior.
+**Mask editing** follows the camera by default for bounded workspace masks.
+Zoom in to edit and zoom out for an overview. **Edit at View Center** provides
+manual control. **Advanced** retains size-based Automatic, Local-area, and
+Full-layer editing for older workflows, along with manual grid navigation.
 
 **Connected-component analysis** provides measurement and region-management
 tools. Click **Find components**, then:
@@ -484,12 +513,24 @@ column, and cell containing each component centroid.
 Training has five pages: **1. Dataset** for sources, reviewed cells, selected objects, and patch previews; **2. Models** for biological tasks, architecture selection, checkpoints, training history, and controlled comparisons; **3. Train** for training and validation; **4. Inference** for predictions; and **5. Advanced** for patch size, model input size, optimization, and augmentation. Progress and Cancel remain available across pages. Models supports the existing custom U-Net, a standard U-Net, and optional SMP U-Net, U-Net++, and DeepLabV3+ encoders. Prepare dataset enables training without adding canvas layers. Show patch preview is optional and displays a separate contact sheet beside the image; Return to image restores the previous view. Workspace Save includes changed model weights; standalone export remains available. See [model management and benchmarking](docs/model-management.md) for the workflow and optional dependency installation.
 
 For partial Curated annotations, combine **Local Editing** reviewed cells with
-the **Training → Dataset → Selected objects** library. Build the library once, then
+the **Training → Dataset → Manage Training Selection** library. Build the library once, then
 check **Train** for individual objects. IDs, bounds, pixel counts, and selections
 persist with the workspace; Save As and portable projects keep independent
 library copies. Object selection confirms foreground only; review background
-under Dataset → Reviewed cells after checking them in Local Editing. Editable Area changes update affected components and invalidate
+in **Labels → Local Editing → Review**. Its **Mark reviewed & next** action
+confirms all targets and remaining background in the cell; **Remove reviewed
+status** revokes approval. Review progress uses stored spatial coverage rather
+than scanning the full mask. Editable Area changes update affected components and invalidate
 edited review cells. See [the training guide](docs/TRAINING.md).
+
+Dataset now presents one training-data overview: annotation-source counts,
+supervision information, and No eligible annotations / Ready to prepare /
+Prepared / Outdated states. Exact foreground, background, and unknown pixel
+counts appear after indexing, along with training and validation patch counts.
+Unknown pixels never become negatives implicitly. Individual positive-only
+patches remain supported within mixed datasets; the existing validation policy
+requires targets and verified background in both splits. Selected objects alone
+therefore require additional background review before preparation.
 
 
 **Training** trains the selected model from reviewed image/ground-truth patches
@@ -558,7 +599,7 @@ enter comma-separated **Foreground classes**, for example `axon, myelin`.
 The semantic ground-truth Labels layer must use `0 = background`, `1 = axon`,
 and `2 = myelin`. These IDs represent tissue types, not individual objects.
 All axons share ID 1, and all myelin pixels share ID 2. If annotations are in
-separate layers, **Combine → compose layers as distinct classes** can prepare a
+separate layers, **Labels → Local Editing → Label Tools → Compose Layers As Distinct Classes** can prepare a
 semantic layer; check class order and overlaps before training. Existing object
 IDs are never automatically reinterpreted or converted.
 
@@ -582,7 +623,7 @@ current crop or training step, restores editing, and keeps the existing model.
 Huge NumPy/memmap, Zarr, and other sliceable sources are accessed by small
 regions; the full arrays are never converted to in-memory training copies.
 
-To train across several images, choose **Dataset sources → Multiple pairs** in
+To train across several images, choose **Source mode → Multiple pairs** in
 **1. Dataset**, then open **Manage pairs…**. The pair table stays in a separate
 dialog to keep the Dataset panel compact. Suggested associations are not included
 automatically. Check each image–label pair, choose complete annotations or its
@@ -629,20 +670,23 @@ without creating or exchanging cropped coordinate systems.
 
 Grid addresses make reviewer findings and corrections traceable without
 creating cropped copies of the source. Reuse the same grid dimensions, origin,
-and source coordinate system when addresses must remain stable. The current
-1.0 grid is a spatial registration and reference system; it does not store
-reviewer comments, assignments, completion states, or a change-history audit
-log.
+and source coordinate system when addresses must remain stable. The address
+grid is a spatial reference system. Manual tile completion and reviewed-region
+approval are separate records; it does not store reviewer comments, assignments,
+or a change-history audit log.
 
-### Compare
+### Labels: View & Compare
 
-Compare an image with a Labels layer while keeping the Labels layer active for
-editing. The view controls can show either layer, show both, dim the labels, or
-temporarily pulse, blink, and peek between them.
+The main tabs are **Workspace | Labels | Training**. Under **Labels → Local
+Editing**, expand **View & Compare** to show Image Only, Overlay, or Labels Only,
+adjust Labels opacity, or temporarily Peek/Blink Labels. These controls preserve
+the active editing layer and never change pixel data. **Advanced view effects**
+retains Pulse, Dim, Toggle, and Restore. Both new Labels sections start collapsed.
 
-### Combine
+### Labels: Label Tools
 
-Perform mask and label operations across one or more compatible layers:
+Expand **Label Tools** under **Local Editing** and select an operation. Only its
+relevant settings are displayed. Select compatible, aligned 2D Labels layers:
 
 - reassign one label value;
 - merge foreground regions into one class;
@@ -650,12 +694,43 @@ Perform mask and label operations across one or more compatible layers:
 - create a per-pixel vote-count map;
 - create a consensus map from a minimum vote threshold.
 
+Results create a new Labels layer by default. **Overwrite first selected layer**
+is explicit and remains unavailable for vote-count maps. Large and disk-backed
+sources run in bounded tiles in the background, using full source masks rather
+than their display crops. Temporary results are included when saving a workspace.
+The existing **Review & QC** subtab and **Training** workflow are unchanged.
+
 ## Editing at 100,000 × 100,000-pixel scale
 
-Local-area editing keeps only a camera-centered working region editable in
-memory. Pan or zoom to another location and the working region follows
-automatically. The green boundary shows exactly where Paint and Erase are
-currently available.
+Workspace Save now builds categorical Labels pyramids (`s0`–`s6`) for 2D masks.
+`s0` keeps the original editable label IDs. Lower levels are derived previews:
+each 2 × 2 block keeps the first nonzero ID, preserving isolated foreground
+without averaging IDs. Competing objects can share a preview pixel; measurements
+and training always use `s0`. Very small masks stop before repeating 1 × 1 levels.
+
+Large masks keep their editable grid tile and add a read-only **overview** layer
+for the whole mask. Its visibility, opacity, and colors follow the source Labels
+layer. Use **Show whole mask** in Local Editing to zoom out; double-click while
+the source or overview is selected to move the editable tile to that location.
+Overview layers are excluded from annotations, training sources, and saved layer
+records. Paint and erase update affected pyramid regions when edits are applied.
+
+Older workspaces saved in full-mask mode now open through bounded crops by
+default. **Advanced → Editing mode → Bounded editing** returns an explicitly
+selected legacy mode to this workflow. Size-based **Automatic** also restores
+bounded rendering for large disk-backed masks. Full-size renderers are removed;
+the overview provides whole-mask viewing.
+
+For existing single-resolution workspaces, Save once to build the lower levels.
+This adds disk data and takes time, but processes bounded blocks instead of
+loading the entire mask into RAM. A failed or interrupted build stays marked
+outdated; `s0` remains the annotation source and a later Save can rebuild previews.
+
+Default camera-follow editing keeps a bounded working region editable in
+memory. Zoom in to load that region, pan to follow, and zoom out for the read-only
+overview. **Edit at View Center** offers manual control. For older workflows,
+**Advanced → Editing mode → Local-area editing** retains the separate editable
+area and green boundary described below.
 
 The original Labels layer remains the source of truth. Changes made in the
 temporary editable-area layer are written back only for pixels that changed,
@@ -665,7 +740,13 @@ label results.
 
 ### Saving
 
-With **Apply edits automatically** enabled, synchronization is stroke-aware:
+Default bounded editing saves strokes after a short idle delay, waits for an
+active stroke to finish, and flushes pending changes before navigation, saving,
+or closing. These writes use the same changed-region recovery journals and
+conflict checks. Workspace Save separately preserves project settings.
+
+In the legacy **Local-area editing** mode, **Apply edits automatically** controls
+synchronization:
 
 1. Saving never starts while the paint or erase mouse button is held.
 2. Releasing the mouse starts a 400 ms inactivity delay.
@@ -682,33 +763,45 @@ less memory; a 4096 × 4096 area requires fewer reloads while navigating.
 
 ## Component analysis at full-image scale
 
-Full-resolution masks are analyzed in tiles and displayed as paged results so the table
-does not need to create a row for every component at once. Analysis can be
-cancelled from the progress control. Component IDs and optional grid
-coordinates remain expressed in the full source-layer coordinate system.
+In default bounded editing, **Review & QC** measures the active crop; objects
+can continue beyond its edges. The panel identifies this local scope. The
+training component library separately scans the full backing mask in bounded
+chunks.
+
+When an explicit full-source mode is selected in Advanced, large component
+analysis processes the source in tiles and pages its results. Analysis can be
+cancelled, and component IDs and optional grid coordinates refer to that full
+source's coordinate system.
 
 ## Requirements and scope
 
-- Python 3.10 or newer
-- napari 0.4.19 or newer
+- Python 3.11 or newer
+- napari 0.9.1 or newer for the camera/canvas integration
 - 2D Labels layers for local-area editing and component analysis
-- matching 2D shapes when copying or combining layers
+- aligned 2D masks for combining; registered crops or explicit destination
+  matching when copying
 
 Practical dataset size depends on array storage, data type, chunking, available
-memory, and hardware. Automatic mode chooses a conservative strategy, while
-Local-area editing can be selected explicitly for datasets such as
-100,000 × 100,000-pixel masks.
+memory, and hardware. Bounded workspace editing is the default for 2D Zarr
+masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the released package:
+Install the current GitHub version (6.3.0):
 
 ```bash
-python -m pip install napari-label-assistant
+python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"
+```
+
+PyPI releases are published separately. To install the latest version available
+on PyPI:
+
+```bash
+python -m pip install --upgrade napari-label-assistant
 ```
 
 When upgrading from the pre-1.0 development package, remove its old plugin
-registration before installing 1.0:
+registration before installing the current package:
 
 ```bash
 python -m pip uninstall napari-label-assistant-tools

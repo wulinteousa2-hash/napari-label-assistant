@@ -274,7 +274,7 @@ def test_coverage_is_default_and_partial_annotations_require_review_mask(make_na
     widget.prepare_button.click()
     assert widget.worker is None
     assert widget.prepared is None
-    assert "Finish review" in widget.status_label.text()
+    assert "Labels → Local Editing → Review" in widget.status_label.text()
 
 
 def test_coverage_panel_indexes_trains_and_preserves_review_mask(make_napari_viewer, qtbot, monkeypatch):

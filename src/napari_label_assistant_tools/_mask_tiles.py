@@ -51,6 +51,7 @@ class MaskEntry:
     def __init__(self, manager, record, array, reference):
         self.manager = manager
         self.layer = None
+        self.overview = None
         self.bounds = None
         self.original = None
         self.pending_invalidations = []
@@ -147,6 +148,11 @@ class MaskEntry:
             import os
             os.fsync(handle.fileno())
         self.pending_pixels = pixels.copy()
+        from ._label_pyramid import mark_dirty
+        from .workspace.service import _zarr_reference
+        reference = _zarr_reference(self.source)
+        if reference is not None:
+            mark_dirty(reference, (region[0].start, region[1].start, region[0].stop, region[1].stop))
         current[mask] = values
         self.source.data[region] = current
         if not np.array_equal(np.asarray(self.source.data[region])[mask], values):
@@ -173,6 +179,55 @@ class MaskEntry:
         if library is not None:
             library.mark_dirty(bounds)
         invalidate_reviewed_regions(self.manager.viewer, self.source, bounds)
+        from ._label_pyramid import refresh_layer
+        if refresh_layer(self.source, bounds) is False:
+            self.error = 'Annotations saved. Labels overview needs rebuilding with Workspace Save.'
+            self.remove_overview()
+        if self.overview is not None:
+            self.overview.refresh()
+
+    def refresh_overview(self):
+        from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY
+        from ._label_pyramid import open_levels, OverviewLevel
+        from .workspace.service import _zarr_reference
+        reference = _zarr_reference(self.source)
+        levels = open_levels(reference) if reference else []
+        viewer = self.manager.viewer
+        active = viewer.layers.selection.active
+        self.remove_overview()
+        if not levels:
+            return
+        self.overview = viewer.add_labels(
+            [OverviewLevel(level, self) for level in levels], multiscale=True,
+            name=f'{self.layer.name} — overview',
+            **crop_transform_kwargs(self.source),
+            opacity=self.layer.opacity, blending=self.layer.blending,
+            metadata={INTERNAL_LAYER_ROLE_KEY: 'label_pyramid_overview'})
+        self.overview.editable = False
+        self._overview_reference = (str(reference['path']), reference.get('array_path'))
+        # Match label-ID colors with the editable source, including custom maps.
+        self.overview.colormap = self.layer.colormap
+        self.sync_overview_display()
+        if active is not None and any(layer is active for layer in viewer.layers):
+            viewer.layers.selection.active = active
+        else:
+            viewer.layers.selection.active = self.layer
+
+    def sync_overview_display(self, *_args):
+        if self.overview is None:
+            return
+        self.overview.name = f'{self.layer.name} — overview'
+        self.overview.opacity = self.layer.opacity
+        self.overview.blending = self.layer.blending
+        visible = self.layer.visible if self.bounds is not None else self.source.visible
+        self.overview.visible = bool(visible and self.manager.overview_enabled)
+        self.overview.colormap = self.layer.colormap
+
+    def remove_overview(self):
+        if self.overview is not None:
+            if any(layer is self.overview for layer in self.manager.viewer.layers):
+                self.manager.viewer.layers.remove(self.overview)
+            self.overview = None
 
     def recover(self):
         root = self._recovery_dir()
@@ -198,6 +253,8 @@ class MaskEntry:
                 if np.any((existing != old) & (existing != new)):
                     raise ValueError(f'Conflicting mask edits; recovery retained at {path}')
                 current.flat[ids] = new
+                from ._label_pyramid import mark_dirty
+                mark_dirty(reference, (bounds[0].start, bounds[1].start, bounds[0].stop, bounds[1].stop))
                 self.source.data[bounds] = current
                 self.pending_invalidations.append((bounds[0].start,bounds[1].start,bounds[0].stop,bounds[1].stop))
                 from ._component_library import library_for
@@ -249,12 +306,24 @@ class MaskEntry:
         self.original = pixels.copy()
         self.layer.visible = self.source.visible if bounds is not None else False
         self.layer.editable = bounds is not None
+        if self.overview is not None:
+            from ._label_pyramid import datasets
+            from .workspace.service import _zarr_reference
+            reference = _zarr_reference(self.source)
+            if (reference is None or (str(reference['path']), reference.get('array_path')) != self._overview_reference
+                    or not datasets(reference)):
+                self.remove_overview()
+            else:
+                self.overview.refresh()
 
 
 class MaskTileManager:
     def __init__(self, viewer, state=None):
         state = state or {}
-        self.viewer = viewer
+        from ._label_overview import BoundedLabelsViewer, LabelOverviewGuard, texture_limit
+        limit = texture_limit()
+        self.viewer = BoundedLabelsViewer(viewer, limit)
+        self.overview_guard = LabelOverviewGuard(viewer, limit)
         self.entries = []
         self.size = int(state.get('tile_size', DEFAULT_SIZE))
         if self.size not in (512, 1024, 2048, 4096):
@@ -262,7 +331,10 @@ class MaskTileManager:
         self.row = max(0, int(state.get('row', 0)))
         self.col = max(0, int(state.get('col', 0)))
         self.progress = dict(state.get('progress', {}))
+        self.follow_enabled = bool(state.get('camera_follow', True))
+        self.follow = None
         self.loading = False
+        self.overview_enabled = True
         self.stroke_active = False
         self.error = ''
         self.timer = None
@@ -276,6 +348,8 @@ class MaskTileManager:
             self.timer.timeout.connect(self._auto_flush)
         viewer.layers.events.removing.connect(self._removing)
         viewer.layers.events.inserted.connect(self._inserted)
+        if hasattr(viewer, 'mouse_double_click_callbacks'):
+            viewer.mouse_double_click_callbacks.append(self.locate_from_overview)
         setattr(viewer, MANAGER, self)
 
     def add(self, record, array, reference, manifest_path=None):
@@ -287,6 +361,14 @@ class MaskTileManager:
         try:
             entry.show()
             self.entries.append(entry)
+            for event in ('visible', 'opacity', 'name', 'blending', 'colormap'):
+                emitter = getattr(entry.layer.events, event, None)
+                if emitter is not None:
+                    emitter.connect(entry.sync_overview_display)
+            try:
+                entry.refresh_overview()
+            except Exception as error:
+                self.error = f'Labels loaded; overview unavailable: {error}'
         finally:
             self.loading = False
         return entry.layer
@@ -362,25 +444,37 @@ class MaskTileManager:
         self.error = ''
 
     def finish_loading(self):
+        recovered = any(entry.pending_invalidations for entry in self.entries)
         for entry in self.entries:
             for bounds in entry.pending_invalidations:
                 entry.invalidate(bounds)
             entry.pending_invalidations.clear()
         for entry in self.entries:
             entry.sync_metadata()
+        if recovered:
+            self.refresh_overviews()
 
     def _removing(self, event):
         layer = self.viewer.layers[event.index]
         entry = getattr(layer, '_label_assistant_mask_entry', None)
         if entry is not None and entry in self.entries:
             entry.flush()
+            entry.remove_overview()
             self.entries.remove(entry)
             if not self.entries:
                 self.dispose()
 
     def dispose(self):
+        self.overview_guard.close()
+        if self.follow is not None:
+            self.follow.pause_for_operation()
         if self.timer is not None:
             self.timer.stop()
+        if hasattr(self.viewer, 'mouse_double_click_callbacks'):
+            try:
+                self.viewer.mouse_double_click_callbacks.remove(self.locate_from_overview)
+            except ValueError:
+                pass
         for emitter, callback in ((self.viewer.layers.events.removing,self._removing),
                                   (self.viewer.layers.events.inserted,self._inserted)):
             try:
@@ -393,11 +487,18 @@ class MaskTileManager:
         return tuple(max(entry.source.data.shape[i] for entry in self.entries) for i in (0, 1))
 
     def state(self):
-        return dict(mode=getattr(self.viewer, MODE, 'auto'), tile_size=self.size,
+        return dict(mode=getattr(self.viewer, MODE, 'grid'), tile_size=self.size,
+                    camera_follow=self.follow_enabled,
                     row=self.row, col=self.col, progress=self.progress,
                     editing_strategy=getattr(self.viewer, '_label_assistant_editing_strategy', 'auto'))
 
     def go(self, row, col, size=None):
+        if self.follow is not None:
+            with self.follow.manual_control():
+                return self._go(row, col, size)
+        return self._go(row, col, size)
+
+    def _go(self, row, col, size=None):
         from .workspace.service import _commit_pending_local_edits, _ensure_no_training, _ensure_no_library_scan
         _ensure_no_training(self.viewer)
         _ensure_no_library_scan(self.viewer)
@@ -440,6 +541,41 @@ class MaskTileManager:
                               for x in (entry.bounds[1].start,entry.bounds[1].stop)])
         camera.zoom = 700/max(float(np.ptp(corners,axis=0).max()),1.)
 
+    def refresh_overviews(self):
+        previous = self.loading
+        self.loading = True
+        try:
+            for entry in self.entries:
+                try:
+                    entry.refresh_overview()
+                except Exception as error:
+                    self.error = f'Labels saved; overview unavailable: {error}'
+        finally:
+            self.loading = previous
+
+    def show_whole_mask(self):
+        if not any(entry.overview is not None for entry in self.entries):
+            raise ValueError('Save the workspace to build the Labels resolution pyramids first.')
+        self.overview_enabled = True
+        for entry in self.entries:
+            entry.sync_overview_display()
+        self.viewer.reset_view()
+
+    def locate_from_overview(self, _viewer, event):
+        active = self.viewer.layers.selection.active
+        entry = next((entry for entry in self.entries if active is entry.layer or active is entry.overview), None)
+        if entry is None or entry.overview is None or not entry.overview.visible:
+            return
+        from ._coordinates import mask_world_affine
+        affine = mask_world_affine(entry.source)
+        position = np.asarray(event.position)[-2:]
+        y, x = np.linalg.solve(affine[:2, :2], position - affine[:2, 2])
+        try:
+            self.go(int(np.floor(y / self.size)), int(np.floor(x / self.size)))
+            self.viewer.layers.selection.active = entry.layer
+        except Exception as error:
+            self.viewer.status = str(error)
+
     def restore_full_layers(self):
         from .workspace.service import _commit_pending_local_edits, _apply_common_state, _common_record
         _commit_pending_local_edits(self.viewer)
@@ -461,12 +597,16 @@ class MaskTileManager:
 
 
 def loading_state(viewer, payload):
-    """Resolve preference before any Labels layer is added to napari."""
+    """Resolve safe loading before any Labels layer is added to napari."""
     state = dict(payload.get('mask_view') or {})
     override = getattr(viewer, '_label_assistant_mask_loading_override', None)
-    mode = override or state.get('mode', 'auto')
+    saved_mode = state.get('mode', 'grid')
+    # Older local-area editing saved mode='full', which first constructed a
+    # full-size Labels renderer. Restore those projects through bounded crops.
+    # A deliberate Advanced choice in this session still takes precedence.
+    mode = override or ('grid' if saved_mode == 'full' else saved_mode)
     if mode not in ('auto', 'grid', 'full'):
-        raise ValueError('Unknown mask loading mode. Choose Automatic, Grid tile, or Full-layer editing.')
+        raise ValueError('Unknown mask loading mode. Choose Bounded, Automatic, or Full-layer editing.')
     setattr(viewer, MODE, mode)
     if mode in ('grid','auto'):
         viewer._label_assistant_editing_strategy = mode
@@ -498,21 +638,31 @@ def set_mode(viewer, mode):
         if requested == 'full':
             manager.restore_full_layers()
         return
-    if requested != 'grid':
+    if requested not in ('grid', 'auto'):
         return
     from .workspace.service import _common_record, _zarr_reference, _commit_pending_local_edits
+    from ._dynamic_edit import is_internal_layer
     _commit_pending_local_edits(viewer)
     import napari
     candidates = [(layer, _zarr_reference(layer)) for layer in list(viewer.layers)
-                  if isinstance(layer, napari.layers.Labels) and len(layer.data.shape) == 2]
+                  if isinstance(layer, napari.layers.Labels) and not is_internal_layer(layer)
+                  and len(layer.data.shape) == 2]
+    if requested == 'auto':
+        # A previous Full-layer / Local-area selection may have restored the
+        # enormous source layers. Auto must replace those renderers too, not
+        # just create a small edit crop while retaining full-size label views.
+        candidates = [(layer, reference) for layer, reference in candidates
+                      if reference is not None and should_tile(layer.data, 'auto')]
     if not candidates:
         return  # Preference is remembered for the next workspace open.
     if any(reference is None for _, reference in candidates):
-        raise ValueError('Save in-memory masks to a workspace first, then choose Grid tile editing.')
+        raise ValueError('Save in-memory masks to a workspace before using bounded editing.')
     # Preflight bounded reads before removing any currently visible mask.
     for layer, _ in candidates:
         np.asarray(layer.data[:min(layer.data.shape[0],DEFAULT_SIZE), :min(layer.data.shape[1],DEFAULT_SIZE)])
     manager = MaskTileManager(viewer)
+    previous_active = viewer.layers.selection.active
+    previous_name = getattr(previous_active, 'name', None)
     for layer, reference in candidates:
         record, data = _common_record(layer, 'Labels'), layer.data
         library = layer.metadata.get('label_assistant_component_library')
@@ -520,16 +670,26 @@ def set_mode(viewer, mode):
             record['label_assistant_component_library'] = deepcopy(library)
         viewer.layers.remove(layer)
         manager.add(record, data, reference)
-    manager.focus()
+    if requested == 'auto' and any(entry.overview is not None for entry in manager.entries):
+        manager.show_whole_mask()
+    else:
+        manager.focus()
+    if previous_active is not None and any(layer is previous_active for layer in viewer.layers):
+        viewer.layers.selection.active = previous_active
+    elif previous_name is not None and previous_name in viewer.layers:
+        viewer.layers.selection.active = viewer.layers[previous_name]
 
 
 def tile_controls(viewer, parent=None, strategy=None):
     """Compact grid navigator; no per-tile image files or giant table needed."""
     from qtpy.QtCore import QTimer
-    from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QComboBox
+    from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QComboBox, QCheckBox
     panel = QWidget(parent)
     layout = QVBoxLayout(panel); layout.setContentsMargins(0, 0, 0, 0)
-    note = QLabel(); note.setWordWrap(True); layout.addWidget(note)
+    advanced = QWidget(panel)
+    advanced_layout = QVBoxLayout(advanced)
+    advanced_layout.setContentsMargins(0, 0, 0, 0)
+    note = QLabel(); note.setWordWrap(True); advanced_layout.addWidget(note)
     row, col = QSpinBox(), QSpinBox()
     row.setPrefix('R'); col.setPrefix('C')
     row.setRange(0, 1000000); col.setRange(0, 1000000)
@@ -539,26 +699,48 @@ def tile_controls(viewer, parent=None, strategy=None):
     address = QHBoxLayout()
     for control in (row, col, size):
         address.addWidget(control)
-    layout.addLayout(address)
+    advanced_layout.addLayout(address)
+    from ._local_editing import LocalEditingControls
+    local_editing = LocalEditingControls(viewer, size, panel)
+    layout.addWidget(local_editing)
+    advanced_layout.insertWidget(0, local_editing.auto_follow)
     buttons = QHBoxLayout()
     previous, go, following, done = (QPushButton(text) for text in ('Previous', 'Go', 'Save & Next', 'Mark done'))
     for button in (previous, go, following, done):
         buttons.addWidget(button)
-    layout.addLayout(buttons)
+    advanced_layout.addLayout(buttons)
+    overview = QCheckBox('Show whole-mask overview')
+    overview.setChecked(True)
+    fit = QPushButton('Show whole mask')
+    overview_row = QHBoxLayout()
+    overview_row.addWidget(overview)
+    overview_row.addWidget(fit)
+    layout.addLayout(overview_row)
     stamp = [None]
     def refresh():
         if strategy is not None:
-            desired = getattr(viewer, '_label_assistant_editing_strategy', 'auto')
+            desired = getattr(viewer, '_label_assistant_editing_strategy', 'grid')
             index = strategy.findData(desired)
             if index >= 0 and strategy.currentIndex() != index:
                 strategy.blockSignals(True); strategy.setCurrentIndex(index); strategy.blockSignals(False)
         manager = manager_for(viewer)
         active = manager is not None and bool(manager.entries)
+        local_editing.refresh(manager if active else None)
         panel.setVisible(active)
         if not active:
             return
         key = (id(manager), manager.row, manager.col, manager.size)
         h, w = manager.shape
+        available = any(entry.overview is not None for entry in manager.entries)
+        overview.blockSignals(True)
+        overview.setChecked(manager.overview_enabled)
+        overview.blockSignals(False)
+        overview.setEnabled(available)
+        fit.setEnabled(available)
+        message = ('Read-only whole-mask overview. Double-click it to move the editable tile.' if available
+                   else 'Save the workspace to build Labels resolution pyramids for whole-mask viewing.')
+        overview.setToolTip(message)
+        fit.setToolTip(message)
         if stamp[0] != key:
             row.setValue(manager.row); col.setValue(manager.col)
             size.setCurrentIndex(size.findData(manager.size)); stamp[0] = key
@@ -566,7 +748,7 @@ def tile_controls(viewer, parent=None, strategy=None):
         bounds = next((entry.bounds for entry in manager.entries if entry.bounds is not None), (slice(0,0),slice(0,0)))
         note.setText(manager.error or f'Grid tile R{manager.row:02d}C{manager.col:02d} · {progress}\n'
                      f'y[{bounds[0].start}:{bounds[0].stop}] x[{bounds[1].start}:{bounds[1].stop}]\n'
-                     f'Only mask crops are loaded. Full mask: {h:,} × {w:,}. Components here describe this tile; boundary objects may continue next door.')
+                     f'Full mask: {h:,} × {w:,}. Editing and component measurements use this tile.\n' + message)
     def run(action):
         try:
             action(); refresh()
@@ -581,6 +763,14 @@ def tile_controls(viewer, parent=None, strategy=None):
     previous.clicked.connect(lambda: run(lambda: move(-1)))
     following.clicked.connect(lambda: run(lambda: move(1)))
     go.clicked.connect(lambda: run(lambda: manager_for(viewer).go(row.value(), col.value(), size.currentData())))
+    def toggle_overview(enabled):
+        manager = manager_for(viewer)
+        if manager is not None:
+            manager.overview_enabled = enabled
+            for entry in manager.entries:
+                entry.sync_overview_display()
+    overview.toggled.connect(toggle_overview)
+    fit.clicked.connect(lambda: run(lambda: manager_for(viewer).show_whole_mask()))
     def mark_done():
         manager = manager_for(viewer); manager.flush()
         manager.progress[f'{manager.size}:{manager.row}:{manager.col}'] = 'done'
@@ -591,5 +781,8 @@ def tile_controls(viewer, parent=None, strategy=None):
     panel._row, panel._col, panel._size = row, col, size
     panel._go, panel._next, panel._done = go, following, done
     panel._note = note
+    panel._overview_check, panel._fit_overview = overview, fit
+    panel._local_editing = local_editing
+    panel._advanced = advanced
     refresh()
     return panel

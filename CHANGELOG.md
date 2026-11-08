@@ -3,6 +3,89 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [6.3.0] - 2026-11-07
+
+### Changed
+
+- Require Python 3.11 and napari 0.9.1 or newer, matching the camera/canvas API
+  used by the ported workflow and the validated release environment.
+- Make bounded editing with automatic camera follow the default for 2D workspace
+  masks. Keep **Edit at View Center** visible; move editing modes, the follow
+  toggle, tile sizes/addresses, and manual grid navigation into collapsed
+  **Advanced** controls. Preserve explicit session overrides and saved follow
+  preferences.
+- Open older projects saved with `mask_view.mode: full` through bounded crops
+  before constructing any full-size Labels renderers. Opening leaves source
+  masks and the project JSON unchanged; the next Workspace Save records bounded
+  mode. Full-layer and Local-area editing remain explicit Advanced choices for
+  the current session.
+- Consolidate the main UI into **Workspace**, **Labels**, and **Training**.
+  Keep canvas review in Local Editing and component curation in Review & QC.
+  Move view comparisons and label operations into collapsed **View & Compare**
+  and **Label Tools** sections. Use compact source selectors and a separate
+  **Manage Training Selection** area in Dataset.
+
+### Added
+
+- Port Spatial Assistant's camera-follow controller: debounced viewport updates,
+  zoom thresholds with hysteresis, bounded windows up to 4096 × 4096 pixels,
+  a combined 128 MiB mask-read limit, stale-read rejection, stroke/navigation
+  waiting, and a read-only overview when zoomed out. Manual area selection pauses
+  following until the view changes; failed updates retain the current buffers.
+- Build categorical OME-Zarr mask pyramids (`s0`–`s6`) in bounded blocks. Keep
+  original IDs in `s0`; derived levels retain a foreground ID from each 2 × 2 bin.
+  Update affected pyramid regions after paint/erase and mark interrupted builds
+  for recovery without changing the annotation source.
+- Port Spatial Assistant's bounded overview policy before napari layer
+  construction: respect GPU texture limits, cap levels at 4096 pixels per axis
+  and 64 MiB, and retain only the safe pyramid suffix. Preserve affine alignment,
+  label colors, opacity, and exclusion of the active edit crop from the overlay.
+  Reapply the policy on preview rebuilds and repair legacy overview helpers.
+- Handle a single safe overview level as a read-only 2D display, including
+  compatibility repair for existing multiscale layers. Keep display failures
+  separate from successful mask writes and workspace saves.
+- Add streamed full-source relabel, merge, class composition, vote-count, and
+  consensus operations for disk-backed masks, with cancellation, aligned output
+  transforms, and durable workspace persistence of temporary results.
+- Show reviewed-cell progress and review coverage from rectangle metadata, plus
+  dataset supervision/preparation status without full-image mask scans. Include
+  selected foreground, verified background, and unknown/excluded counts from
+  prepared patch indexes.
+
+### Fixed
+
+- Prevent legacy full-mask preferences and overview resolution locks from
+  requesting multi-billion-pixel Labels arrays during project opening/display.
+- Preserve journal recovery, changed-region writes, external-writer conflict
+  checks, source transforms, undo boundaries, and complete masks during the new
+  display and editing workflow. Keep data-only workspace clients on writable
+  lazy Zarr references when interactive layer events are unavailable.
+- Revoke only intersecting reviewed cells after edits, including changes to
+  noncurrent image pairs and independent multilabel channels. Use effective
+  reviewed coverage plus selected-object foreground for partial supervision;
+  unreviewed zeros remain unknown. Mark prepared datasets outdated after changes.
+- Keep ROI-copy invalidation on the destination that owns its overview, so
+  copying into managed masks completes and refreshes derived preview levels.
+- Update README and training instructions to reflect current tabs, Advanced
+  controls, storage labels, migration behavior, and remaining review limitations.
+
+### Compatibility and validation
+
+- Workspace format version 2 and existing binary, multiclass, and multilabel
+  checkpoints remain supported; this release changes the default restoration of
+  saved full-mask loading preferences.
+- Reviewed-cell coverage creation/approval still requires explicit Local-area or
+  Full-layer editing for the session. **Mark done** records grid navigation only
+  and does not approve training background.
+- Full regression suite: **425 passed**, 0 failures/skips, 495 warnings in
+  396.60 seconds with Qt offscreen. The 6.3.0 wheel builds successfully and
+  includes all added modules. See [release validation](validation_reports/12_release_6_3_0.md).
+- Validate bounded loads and native canvas mapping, affine registration,
+  resolution locks, stale/failed reads, manual controls, conflict recovery,
+  workspace round trips, label operations, and annotation/training state.
+  Check an existing six-layer large-image project with mask writes forbidden:
+  all layers load without oversized mask reads and its JSON remains unchanged.
+
 ## [5.3.0] - 2026-11-05
 
 ### Fixed

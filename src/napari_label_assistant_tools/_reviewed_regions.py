@@ -5,7 +5,7 @@ from uuid import uuid4
 from contextlib import suppress
 
 import numpy as np
-from qtpy.QtWidgets import QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton, QSpinBox, QVBoxLayout
+from qtpy.QtWidgets import QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget
 
 KEY = "label_assistant_review"
 
@@ -46,13 +46,70 @@ def write_area(mask, bounds, value):
         for x in range(bounds.x0, bounds.x1, 512):
             mask.data[y:min(y + 512, bounds.y1), x:min(x + 512, bounds.x1)] = value
     mask.refresh()
+    from ._label_pyramid import refresh_layer
+    if hasattr(mask, 'metadata'):
+        refresh_layer(mask, (bounds.y0, bounds.x0, bounds.y1, bounds.x1))
     from ._component_library import notify_library
     notify_library(mask)
 
 
+def effective_areas(state):
+    """Approved rectangles minus edits awaiting re-review; metadata only."""
+    from ._component_library import subtract_rectangle
+    areas = list(state.get("areas", []))
+    for cut in state.get("invalid_regions", []):
+        areas = [part for area in areas for part in subtract_rectangle(area, cut)]
+    return areas
+
+
+def region_reviewed(bounds, areas):
+    from ._component_library import subtract_rectangle
+    remaining = [list(bounds)]
+    for area in areas:
+        remaining = [part for rect in remaining for part in subtract_rectangle(rect, area)]
+        if not remaining:
+            return True
+    return False
+
+
+def review_progress(shape, cell_shape, state):
+    """Count fully covered grid cells using rectangle boundaries, not mask scans.
+
+    Row bands have identical rectangle coverage; even a 100k-pixel image needs
+    work proportional to annotation rectangles rather than its number of cells.
+    """
+    h, w = shape
+    sy, sx = cell_shape
+    rows, columns = (h + sy - 1) // sy, (w + sx - 1) // sx
+    areas = effective_areas(state)
+    bands = {0, rows}
+    for a, _, c, _ in areas:
+        bands.update(max(0, min(rows, r)) for r in (a // sy, (a + sy - 1) // sy, c // sy, (c + sy - 1) // sy))
+    count = 0
+    edges = sorted(bands)
+    for first, last in zip(edges, edges[1:]):
+        y0, y1 = first * sy, min(last * sy, h)
+        cuts = sorted({y0, y1} | {v for a, _, c, _ in areas for v in (a, c) if y0 < v < y1})
+        common = [(0, w)]
+        for top, bottom in zip(cuts, cuts[1:]):
+            intervals = sorted((max(0, b), min(w, d)) for a, b, c, d in areas if a <= top and c >= bottom)
+            union = []
+            for left, right in intervals:
+                if left >= right:
+                    continue
+                if union and left <= union[-1][1]:
+                    union[-1] = (union[-1][0], max(right, union[-1][1]))
+                else:
+                    union.append((left, right))
+            common = [(max(a, c), min(b, d)) for a, b in common for c, d in union if max(a, c) < min(b, d)]
+        covered = sum(max(0, (columns if b == w else b // sx) - (a + sx - 1) // sx) for a, b in common)
+        count += (last - first) * covered
+    return count, rows * columns
+
+
 class ReviewedAreaWidget(QGroupBox):
     def __init__(self, viewer, controller, parent=None):
-        super().__init__("Reviewed cells", parent)
+        super().__init__("Review", parent)
         self.viewer, self.controller = viewer, controller
         self.closed = False
         widgets = getattr(viewer, "_label_assistant_review_widgets", None)
@@ -63,7 +120,7 @@ class ReviewedAreaWidget(QGroupBox):
         self.selected_cell = None
         self.editor_summary = QLabel()
         self.editor_summary.setWordWrap(True)
-        self.next_button = QPushButton("Mark reviewed & next")
+        self.next_button = QPushButton("Mark reviewed && next")
         self.next_button.setEnabled(False)
         self.next_button.setToolTip("Confirm all objects and background in this cell, then move to the next unreviewed cell.")
         self.next_button.clicked.connect(lambda: self.run(self.finish_and_next))
@@ -72,13 +129,25 @@ class ReviewedAreaWidget(QGroupBox):
         self.review_overlay = None
         self._previous_modes = []
         layout = QVBoxLayout(self)
+        self.progress_label = QLabel("Reviewed cells: 0 / 0")
+        layout.addWidget(self.progress_label)
         self.image_combo = QComboBox()
+        self.image_combo.setMinimumContentsLength(8)
+        self.image_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.image_combo.setToolTip("Select the image corresponding to the Curated layer being reviewed.")
         layout.addWidget(self.image_combo)
+        options_toggle = QToolButton()
+        options_toggle.setText("Review options")
+        options_toggle.setCheckable(True)
+        self.options_panel = QWidget()
+        options_layout = QVBoxLayout(self.options_panel)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        self.options_panel.hide()
+        options_toggle.toggled.connect(self.options_panel.setVisible)
         self.mouse_review_check = QCheckBox("Select an editable/review cell on the canvas")
         self.mouse_review_check.setToolTip("Enable this mode to select or mark whole address-grid cells. Turn it off to resume painting objects.")
         self.grid_form = QFormLayout()
-        layout.addLayout(self.grid_form)
+        options_layout.addLayout(self.grid_form)
         self.mouse_action_combo = QComboBox()
         self.mouse_action_combo.addItem("Click to select a cell", "select")
         self.mouse_action_combo.addItem("Click to mark a cell reviewed", "mark")
@@ -87,8 +156,8 @@ class ReviewedAreaWidget(QGroupBox):
         layout.addWidget(self.mouse_review_check)
         self.advanced_check = QCheckBox("Mark already-checked cells with clicks")
         self.advanced_check.setToolTip("Use only for cells you have already checked completely. The normal workflow selects a cell first, then finishes its review.")
-        layout.addWidget(self.advanced_check)
-        layout.addWidget(self.mouse_action_combo)
+        options_layout.addWidget(self.advanced_check)
+        options_layout.addWidget(self.mouse_action_combo)
         self.mouse_action_combo.hide()
         self.advanced_check.toggled.connect(self._advanced_changed)
         self.cell_label = QLabel("No grid cell selected. Enable mouse review, then click a cell.")
@@ -107,10 +176,16 @@ class ReviewedAreaWidget(QGroupBox):
         self.preview_button = QPushButton("Show reviewed annotations in this area")
         for button, action in ((self.mark_button, self.finish_review), (self.remove_button, self.remove_review), (self.preview_button, self.preview)):
             if button is not self.preview_button:
-                layout.addWidget(button)
+                (options_layout if button is self.mark_button else layout).addWidget(button)
             else:
                 button.hide()
             button.clicked.connect(lambda _checked=False, fn=action: self.run(fn))
+        layout.addWidget(self.next_button)
+        self.coverage_button = QPushButton("Show Review Coverage")
+        self.coverage_button.clicked.connect(lambda: self.run(self.show_coverage))
+        layout.addWidget(self.coverage_button)
+        layout.addWidget(options_toggle)
+        layout.addWidget(self.options_panel)
         self.status = QLabel("Use local-area editing to define the review boundary.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -231,8 +306,14 @@ class ReviewedAreaWidget(QGroupBox):
 
     def update_review_overlay(self, truth):
         mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
-        areas = mask.metadata.get(KEY, {}).get("areas", []) if mask is not None else []
+        areas = effective_areas(mask.metadata.get(KEY, {})) if mask is not None else []
         self.make_outline(truth, areas, "Reviewed areas — green outlines", "lime", "review_overlay")
+
+    def show_coverage(self):
+        truth = self.grid_config[0]() if self.grid_config else getattr(self.controller, 'source', None)
+        if truth is None:
+            raise ValueError("Choose a Labels layer to inspect review coverage.")
+        self.update_review_overlay(truth)
 
     def mouse_click(self, _viewer, event):
         if not self.mouse_review_check.isChecked() or self.grid_config is None:
@@ -304,11 +385,29 @@ class ReviewedAreaWidget(QGroupBox):
         self.update_status()
 
     def update_status(self, *_args):
-        truth = self.selected_cell[0] if self.selected_cell is not None else getattr(self.controller, 'source', None)
+        truth = self.selected_cell[0] if self.selected_cell is not None else self.grid_config[0]() if self.grid_config else getattr(self.controller, 'source', None)
         mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
+        state = mask.metadata.get(KEY, {}) if mask is not None else {}
+        if truth is not None and self.grid_config:
+            from ._mask_tiles import full_data
+            shape = full_data(truth).shape
+            cell_shape = (self.grid_config[1].value(), self.grid_config[2].value())
+            stamp = (id(mask), shape, cell_shape, repr(state.get('areas')), repr(state.get('invalid_regions')))
+            if stamp != getattr(self, '_progress_stamp', None):
+                self._progress_stamp = stamp
+                count, total = review_progress(shape, cell_shape, state)
+                detail = f"{count:,}" if mask is None or 'areas' in state else "not counted (external mask)"
+                self.progress_label.setText(f"Reviewed cells: {detail} / {total:,}")
+        elif truth is None:
+            self.progress_label.setText("Choose a Labels layer to inspect review progress.")
+        if self.selected_cell is not None:
+            _, bounds, sy, sx = self.selected_cell
+            rect = (bounds.y0, bounds.x0, bounds.y1, bounds.x1)
+            stale = any(a < bounds.y1 and b < bounds.x1 and c > bounds.y0 and d > bounds.x0 for a,b,c,d in state.get('invalid_regions', []))
+            status = "Needs re-review after edits" if stale else "Reviewed" if region_reviewed(rect, effective_areas(state)) else "Not reviewed"
+            self.cell_label.setText(f"Current cell: R{bounds.y0 // sy:02d}C{bounds.x0 // sx:02d}\nStatus: {status}")
         if mask is not None:
-            count = len(mask.metadata[KEY].get("areas", []))
-            self.status.setText(f"{count} marked area(s) · Training selects this mask in Partial mode. Preview patches again after changes.")
+            self.status.setText("Edits revoke approval until re-review.")
         else:
             self.status.setText("No reviewed coverage yet. Marking an area creates a separate mask.")
         self.editor_summary.setText(self.cell_label.text() + "\n" + self.status.text())

@@ -189,7 +189,7 @@ def test_multi_pair_panel_prepares_trains_and_invalidates_any_source(make_napari
     widget.dataset_pairs = definitions
     widget.dataset_source_mode.setCurrentIndex(widget.dataset_source_mode.findData('multiple'))
     assert widget.image_combo.isHidden()
-    assert widget.annotation_tabs.isHidden()
+    assert not widget.selection_toggle.isHidden()
     assert widget.workflow_combo.currentData() == 'coverage'
     assert '2 pairs selected' in widget.pairs_summary.text()
     for combo in (widget.crop_combo, widget.resolution_combo):
@@ -213,7 +213,7 @@ def test_multi_pair_panel_prepares_trains_and_invalidates_any_source(make_napari
     assert widget.prepared is None
     widget.dataset_source_mode.setCurrentIndex(widget.dataset_source_mode.findData('current'))
     assert not widget.image_combo.isHidden()
-    assert not widget.annotation_tabs.isHidden()
+    assert not widget.selection_toggle.isHidden()
 
 
 def test_pair_definitions_survive_workspace_save_and_rename(tmp_path, make_napari_viewer, qtbot):
@@ -262,9 +262,9 @@ def test_manage_pairs_can_open_review_controls_without_adding_table_to_panel(mak
     widget.manage_pairs_button.click()
     assert widget._multiple_pairs()
     assert widget.review_pair_toggle.isChecked()
-    assert not widget.annotation_tabs.isHidden()
+    assert not widget.selection_toggle.isHidden()
     assert widget.image_combo.currentData() is viewer.layers[2]
     assert widget.truth_combo.currentData() is viewer.layers[3]
     widget.review_pair_toggle.setChecked(False)
-    assert widget.annotation_tabs.isHidden()
+    assert not widget.selection_toggle.isHidden()
     assert widget.image_combo.isHidden()

@@ -98,11 +98,11 @@ def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
 
     widget = label_assistant_widget(viewer)
 
-    assert widget._tool_tabs.count() == 5
+    assert widget._tool_tabs.count() == 3
     assert [
         widget._tool_tabs.tabText(index)
         for index in range(widget._tool_tabs.count())
-    ] == ["Workspace", "Labels", "Training", "Compare", "Combine"]
+    ] == ["Workspace", "Labels", "Training"]
     from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
     assert isinstance(widget._tool_tabs.widget(2), QuickTrainWidget)
     labels = widget._tool_tabs.widget(1)
@@ -215,7 +215,8 @@ def test_image_labels_view_changes_visibility_without_losing_labels_selection(
     image = viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name="image")
     mask = viewer.add_labels(np.zeros((16, 16), dtype=np.uint8), name="mask")
     widget = label_assistant_widget(viewer)
-    image_mask_view = widget._tool_tabs.widget(3)
+    image_mask_view = widget._tool_tabs.widget(1)._view_compare
+    widget._tool_tabs.widget(1)._view_compare_section.setChecked(True)
 
     buttons = {
         button.text(): button
@@ -233,7 +234,8 @@ def test_combine_labels_merges_a_single_multivalue_layer(make_napari_viewer):
     labels = np.array([[0, 2], [255, 0]], dtype=np.uint16)
     source = viewer.add_labels(labels, name="source mask")
     widget = label_assistant_widget(viewer)
-    combine_masks = widget._tool_tabs.widget(4)
+    combine_masks = widget._tool_tabs.widget(1)._label_tools
+    widget._tool_tabs.widget(1)._label_tools_section.setChecked(True)
 
     combine_masks._mode_combo.setCurrentText("Merge Layers As Same Class")
     for index in range(combine_masks._layer_list.count()):
@@ -248,7 +250,7 @@ def test_combine_labels_merges_a_single_multivalue_layer(make_napari_viewer):
     )
 
 
-def test_dataset_owns_annotations_and_shares_editor_selection(make_napari_viewer, qtbot):
+def test_labels_owns_review_and_dataset_shares_training_selection(make_napari_viewer, qtbot):
     from napari_label_assistant_tools._dynamic_edit import TileBounds
 
     viewer = make_napari_viewer()
@@ -266,15 +268,16 @@ def test_dataset_owns_annotations_and_shares_editor_selection(make_napari_viewer
     panel._tool_tabs.setCurrentIndex(2)
     assert training.reviewed_area_widget is review
     assert training.component_library_widget is library
-    assert review.parentWidget() is training.reviewed_cells_page
-    assert library.parentWidget() is training.selected_objects_page
+    assert review.parentWidget() is labels._annotate_page
+    assert library.parentWidget() is training.training_selection_panel
+    assert not hasattr(training, 'annotation_tabs')
     assert training.image_combo.currentData() is image
     assert review.image_combo.currentData() is image
     training.truth_combo.setCurrentIndex(training.truth_combo.findData(curated))
     assert labels._target_combo.currentText() == "Curated"
     selected = (curated, TileBounds(0, 0, 16, 16), 16, 16)
     review.selected_cell = selected
-    training.annotation_tabs.setCurrentIndex(1)
+    training.selection_toggle.setChecked(True)
     assert library.isVisible()
     assert not review.isVisible()
     assert library.source_layer() is curated
@@ -285,7 +288,7 @@ def test_dataset_owns_annotations_and_shares_editor_selection(make_napari_viewer
     assert training.train_button.isVisible()
     assert not library.isVisible()
     training.workflow_tabs.setCurrentIndex(0)
-    training.annotation_tabs.setCurrentIndex(0)
+    panel._tool_tabs.setCurrentIndex(1)
     assert review.isVisible()
     assert review.selected_cell is selected
     labels._target_combo.setCurrentText("other")
@@ -295,7 +298,7 @@ def test_dataset_owns_annotations_and_shares_editor_selection(make_napari_viewer
     panel._tool_tabs.setCurrentIndex(1)
     assert not library.isVisible()
     assert not review.mark_button.isVisible()
-    assert review.mouse_review_check.parentWidget() is labels._annotate_page
+    assert review.mouse_review_check.parentWidget() is review
     training.workflow_tabs.setCurrentIndex(next(
         i for i in range(training.workflow_tabs.count())
         if training.workflow_tabs.tabText(i).endswith(". Train")

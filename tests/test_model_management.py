@@ -344,7 +344,9 @@ def test_unavailable_custom_provider_preserves_workspace_annotation_access(make_
     payload["model_project"]["settings"]["new_model"]["provider"]="unavailable_custom_provider"
     path.write_text(json.dumps(payload))
     load_workspace(viewer,path)
-    assert len(viewer.layers)==1
+    from napari_label_assistant_tools._dynamic_edit import is_internal_layer
+    annotations = [layer for layer in viewer.layers if not is_internal_layer(layer)]
+    assert len(annotations)==1 and annotations[0].name == "Annotations"
     assert widget.models_panel.provider.currentData()=="custom"
 
 

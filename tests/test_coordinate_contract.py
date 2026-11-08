@@ -7,6 +7,7 @@ import pytest
 from napari_label_assistant_tools._coordinates import (
     crop_transform_kwargs, matching_mask_transforms,
 )
+from napari_label_assistant_tools._dynamic_edit import is_internal_layer
 from napari_label_assistant_tools._quick_train import QuickTrainPrediction
 from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
 from napari_label_assistant_tools._widget import component_operations_widget, label_operations_widget
@@ -50,7 +51,10 @@ def test_A01_layers_and_cropped_prediction_roundtrip(transform, make_napari_view
         viewer = make_napari_viewer()
         result = load_workspace(viewer, path)
         assert not result['skipped_layers']
-        for layer, pixels, coordinates in zip(viewer.layers, expected_pixels, expected_world):
+        # Derived overviews are display helpers, not persisted annotation layers.
+        restored = [layer for layer in viewer.layers if not is_internal_layer(layer)]
+        assert len(restored) == len(expected_pixels)
+        for layer, pixels, coordinates in zip(restored, expected_pixels, expected_world):
             np.testing.assert_array_equal(layer.data[:], pixels)
             np.testing.assert_allclose(world(layer, points), coordinates, rtol=0, atol=1e-10)
 

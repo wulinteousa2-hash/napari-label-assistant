@@ -34,7 +34,7 @@ class ComponentLibraryWidget(QGroupBox):
         self._auto_paused = False
         self.closed = False
         layout = QVBoxLayout(self)
-        note = QLabel("Include object foreground. Confirm background under Reviewed cells.")
+        note = QLabel("Include foreground objects. Review complete regions and background in Labels → Local Editing → Review.")
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QHBoxLayout()
@@ -142,15 +142,8 @@ class ComponentLibraryWidget(QGroupBox):
                 # Release the worker's SQLite transaction before recording a
                 # concurrent producer's edit on the GUI thread.
                 self.cancel_event.set()
-            bounds = None
-            offset = getattr(event, "offset", None)
-            data = getattr(event, "data", None)
-            if offset is not None and data is not None:
-                from numbers import Integral
-                shape = getattr(data, "shape", ())
-                if len(offset)>=2 and len(shape)==2 and all(isinstance(v,Integral) for v in offset[-2:]):
-                    y,x = map(int,offset[-2:])
-                    bounds = (y,x,y+shape[0],x+shape[1])
+            from ._component_library import annotation_bounds
+            bounds = annotation_bounds(event)
             annotation_changed(self.viewer, self.layer, bounds)
             self._stamp = None
         except Exception as error:

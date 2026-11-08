@@ -1,11 +1,13 @@
 # Independent software and scientific audit
 
-**Current release: 5.3.0 (2026-11-05).** The final release working tree passed
-**353 tests**, with 0 failures/skips and 353 warnings, in 250.88 seconds
-(Qt offscreen). See [release validation](11_release_5_3_0.md). Initial audit
-scores and failures below remain historical; follow-up reports record the fixes.
+**Current release: 6.3.0 (2026-11-07).** See
+[6.3.0 release validation](12_release_6_3_0.md) for the current editing, display,
+legacy-project loading, packaging, and test results: **425 passed, 0 failures or
+skips** in 396.60 seconds (Qt offscreen). The preceding 5.3.0 release
+passed 353 tests; its [validation report](11_release_5_3_0.md) and the initial
+audit findings below remain historical records.
 
-Reviewed GitHub repository: [wulinteousa2-hash/napari-label-assistant](https://github.com/wulinteousa2-hash/napari-label-assistant). Exact reviewed/local/remote-main SHA during execution: `cb95a5e97717aca24db658c488fd810647955bcd`. Audit date: **2026-11-03**. Source declares version **4.3.0**; multilabel work is documented under Unreleased.
+Original audit repository: [wulinteousa2-hash/napari-label-assistant](https://github.com/wulinteousa2-hash/napari-label-assistant). Exact reviewed/local/remote-main SHA during that audit: `cb95a5e97717aca24db658c488fd810647955bcd`. Audit date: **2026-11-03**. At that commit, source declared version **4.3.0** and multilabel work was documented under Unreleased.
 
 **Authorized follow-up, 2026-11-04:** A01/A02/A04 have now been patched in the
 working tree. See [coordinate patch validation](08_coordinate_patch_validation.md).
@@ -19,7 +21,7 @@ see [grid-mask validation and memory measurement](09_grid_mask_loading_validatio
 confirmation, automatic matching and retained originals. See
 [copy-destination validation](10_copy_destination_validation.md).
 
-**Recommendation: Requires critical fixes before reliable scientific use.** Five P0 conditions were reproduced involving saved spatial transforms, local edit geometry, component-copy dtype/alignment, and stale Zarr storage bindings. Ordinary paths also passed substantial independent checks; findings specify their triggering conditions rather than alleging universal corruption.
+**Historical recommendation (2026-11-03): Requires critical fixes before reliable scientific use.** Five P0 conditions were reproduced involving saved spatial transforms, local edit geometry, component-copy dtype/alignment, and stale Zarr storage bindings. Ordinary paths also passed substantial independent checks; findings specify their triggering conditions rather than alleging universal corruption. Follow-up reports document the subsequent fixes.
 
 Existing suite: **289 passed, 0 failed/skipped**. Final independent suites: **19 passed, 11 failed** across 30 cases. Three CPU synthetic workflows and a real GPU smoke check passed their defined final contracts; an exploratory default CPU/GPU precision check failed and is explicitly retained/documented. No application source or existing tests were changed, and no Git commit/push was performed. Real user datasets were not used.
 
@@ -27,6 +29,8 @@ Existing suite: **289 passed, 0 failed/skipped**. Final independent suites: **19
 
 | Deliverable | Report |
 |---|---|
+| Current release: automatic editing, bounded display, and legacy loading | [12_release_6_3_0.md](12_release_6_3_0.md) |
+| Previous release validation | [11_release_5_3_0.md](11_release_5_3_0.md) |
 | A: Executive assessment, provisional scores and G: release recommendation | [00_executive_assessment.md](00_executive_assessment.md) |
 | Phase 1: Architecture/feature inventory, interactions, implementation and tests | [01_feature_inventory.md](01_feature_inventory.md) |
 | B: Prioritized technical findings, reproduction/evidence/correction/regression | [02_technical_findings.md](02_technical_findings.md) |
@@ -42,4 +46,6 @@ Start with [executed commands](evidence/commands.md), [environment](evidence/env
 
 **Verified** = executed observation; **Code-reviewed** = inspected behavior without independent execution; **Unverified** = blocked/not performed and accompanied by a follow-up procedure. Qt controls/layer objects were tested offscreen; this is not a human usability study or rendered-overlay evaluation. Sparse logical 100k access is not a full 100k performance demonstration. Toy axon/myelin-like data tests pipeline mechanics and cannot establish biological accuracy or generalization.
 
-The reports propose targeted corrections; they do not implement them. Earlier requests to publish features do not override this audit's explicit instruction against source modification or committing.
+The original audit was read-only and produced no source changes or commits.
+Follow-up reports document later implementation and release validation; the
+original observations are retained for reproducibility.

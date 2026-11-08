@@ -211,7 +211,8 @@ def test_simple_workflow_and_automatic_ground_truth(make_napari_viewer, qtbot):
     assert training.truth_combo.findData(mask) == -1
     assert training.create_reviewed_button.isHidden()
     training.truth_combo.setCurrentIndex(training.truth_combo.findData(other))
-    assert training.truth_combo.currentData() is truth
+    assert training.truth_combo.currentData() is other
+    assert training.reviewed_combo.currentData() is None
     review.advanced_check.setChecked(True)
     review.mouse_action_combo.setCurrentIndex(review.mouse_action_combo.findData("mark"))
     review.advanced_check.setChecked(False)

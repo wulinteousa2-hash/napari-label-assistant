@@ -19,7 +19,7 @@ from qtpy.QtWidgets import (
 from superqt.utils import create_worker
 
 from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY, is_internal_layer
-from ._mask_tiles import full_data
+from ._mask_tiles import full_data, full_source
 from ._quick_train import (
     QuickTrainCancelled, QuickTrainConfig, array_2d, build_crop_atlas, crop_summary,
     load_model, predict_area, predict_region, prediction_labels, prepare_crops, save_model, train_prepared_unet,
@@ -56,6 +56,7 @@ class QuickTrainWidget(QWidget):
         self._validation_preview_layer = None
         self.prepared = None
         self._prepared_signature = None
+        self._dataset_outdated = False
         self._generation = 0
         self._source_emitters = []
         self._crop_preview_layers = []
@@ -72,6 +73,7 @@ class QuickTrainWidget(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
+        self.dataset_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         body = QWidget()
@@ -110,7 +112,7 @@ class QuickTrainWidget(QWidget):
         source_row = QHBoxLayout()
         source_row.addWidget(self.dataset_source_mode, 1)
         source_row.addWidget(self.manage_pairs_button)
-        form.addRow('Dataset sources', source_row)
+        form.addRow('Source mode', source_row)
         self.pairs_summary = QLabel()
         self.pairs_summary.setWordWrap(True)
         form.addRow(self.pairs_summary)
@@ -170,11 +172,14 @@ class QuickTrainWidget(QWidget):
         self.device_combo = QComboBox()
         for label, value in (("Automatic (CUDA or CPU)", "auto"), ("CPU", "cpu"), ("CUDA", "cuda")):
             self.device_combo.addItem(label, value)
+        for combo in (self.image_combo, self.truth_combo, self.reviewed_combo,
+                      self.dataset_source_mode, self.workflow_combo, self.annotation_combo):
+            combo.setMinimumContentsLength(8)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         form.addRow("Workflow", self.workflow_combo)
-        form.addRow("Annotation coverage", self.annotation_combo)
-        form.addRow("Training image", self.image_combo)
+        form.addRow("Coverage", self.annotation_combo)
+        form.addRow("Image", self.image_combo)
         form.addRow("Ground truth", self.truth_combo)
-        form.addRow("Reviewed-region mask", self.reviewed_combo)
         form.addRow(self.create_reviewed_button)
         form.addRow("Source patch size", self.crop_combo)
         form.addRow("Model input size", self.resolution_combo)
@@ -219,27 +224,36 @@ class QuickTrainWidget(QWidget):
         self.crop_summary_label.setWordWrap(True)
         prepare_layout.addWidget(self.crop_summary_label)
         layout.addWidget(group)
-        self.annotation_tabs = QTabWidget()
-        self.reviewed_cells_page = QWidget()
-        self.reviewed_cells_layout = QVBoxLayout(self.reviewed_cells_page)
-        self.reviewed_cells_layout.setContentsMargins(0, 0, 0, 0)
-        self.reviewed_cells_hint = QLabel("Select an editable cell in Labels → Local Editing, correct its masks, then finish its review here.")
-        self.reviewed_cells_hint.setWordWrap(True)
-        self.reviewed_cells_layout.addWidget(self.reviewed_cells_hint)
-        self.selected_objects_page = QWidget()
-        self.selected_objects_layout = QVBoxLayout(self.selected_objects_page)
-        self.selected_objects_layout.setContentsMargins(0, 0, 0, 0)
-        self.selected_objects_hint = QLabel("Open Label Curation to select library objects for this dataset.")
-        self.selected_objects_hint.setWordWrap(True)
-        self.selected_objects_layout.addWidget(self.selected_objects_hint)
-        self.annotation_tabs.addTab(self.reviewed_cells_page, "Reviewed cells")
-        self.annotation_tabs.addTab(self.selected_objects_page, "Selected objects")
+        overview = QGroupBox("Training data")
+        overview_layout = QVBoxLayout(overview)
+        self.annotation_sources_label = QLabel()
+        self.supervision_label = QLabel()
+        self.dataset_state_label = QLabel("No eligible annotations")
+        for label in (self.annotation_sources_label, self.supervision_label, self.dataset_state_label):
+            label.setWordWrap(True)
+            overview_layout.addWidget(label)
+        layout.addWidget(overview)
+        self.selection_toggle = QToolButton()
+        self.selection_toggle.setText("Manage Training Selection")
+        self.selection_toggle.setCheckable(True)
+        layout.addWidget(self.selection_toggle)
+        self.training_selection_panel = QWidget()
+        self.training_selection_layout = QVBoxLayout(self.training_selection_panel)
+        self.training_selection_layout.setContentsMargins(0, 0, 0, 0)
+        self.selection_form = QFormLayout()
+        self.selection_form.addRow("Reviewed-region mask", self.reviewed_combo)
+        self.training_selection_layout.addLayout(self.selection_form)
+        self.selection_hint = QLabel("Review cells in Labels → Local Editing. Build the component library to include individual foreground objects here.")
+        self.selection_hint.setWordWrap(True)
+        self.training_selection_layout.addWidget(self.selection_hint)
+        self.training_selection_panel.hide()
+        self.selection_toggle.toggled.connect(self._update_source_mode_visibility)
         self.review_pair_toggle = QToolButton()
         self.review_pair_toggle.setText('Review selected pair')
         self.review_pair_toggle.setCheckable(True)
         self.review_pair_toggle.toggled.connect(self._update_source_mode_visibility)
-        layout.addWidget(self.review_pair_toggle)
-        layout.addWidget(self.annotation_tabs, 1)
+        self.training_selection_layout.insertWidget(0, self.review_pair_toggle)
+        layout.addWidget(self.training_selection_panel)
         layout.addStretch(0)
         prepare_layout.insertWidget(0, self.annotation_note)
         dataset_layout.addWidget(prepare_group)
@@ -664,10 +678,10 @@ class QuickTrainWidget(QWidget):
         self.review_pair_toggle.setVisible(multiple)
         self.review_pair_toggle.setText('Review selected mask' if self._is_multilabel() else 'Review selected pair')
         self.manage_pairs_button.setText('Manage channels…' if self._is_multilabel() else 'Manage pairs…')
-        self.annotation_tabs.setTabEnabled(1, not self._is_multilabel())
-        if self._is_multilabel() and self.annotation_tabs.currentIndex() == 1:
-            self.annotation_tabs.setCurrentIndex(0)
-        self.annotation_tabs.setVisible(reviewing)
+        self.training_selection_panel.setVisible(self.selection_toggle.isChecked())
+        if self.component_library_widget is not None:
+            self.component_library_widget.setVisible(reviewing)
+        self.selection_hint.setVisible(self.component_library_widget is None or (multiple and not reviewing))
         self.dataset_source_layout.setStretch(self.dataset_source_layout.count() - 1, 0 if reviewing else 1)
         for control in (self.image_combo, self.truth_combo, self.annotation_combo):
             control.setVisible(reviewing)
@@ -689,7 +703,7 @@ class QuickTrainWidget(QWidget):
             self.pairs_summary.setText(f'{len(included)} {image_word} · {len(names)} {channel_word} · {detail}')
             self.pairs_summary.setToolTip('\n'.join(issues))
             self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
-            self.dataset_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+            self.selection_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
             return
         included = [row for row in self.dataset_pairs if row.get('included')]
         from ._dataset_pairs import resolve_pairs
@@ -703,7 +717,7 @@ class QuickTrainWidget(QWidget):
         self.pairs_summary.setText(f'{len(included)} pairs selected · {detail}')
         self.pairs_summary.setToolTip('\n'.join(issues))
         self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
-        self.dataset_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+        self.selection_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
 
     def _manage_pairs(self):
         if self._is_multilabel():
@@ -780,6 +794,7 @@ class QuickTrainWidget(QWidget):
 
     def _status(self, message):
         if not self.closed:
+            self._update_training_overview()
             self.status_label.setText(message)
             self.status_label.setToolTip(message)
             if hasattr(self, "activity_log"):
@@ -836,25 +851,32 @@ class QuickTrainWidget(QWidget):
         if self.annotation_combo.currentData() != "partial":
             return
         image = self.image_combo.currentData()
-        mask = associated_mask(self.viewer, image, self.truth_combo.currentData() if self._is_multilabel() else None)
+        mask = associated_mask(self.viewer, image, self.truth_combo.currentData())
         current = self.reviewed_combo.currentData()
         if mask is not None or (current is not None and current.metadata.get(KEY, {}).get("role") == "reviewed_regions"):
             self.reviewed_combo.blockSignals(True)
             self.reviewed_combo.setCurrentIndex(max(0, self.reviewed_combo.findData(mask)))
             self.reviewed_combo.blockSignals(False)
-        if mask is not None and not self._is_multilabel():
-            truth_id = mask.metadata.get(KEY, {}).get("truth_id")
-            truth = next((layer for layer in self.viewer.layers if truth_id and layer.metadata.get(KEY, {}).get("id") == truth_id), None)
-            if truth is not None:
-                self.truth_combo.blockSignals(True)
-                self.truth_combo.setCurrentIndex(self.truth_combo.findData(truth))
-                self.truth_combo.blockSignals(False)
+
+    def _source_event(self, event):
+        layer = getattr(event, 'source', None)
+        if (getattr(event, 'type', '') in ('data', 'paint', 'labels_update')
+                and isinstance(layer, napari.layers.Labels)
+                and layer.metadata.get('label_assistant_review', {}).get('role') not in ('reviewed_regions', 'reviewed_annotations')
+                and not getattr(layer, '_label_assistant_library_precise_edit', False)
+                and not getattr(layer, '_label_assistant_library_rebinding', False)):
+            # The shared library widget handles its current target. Other image
+            # pairs/channels still need their review approval revoked on edits.
+            if not any(widget.layer is layer for widget in getattr(self.viewer, '_label_assistant_library_widgets', ()) if not widget.closed):
+                from ._component_library import annotation_changed, annotation_bounds
+                annotation_changed(self.viewer, layer, annotation_bounds(event))
+        self._invalidate_crops()
 
     def _sources_changed(self, *_args):
         self._select_associated_reviewed_mask()
         for emitter in self._source_emitters:
             with suppress(Exception):
-                emitter.disconnect(self._invalidate_crops)
+                emitter.disconnect(self._source_event)
         self._source_emitters.clear()
         for layer in self._pair_layers():
             if layer is None:
@@ -864,7 +886,7 @@ class QuickTrainWidget(QWidget):
             for name in ("data", "paint", "labels_update", "component_library", "scale", "translate", "rotate", "shear", "affine"):
                 emitter = getattr(layer.events, name, None)
                 if emitter is not None:
-                    emitter.connect(self._invalidate_crops)
+                    emitter.connect(self._source_event)
                     self._source_emitters.append(emitter)
         self._invalidate_crops()
         self._update_annotation_note()
@@ -890,6 +912,8 @@ class QuickTrainWidget(QWidget):
         for layer in self._crop_preview_layers:
             layer.visible = False
         was_prepared = self.prepared is not None
+        self._dataset_outdated = self._dataset_outdated or was_prepared
+        self._overview_dataset = None
         self.prepared = None
         self._prepared_signature = None
         if was_prepared:
@@ -968,6 +992,8 @@ class QuickTrainWidget(QWidget):
         self.predict_button.setToolTip(predict_reason)
         self.continue_button.setToolTip("Continue training requires spatial holdout instead of k-fold validation." if kfold else self.continuation_note.text() if seen_holdout else "Prepare a dataset and train or load a model first." if self.prepared is None or self.model is None else reason)
         self.cancel_button.setEnabled(busy)
+        self.training_selection_panel.setEnabled(not busy)
+        self.selection_toggle.setEnabled(not busy)
         self.progress.setVisible(busy)
         if not busy:
             self._update_annotation_note()
@@ -1278,15 +1304,115 @@ class QuickTrainWidget(QWidget):
         )
         self._update_annotation_note()
 
+    def _update_training_overview(self):
+        """Use persisted selection metadata or the existing patch index, never scan pixels."""
+        from ._component_library import library_for
+        from ._reviewed_regions import KEY, effective_areas, region_reviewed
+        from ._model_project import layer_id
+        if not hasattr(self, "annotation_sources_label"):
+            return
+        lines, eligible, objects, needs_review = [], False, 0, 0
+        rows = []
+        by_id = {layer_id(layer): layer for layer in self.viewer.layers
+                 if isinstance(layer, (napari.layers.Image, napari.layers.Labels)) and not is_internal_layer(layer)} if self._multiple_pairs() else {}
+        if self._multiple_pairs():
+            for row in self.channel_assignments if self._is_multilabel() else self.dataset_pairs:
+                if not row.get('included'):
+                    continue
+                if self._is_multilabel():
+                    names = [name.strip() for name in self.models_panel.class_names_edit.text().split(',') if name.strip()]
+                    for name in names:
+                        assignment = row.get('channels', {}).get(name, {})
+                        rows.append((f"{row.get('image_name', 'Image')} / {name}", assignment.get('coverage'),
+                                     by_id.get(assignment.get('target_id')) if row.get('image_id') in by_id else None, by_id.get(assignment.get('reviewed_id'))))
+                else:
+                    rows.append((row.get('image_name', 'Image'), row.get('coverage'),
+                                 by_id.get(row.get('truth_id')) if row.get('image_id') in by_id else None, by_id.get(row.get('reviewed_id'))))
+        else:
+            image, truth = self.image_combo.currentData(), self.truth_combo.currentData()
+            rows.append((image.name if image is not None else "Choose an image", self.annotation_combo.currentData(), truth if image is not None else None, self.reviewed_combo.currentData()))
+        for name, coverage, truth, mask in rows:
+            included = changed = 0
+            if truth is not None and coverage == 'partial':
+                try:
+                    library = library_for(truth)
+                    if library is not None:
+                        _, included, changed = library.counts()
+                        needs_review += int(bool(library.state()['pending']))
+                except Exception:
+                    needs_review += 1
+            objects += included
+            if coverage == 'unknown':
+                lines.append(f"{name}: unknown channel")
+                continue
+            if truth is None:
+                lines.append(f"{name}: choose ground truth")
+                continue
+            if coverage == 'complete':
+                lines.append(f"{name}: complete coverage (explicit)")
+                eligible = True
+                continue
+            state = mask.metadata.get(KEY, {}) if mask is not None else {}
+            areas = effective_areas(state)
+            cells = state.get('review_cells', state.get('areas', []))
+            count = sum(region_reviewed(cell, areas) for cell in cells)
+            if (mask is not None and hasattr(self, 'reviewed_area_widget') and self.reviewed_area_widget is not None
+                    and self.reviewed_area_widget.grid_config is not None and 'areas' in state):
+                from ._reviewed_regions import review_progress
+                config = self.reviewed_area_widget.grid_config
+                count, _ = review_progress(full_data(truth).shape, (config[1].value(), config[2].value()), state)
+            external = mask is not None and 'areas' not in state
+            eligible |= bool(areas) or external
+            detail = "external coverage mask; measured on preparation" if external else f"{count:,} reviewed cells"
+            lines.append(f"{name}: {detail} · {included:,} selected objects" + (f" · {changed:,} objects need review" if changed else ""))
+        visible_lines = lines[:4] + ([f"{len(lines) - 4:,} more sources; see Manage pairs / channels."] if len(lines) > 4 else [])
+        self.annotation_sources_label.setText("Annotation sources\n" + "\n".join(visible_lines))
+        self.annotation_sources_label.setToolTip("\n".join(lines))
+        dataset = self.prepared
+        if isinstance(dataset, IndexedPatches):
+            self._dataset_outdated = False
+            if dataset is getattr(self, '_overview_dataset', None):
+                self.supervision_label.setText(self._overview_supervision)
+                self.dataset_state_label.setText(self._overview_state)
+                return
+            positive = sum(p['foreground_pixels_original'] for p in dataset.locations)
+            known = dataset.reviewed_pixels
+            detail = f"Confirmed foreground: {positive:,} pixels\nConfirmed background: {known - positive:,} pixels\nUnknown pixels excluded: {dataset.total_pixels - known:,}"
+            if dataset.multilabel:
+                for channel, name in enumerate(dataset.class_names):
+                    fg = sum(p['channel_positive_pixels'][channel] for p in dataset.locations)
+                    valid = sum(p['channel_reviewed_pixels'][channel] for p in dataset.locations)
+                    detail += f"\n{name}: {fg:,} foreground · {valid - fg:,} background (independent validity)"
+            self.supervision_label.setText(detail)
+            self.dataset_state_label.setText(f"Prepared · {len(dataset.indices('training')):,} training patches · {len(dataset.indices('validation')):,} validation patches")
+            self._overview_dataset = dataset
+            self._overview_supervision = self.supervision_label.text()
+            self._overview_state = self.dataset_state_label.text()
+        elif dataset is not None:
+            self._dataset_outdated = False
+            self.supervision_label.setText("Explicit complete coverage · foreground and background checked during preparation.")
+            self.dataset_state_label.setText("Prepared")
+        else:
+            self.supervision_label.setText(
+                "Foreground annotations available. Background has not been verified.\nUnknown pixels are excluded. Review background in Labels; training and validation require targets and verified background."
+                if objects and not eligible else
+                "Reviewed cells: foreground + verified background.\nSelected objects: foreground only.\nUnknown pixels excluded; coverage measured on preparation.")
+            self.dataset_state_label.setText(
+                "Outdated because source annotations or dataset settings changed. Prepare again." if self._dataset_outdated else
+                "Update the component library after edits before preparation." if needs_review else
+                "Ready to prepare" if eligible else
+                "Foreground only — review background in Labels before preparation." if objects else "No eligible annotations")
+
     def _update_annotation_note(self):
         partial = self.annotation_combo.currentData() == "partial"
         self.reviewed_combo.setVisible(partial)
         self.create_reviewed_button.setVisible(False)
-        self.dataset_form.labelForField(self.reviewed_combo).setVisible(partial)
+        self.selection_form.labelForField(self.reviewed_combo).setVisible(partial)
         self.annotation_note.setToolTip(
             "Reviewed cells supply foreground and background. Selected objects supply "
             "foreground only. Shared pixels are counted once; unknown pixels are ignored."
         )
+        self._update_training_overview()
         if self._multiple_pairs():
             self.annotation_note.setText('Each channel has independent coverage in Manage channels. One image uses spatial validation; several images use image/specimen groups.' if self._is_multilabel() else 'Coverage is configured per pair in Manage pairs. Validation keeps image/specimen groups separate.')
             self._update_source_mode_visibility()
@@ -1294,24 +1420,7 @@ class QuickTrainWidget(QWidget):
         if not partial:
             self.annotation_note.setText("Complete annotations · zero pixels are background")
             return
-        from ._component_library import library_for
-        from ._reviewed_regions import KEY
-        truth = self.truth_combo.currentData()
-        included = changed = 0
-        try:
-            library = library_for(truth) if truth is not None else None
-            if library is not None:
-                _, included, changed = library.counts()
-        except Exception as error:
-            self.annotation_note.setText(str(error))
-            return
-        mask = self.reviewed_combo.currentData()
-        state = mask.metadata.get(KEY, {}) if mask is not None else {}
-        count = len(state.get("areas", [])) if state.get("role") == "reviewed_regions" else 0
-        self.annotation_note.setText(
-            f"{count:,} reviewed cells · {included:,} selected objects"
-            + (f" · {changed:,} need review" if changed else "")
-        )
+        self.annotation_note.setText("Partial supervision · unknown pixels excluded")
 
     def _create_reviewed_mask(self):
         from .workspace.service import _require_zarr
@@ -1336,7 +1445,7 @@ class QuickTrainWidget(QWidget):
         associate(layer, image, self.truth_combo.currentData() if self._is_multilabel() else None)
         self.refresh_layers()
         self.reviewed_combo.setCurrentIndex(self.reviewed_combo.findData(layer))
-        self._status("Empty reviewed-region mask created. Correct the selected cell in Labels, then choose Finish review under Dataset → Reviewed cells.")
+        self._status("Empty reviewed-region mask created. Correct and approve cells in Labels → Local Editing → Review.")
 
     def _unlock_sources(self):
         if self._locked_layer is not None:
@@ -1416,13 +1525,16 @@ class QuickTrainWidget(QWidget):
         image_data, truth_data = array_2d(image.data), array_2d(full_data(truth))
         if tuple(image_data.shape) != tuple(truth_data.shape):
             raise ValueError("Training image and ground truth must have the same 2D shape.")
+        from ._coordinates import matching_mask_transforms
+        if not matching_mask_transforms(image, full_source(truth)):
+            raise ValueError("Training image and ground truth must have matching spatial transforms.")
         config = self._config()
         partial = self.annotation_combo.currentData() == "partial"
         coverage = self.workflow_combo.currentData() == "coverage"
         if partial and not coverage:
             raise ValueError("Partial annotations require coverage training with a reviewed-region mask.")
         if partial and self.reviewed_combo.currentData() is None:
-            raise ValueError("Select a cell in Labels → Local Editing, then choose Finish review under Dataset → Reviewed cells.")
+            raise ValueError("Selected objects provide foreground only. Review targets and background in Labels → Local Editing → Review before preparation.")
         reviewed_layer = self._layer(self.reviewed_combo) if partial else None
         from ._reviewed_regions import KEY
         if reviewed_layer is not None:
@@ -1431,12 +1543,14 @@ class QuickTrainWidget(QWidget):
                 raise ValueError("Select the Curated ground-truth layer associated with these reviewed areas.")
         if reviewed_layer is truth:
             raise ValueError("Use a separate reviewed-region mask, not the target ground-truth layer.")
+        if reviewed_layer is not None and not matching_mask_transforms(image, full_source(reviewed_layer)):
+            raise ValueError("Reviewed coverage must have matching spatial transforms with the training image.")
         reviewed_data = array_2d(full_data(reviewed_layer)) if reviewed_layer is not None else None
         if partial:
             from ._component_library import library_for, TrainingSupervision
             library = library_for(truth)
             if library is not None and library.state()["pending"]:
-                raise ValueError("Update the component library under Dataset → Selected objects after editing Curated.")
+                raise ValueError("Update the component library in Manage Training Selection after editing annotations.")
             invalid = reviewed_layer.metadata.get(KEY, {}).get("invalid_regions", []) if reviewed_layer else []
             review_state = reviewed_layer.metadata.get(KEY, {}) if reviewed_layer is not None else {}
             known_areas = review_state.get("areas") if review_state.get("role") == "reviewed_regions" else None
@@ -1549,9 +1663,13 @@ class QuickTrainWidget(QWidget):
                     channel_info.append(dict(name=name, coverage='unknown'))
                 else:
                     assignment, layer, mask = target
-                    channels.append(dict(data=array_2d(full_data(layer)), reviewed=array_2d(full_data(mask)) if mask is not None else None,
+                    reviewed = self._channel_supervision(layer, mask) if assignment['coverage'] == 'partial' else None
+                    channels.append(dict(data=array_2d(full_data(layer)), reviewed=reviewed,
                                          foreground_mode=assignment.get('foreground_mode', 'binary')))
-                    channel_info.append(dict(name=name, **assignment))
+                    info = dict(name=name, **assignment)
+                    if reviewed is not None and reviewed.library is not None:
+                        info['component_library'] = dict(source_id=reviewed.snapshot['source_id'], revision=reviewed.snapshot['revision'], selected_ids=list(reviewed.selected))
+                    channel_info.append(info)
             pairs.append(dict(image=array_2d(image.data), channels=channels,
                               info=dict(image_id=row['image_id'], image_layer=image.name,
                                         split_group=row.get('split_group') or row['image_id'], channels=channel_info)))
@@ -1574,6 +1692,18 @@ class QuickTrainWidget(QWidget):
         except Exception:
             self._unlock_sources()
             raise
+
+    @staticmethod
+    def _channel_supervision(layer, mask):
+        from ._component_library import TrainingSupervision, library_for
+        from ._reviewed_regions import KEY
+        library = library_for(layer)
+        if library is not None and library.state()['pending']:
+            raise ValueError(f"{layer.name}: update the component library after edits.")
+        state = mask.metadata.get(KEY, {})
+        return TrainingSupervision(array_2d(full_data(layer)), array_2d(full_data(mask)), library=library,
+            invalid_regions=state.get('invalid_regions', []),
+            reviewed_areas=state.get('areas') if state.get('role') == 'reviewed_regions' else None)
 
     def _index_done(self, result, image, truth, signature, generation, partition_key):
         if generation != self._generation or signature != self._signature() or not all(any(layer is item for item in self.viewer.layers) for layer in (image, truth)):
@@ -2085,13 +2215,10 @@ class QuickTrainWidget(QWidget):
         library = components.component_library_widget
         self.reviewed_area_widget = review
         self.component_library_widget = library
-        self.reviewed_cells_hint.hide()
-        self.selected_objects_hint.hide()
-        self.reviewed_cells_layout.addWidget(review)
-        self.selected_objects_layout.addWidget(library)
-        review.show()
+        self.selection_hint.hide()
+        self.training_selection_layout.addWidget(library)
         library.show()
-        review.image_combo.hide()  # Uses the Dataset image selector.
+        review.image_combo.show()
         pair_context = QLabel()
         self.editor_pair_context = pair_context
         pair_context.setWordWrap(True)
@@ -2118,6 +2245,7 @@ class QuickTrainWidget(QWidget):
             if target_index >= 0:
                 components._target_combo.setCurrentIndex(target_index)
             library.refresh()
+            review.update_status()
 
         def sync_editor(*_args):
             truth = next((layer for layer in self.viewer.layers
@@ -2140,6 +2268,12 @@ class QuickTrainWidget(QWidget):
         self.image_combo.currentIndexChanged.connect(restore_pair)
         self.image_combo.currentIndexChanged.connect(sync_sources)
         self.truth_combo.currentIndexChanged.connect(sync_sources)
+        def sync_review_image(*_args):
+            index = self.image_combo.findData(review.image_combo.currentData())
+            if index >= 0:
+                self.image_combo.setCurrentIndex(index)
+
+        review.image_combo.currentIndexChanged.connect(sync_review_image)
         components._target_combo.currentIndexChanged.connect(sync_editor)
         restore_pair()
         sync_sources()
@@ -2158,7 +2292,7 @@ class QuickTrainWidget(QWidget):
             self.viewer.layers.events.removed.disconnect(self._source_removed)
         for emitter in self._source_emitters:
             with suppress(Exception):
-                emitter.disconnect(self._invalidate_crops)
+                emitter.disconnect(self._source_event)
         self._source_emitters.clear()
         if self.cancel_event is not None:
             self.cancel_event.set()

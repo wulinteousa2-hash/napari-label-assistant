@@ -29,7 +29,9 @@ Every channel has its own supervision coverage. **Complete** means its positive
 and negative pixels have all been checked. **Partial** uses that target's
 associated reviewed-region mask. **Unknown / not annotated** excludes that
 channel on that image. Missing masks never become negative examples implicitly.
-Use reviewed cells rather than selected-component foreground in this mode.
+Partial channels combine their own reviewed cells and selected-component foreground;
+neither another channel's coverage nor its unannotated zeros become negatives.
+Edits revoke approval for the affected channel's reviewed regions.
 **All patches** streams the selected channels; sampled single-mask preparation
 is unavailable. One image uses spatial validation; multiple images reserve whole
 image/specimen groups. Each channel needs known positive and negative examples
@@ -59,7 +61,7 @@ for commands and how to distinguish missing SMP from a broken dependency import.
 ## Two ways to include annotations
 
 These annotation workflows apply to **Current pair** mode. For several images,
-choose **Dataset sources → Multiple pairs → Manage pairs…**. Select pairs,
+choose **Source mode → Multiple pairs → Manage pairs…**. Select pairs,
 configure coverage and reviewed masks separately, and confirm corrected model
 predictions before using them as ground truth. Pair definitions persist by layer
 ID in the workspace. The dialog's **Review selected pair** opens the regular
@@ -75,27 +77,44 @@ Keep **Partial — reviewed cells + selected objects** when Curated contains onl
 Zero pixels may contain missing objects, so they must not automatically become
 background. Partial mode uses **All patches (recommended)**.
 
-### Dataset → Reviewed cells: review a region
+Whole-mask Labels overviews use derived OME-Zarr resolution levels for display.
+Dataset indexing and supervision always read full-resolution `s0`, including
+when the active editable tile shows only part of the source. Overview layers
+never become training masks, and visually overlapping preview objects do not
+change annotation IDs or review validity.
+
+### Labels → Local Editing → Review: review a region
 
 1. In **Training → Dataset**, choose the image and Curated Labels layer.
 2. In **Labels → Local Editing**, select a review cell on the canvas.
-3. Correct or add Curated masks through **Editable Area**. Check every target
+3. Correct or add Curated masks in **Mask editing**. Check every target
    and its background inside the cell.
-4. Return to **Training → Dataset → Reviewed cells** and choose
-   **Finish review — include this cell in training**. Coverage is created
+4. In **Labels → Local Editing → Review**, choose **Mark reviewed & next**.
+   **Review options** retains **Finish review — include this cell in training**
+   for approving without advancing. Coverage is created
    automatically; no manual mask creation is needed.
 5. Review several independent regions with both targets and genuine background.
 
+Grid navigation's completion marker remains separate from training approval.
+Creating or approving full reviewed-cell coverage currently requires
+**Labels → Local Editing → Mask editing → Advanced → Editing mode → Local-area
+editing** or **Full-layer editing** for that session. Older saved full-mask
+loading preferences now open through bounded crops by default; select the
+legacy mode explicitly when using this coverage editor. Existing coverage and
+training assignments remain preserved. Tile completion alone never verifies
+training background.
+
 For cells you have already checked, enable **Mark already-checked cells with
-clicks** under **Dataset → Reviewed cells**. This activates canvas review mode
+clicks** under **Labels → Local Editing → Review → Review options**. This activates canvas review mode
 and selects **Click to mark a cell reviewed** automatically. Click cells on the
 canvas to include them; turn the option off to return to editing. Disabling the
 address grid also turns off click marking.
 
-### Dataset → Selected objects: select components
+### Dataset → Manage Training Selection: select components
 
 1. In **Training → Dataset**, choose Curated as ground truth and open
-   **Selected objects**.
+   **Manage Training Selection**. The panel also selects reviewed coverage;
+   cell approval itself stays in Labels.
 2. Click **Build / update library**. The first scan is a background operation
    with progress and Cancel; subsequent local edits update affected components.
 3. Check **Train** beside objects to include. Clicking another column locates
@@ -103,11 +122,24 @@ address grid also turns off click marking.
    calculation is performed for the library.
 4. Save the workspace once to include the library asset. Later checkbox changes
    are written immediately to that library.
-5. Keep background confirmed under **Reviewed cells**. A checked component
+5. Keep background confirmed under **Labels → Local Editing → Review**. A checked component
    supplies foreground, not confirmation of its surroundings.
 
 Both methods feed the same training dataset. Shared patches and pixels are
 counted once. Unchecked surroundings and invalidated review cells are ignored.
+Reviewed cells include all verified foreground and zero-valued background. A cell
+with no targets can supply negative supervision. Selected objects confirm only
+their foreground pixels. The existing split policy requires targets and verified
+background in training and validation, so a dataset consisting solely of selected
+objects cannot yet be prepared for training. Positive-only patches are supported
+within datasets that also contain adequate reviewed background.
+
+The Dataset overview shows actual source selections and preparation status.
+Exact supervised foreground/background and excluded unknown counts are calculated
+from the patch index after preparation, without allocating full-image masks.
+Source edits or changed dataset settings mark the dataset outdated and disable
+training until it is prepared again. External coverage masks without recorded
+cell rectangles are measured during indexing rather than assigned guessed counts.
 Objects sharing one Curated label value can have different library IDs. Library
 IDs are separate from Curated label values; building the library never relabels
 the source mask.
