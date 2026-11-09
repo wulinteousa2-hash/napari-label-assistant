@@ -78,11 +78,13 @@ def test_portable_workspace_roundtrip(make_napari_viewer, qtbot, tmp_path):
     from napari_label_assistant_tools.workspace import save_workspace, load_workspace
     viewer, image, truth, mask, _, review = setup(make_napari_viewer, qtbot)
     review.mark(1)
+    truth.metadata = {**truth.metadata, KEY: {**truth.metadata[KEY], 'training_areas': [[0, 0, 8, 8]]}}
     path = tmp_path / "reviewed.label-assistant.json"
     save_workspace(viewer, path, complete_package=True)
     restored = make_napari_viewer()
     load_workspace(restored, path)
     loaded_image = restored.layers[image.name]
+    assert restored.layers[truth.name].metadata[KEY]['training_areas'] == [[0, 0, 8, 8]]
     loaded_mask = associated_mask(restored, loaded_image)
     assert loaded_mask is not None
     assert np.asarray(loaded_mask.data[:16, :16]).all()
@@ -199,7 +201,7 @@ def test_simple_workflow_and_automatic_ground_truth(make_napari_viewer, qtbot):
     assert review.preview_button.isHidden()
     click(review, truth, 4, 4)
     assert review.mark_button.isEnabled()
-    assert "Finish review" in review.mark_button.text()
+    assert review.mark_button.text() == "Confirm tile for dataset"
     review.mark_button.click()
     annotations = next(layer for layer in viewer.layers if layer.metadata.get(KEY, {}).get("role") == "reviewed_annotations")
     other = viewer.add_labels(np.zeros((32,32), dtype=np.uint8), name="Unreviewed SAM3")
@@ -232,3 +234,73 @@ def test_cell_selection_returns_to_editable_tile(make_napari_viewer, qtbot):
     assert str(tile.mode) == "paint"
     assert review.selection_overlay.visible
     assert review.selected_cell[1] == TileBounds(0,0,10,10)
+
+
+def test_review_shutdown_does_not_change_selection_or_redraw_layers(make_napari_viewer, qtbot):
+    viewer, _, truth, _, _, review = setup(make_napari_viewer, qtbot)
+    truth.mode = 'paint'
+    configure_mouse(review, truth, qtbot)
+    click(review, truth, 4, 4)
+    active = viewer.layers.selection.active
+    changes = []
+    viewer.layers.selection.events.active.connect(lambda event: changes.append('selection'))
+    truth.events.mode.connect(lambda event: changes.append('mode'))
+    review.selection_overlay.events.visible.connect(lambda event: changes.append('visibility'))
+    review.shutdown()
+    review.shutdown()  # Both owning widgets may attempt cleanup.
+    assert not changes
+    assert viewer.layers.selection.active is active
+    assert not review._previous_modes
+    assert review not in viewer._label_assistant_review_widgets
+    assert review.mouse_click not in viewer.mouse_drag_callbacks
+
+
+def test_review_shutdown_and_late_callbacks_after_checkbox_destruction(make_napari_viewer, qtbot):
+    from qtpy.QtCore import QCoreApplication, QEvent
+    _, _, truth, _, _, review = setup(make_napari_viewer, qtbot)
+    configure_mouse(review, truth, qtbot)
+    review.mouse_review_check.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    review.shutdown()
+    # Queued callbacks must not access any of the destroyed controls either.
+    review.toggle_mouse_review(False)
+    review._advanced_changed(False)
+    review.clear_cell()
+    review.refresh_images()
+    review.update_status()
+    click(review, truth, 4, 4)
+    assert review.closed
+
+
+def test_review_next_and_repeated_clicks_keep_selection_enabled(make_napari_viewer, qtbot):
+    _, _, truth, mask, _, review = setup(make_napari_viewer, qtbot)
+    configure_mouse(review, truth, qtbot)
+    click(review, truth, 4, 4)
+    review.next_button.click()
+    assert review.mouse_review_check.isChecked()
+    assert review.selected_cell[1] == TileBounds(0, 10, 10, 20)
+    review.advanced_check.setChecked(True)
+    for y, x in ((14, 4), (24, 14), (4, 24)):
+        click(review, truth, y, x)
+        assert review.mouse_review_check.isChecked()
+        assert mask.data[y, x] == 1
+
+
+def test_training_use_is_distinct_from_approval_and_excludes_validation(make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._reviewed_regions import record_training_usage
+    viewer, _, truth, _, _, review = setup(make_napari_viewer, qtbot)
+    configure_mouse(review, truth, qtbot)
+    click(review, truth, 4, 4)
+    review.mark(1)
+    assert 'No recorded training use' in review.cell_label.text()
+    model = SimpleNamespace(crop_pixels=10, history=[dict(source=dict(ground_truth_id=identity(truth)),
+        locations=[dict(y0=0, x0=0, y1=10, x1=10, split='training'),
+                   dict(y0=0, x0=10, y1=10, x1=20, split='validation')])])
+    record_training_usage(viewer, model)
+    record_training_usage(viewer, model)
+    assert truth.metadata[KEY]['training_areas'] == [[0, 0, 10, 10]]
+    assert 'Used in training (entire cell)' in review.cell_label.text()
+    review.mark(0)
+    assert 'Used in training (entire cell)' in review.cell_label.text()
+    click(review, truth, 4, 14)
+    assert 'No recorded training use' in review.cell_label.text()

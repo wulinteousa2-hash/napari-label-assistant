@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import napari
+from napari.layers._multiscale_data import MultiScaleData
 import numpy as np
 from ._coordinates import crop_transform_kwargs, matching_mask_transforms
 from scipy import ndimage as ndi
@@ -566,12 +567,17 @@ def _build_grid_shapes(
     return lines
 
 
+def _full_resolution_mask_data(data: object):
+    """Resolve pyramid level zero without materializing its pixels."""
+    resolved = data
+    while isinstance(resolved, (list, tuple, MultiScaleData)) and len(resolved) > 0:
+        resolved = resolved[0]
+    return resolved
+
+
 def _resolve_layer_data_array(data: object) -> np.ndarray:
     """Resolve napari layer data to a concrete array for Labels and image utilities."""
-    resolved = data
-    while isinstance(resolved, (list, tuple)) and len(resolved) > 0:
-        resolved = resolved[0]
-    return np.asarray(resolved)
+    return np.asarray(_full_resolution_mask_data(data))
 
 
 def _as_2d_mask(data: np.ndarray) -> np.ndarray:
@@ -592,9 +598,7 @@ def _as_2d_mask(data: np.ndarray) -> np.ndarray:
 
 def _supported_2d_mask_shape(data: object) -> tuple[int, int] | None:
     """Return the resolved 2D shape for Labels-layer data, if supported."""
-    resolved = data
-    while isinstance(resolved, (list, tuple)) and len(resolved) > 0:
-        resolved = resolved[0]
+    resolved = _full_resolution_mask_data(data)
     shape = getattr(resolved, "shape", None)
     if shape is None:
         try:
@@ -1736,17 +1740,20 @@ def component_operations_widget(
     annotate_scroll.setWidgetResizable(True)
     annotate_scroll.setFrameShape(QFrame.NoFrame)
     annotate_scroll.setWidget(annotate_page)
-    workflow_tabs.addTab(annotate_scroll, "Local Editing")
-    workflow_tabs.addTab(qc_page, "Review & QC")
+    workflow_tabs.addTab(annotate_scroll, "Edit && Confirm")
+    qc_scroll = QScrollArea()
+    qc_scroll.setWidgetResizable(True)
+    qc_scroll.setFrameShape(QFrame.NoFrame)
+    qc_scroll.setWidget(qc_page)
+    workflow_tabs.addTab(qc_scroll, "Mask Analysis && Cleanup")
     workflow_tabs.setTabToolTip(
         0,
         "Paint and erase through a bounded-memory local area when needed; "
-        "changes apply to the selected source Labels layer.",
+        "changes apply to the selected source Labels layer. Confirm fully reviewed tiles for the dataset here.",
     )
     workflow_tabs.setTabToolTip(
         1,
-        "Inspect the full source Labels layer: register grid addresses, find "
-        "components, and locate, delete, or copy selected regions.",
+        "Find and inspect connected components, sort the table, and remove noise. Component selection does not confirm training data.",
     )
     layout.addWidget(workflow_tabs, 1)
 
@@ -1842,6 +1849,8 @@ def component_operations_widget(
     edit_form.addRow("", auto_save_edit_check)
     from ._mask_tiles import tile_controls
     grid_tiles = tile_controls(viewer, edit_group, editing_strategy_combo)
+    # Camera follow belongs to both Labels subtabs, including QC canvas review.
+    grid_tiles._local_editing.active_view = container.isVisible
     edit_layout.addWidget(grid_tiles)
     edit_layout.addWidget(dynamic_edit_status)
     edit_layout.addWidget(edit_action_row)
@@ -1865,28 +1874,47 @@ def component_operations_widget(
     annotate_layout.addWidget(edit_group)
     annotate_layout.addStretch(1)
 
-    analysis_group = QGroupBox("Grid-addressed component review")
+    analysis_group = QGroupBox("Find components and clean masks")
     analysis_layout = QVBoxLayout(analysis_group)
+    analysis_scope_combo = QComboBox()
+    analysis_scope_combo.addItem('Entire mask — full resolution', 'whole')
+    analysis_scope_combo.addItem('Current edit area', 'area')
+    analysis_scope_combo.setToolTip('Entire mask searches all s0 pixels in bounded chunks, independent of camera position or zoom. Current edit area searches only the loaded crop.')
+    analysis_layout.addWidget(analysis_scope_combo)
     tile_scope = QLabel()
     tile_scope.setWordWrap(True)
     analysis_layout.addWidget(tile_scope)
+    load_analysis_area_button = QPushButton('Load edit area at view center and find components')
+    analysis_layout.addWidget(load_analysis_area_button)
     def _tile_scope():
-        from ._mask_tiles import manager_for
-        manager = manager_for(viewer)
-        active = manager is not None and bool(manager.entries)
-        tile_scope.setVisible(active)
-        if active:
-            tile_scope.setText(f'Active tile R{manager.row:02d}C{manager.col:02d}. Measurements, component IDs and grid addresses below are local to this tile; objects may cross its boundary.')
+        layer = viewer.layers[target_combo.currentText()] if target_combo.currentText() in viewer.layers else None
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        whole = analysis_scope_combo.currentData() == 'whole'
+        load_analysis_area_button.setVisible(entry is not None and not whole)
+        tile_scope.setVisible(True)
+        if whole and entry is not None:
+            h, w = entry.source.data.shape
+            tile_scope.setText(f'Analysis scope: entire mask, {h:,} × {w:,} pixels at full resolution. Camera position and zoom do not limit the search. Components crossing chunk boundaries are joined.')
+        elif entry is not None and entry.bounds is None:
+            tile_scope.setText('No full-resolution edit area is loaded. Zoom in or load an area at the view center before searching. The overview does not define a search area.')
+        elif entry is not None:
+            ys, xs = entry.bounds
+            tile_scope.setText(f'Analysis scope: current edit area at full resolution, y {ys.start}:{ys.stop}, x {xs.start}:{xs.stop}. The rest of the mask is not searched; objects may continue beyond this area.')
+        else:
+            tile_scope.setText('Analysis scope: entire selected mask at full resolution (OME-Zarr s0). Find components before previewing removals.')
     grid_tiles._poll.timeout.connect(_tile_scope)
     _tile_scope()
     analysis_note = QLabel(
-        "Register full-mask locations with reproducible grid addresses. Find "
-        "connected components, trace reviewer findings to exact cells, and "
-        "select results in the table or canvas to revisit, delete, or copy them."
+        "Find components, sort by area, and inspect objects using the table or canvas. "
+        "Preview a size threshold before removing small masks. Selection here is for "
+        "inspection and cleanup; confirm dataset tiles in Edit & Confirm."
     )
     analysis_note.setWordWrap(True)
     analysis_layout.addWidget(analysis_note)
-    analysis_layout.addLayout(form)
+    analysis_options = QWidget()
+    analysis_options.setLayout(form)
+    analysis_options_section = _collapsible_section('Advanced: grid addresses and copy destination', analysis_options)
+    analysis_layout.addWidget(analysis_options_section)
     qc_layout.addWidget(analysis_group, 1)
 
     action_row = QWidget()
@@ -1959,12 +1987,12 @@ def component_operations_widget(
 
     click_select_check = QCheckBox("Select components from canvas")
     click_select_check.setToolTip(
-        "Click a labeled object in the canvas to select its connected component "
-        "in the table."
+        "Find components in the current edit area, then click objects to select "
+        "them for curation. Picking temporarily pauses painting."
     )
     analysis_layout.addWidget(click_select_check)
 
-    append_click_select_check = QCheckBox("Add each click to selection")
+    append_click_select_check = QCheckBox("Keep earlier component selections")
     append_click_select_check.setToolTip(
         "Keep earlier component selections when clicking additional objects."
     )
@@ -2025,7 +2053,7 @@ def component_operations_widget(
 
     status = QLabel("Choose a Labels layer, then click Find components.")
     status.setWordWrap(True)
-    analysis_layout.addWidget(status)
+    analysis_layout.insertWidget(analysis_layout.indexOf(action_row), status)
 
     state = SimpleNamespace(
         analyzed_layer_name=None,
@@ -2041,8 +2069,22 @@ def component_operations_widget(
         large_ids=[],
         activity_layer=None,
         activity_generation=0,
+        analyzed_data=None,
+        analysis_revision=0,
+        analyzed_revision=-1,
+        analysis_input=None,
+        analysis_input_revision=-1,
+        analysis_layer=None,
+        analysis_scope='whole',
+        picker_modes=[],
+        confirmation_stamp=None,
+        training_tiles=[],
+        training_pair=None,
         closed=False,
     )
+    picker_timer = QTimer(container)
+    picker_timer.setSingleShot(True)
+    picker_timer.setInterval(200)
     grid_label_timer = QTimer(container)
     grid_label_timer.setSingleShot(True)
     grid_label_timer.setInterval(150)
@@ -2071,6 +2113,15 @@ def component_operations_widget(
         if isinstance(layer, napari.layers.Labels) and not is_internal_layer(layer):
             return layer
         return None
+
+    def _whole_bounded_analysis(layer):
+        return analysis_scope_combo.currentData() == 'whole' and hasattr(layer, '_label_assistant_mask_entry')
+
+    def _analysis_data(layer):
+        return full_source(layer).data if _whole_bounded_analysis(layer) else _full_resolution_mask_data(layer.data)
+
+    def _analysis_geometry(layer):
+        return full_source(layer) if _whole_bounded_analysis(layer) else layer
 
     def _store_grid_registration() -> None:
         layer = _target_layer()
@@ -2122,7 +2173,7 @@ def component_operations_widget(
     ) -> list[napari.layers.Layer]:
         if source_layer is None:
             return []
-        source_shape = _supported_2d_mask_shape(getattr(source_layer, "data", None))
+        source_shape = _supported_2d_mask_shape(_analysis_data(source_layer))
         if source_shape is None and not manual:
             return []
         targets: list[napari.layers.Layer] = []
@@ -2138,11 +2189,11 @@ def component_operations_widget(
                 continue
             if (
                 not manual
-                and _supported_2d_mask_shape(getattr(layer, "data", None))
+                and _supported_2d_mask_shape(full_source(layer).data if _whole_bounded_analysis(source_layer) else layer.data)
                 != source_shape
             ):
                 continue
-            if not manual and not matching_mask_transforms(source_layer, layer):
+            if not manual and not matching_mask_transforms(_analysis_geometry(source_layer), full_source(layer) if _whole_bounded_analysis(source_layer) else layer):
                 continue
             targets.append(layer)
         return sorted(targets,key=lambda layer:layer.name.casefold()!='curated')
@@ -2494,6 +2545,8 @@ def component_operations_widget(
         old_index = state.fast_index
         state.analyzed_layer_name = None
         state.fast_index = None
+        state.analyzed_data = None
+        state.analysis_input = None
         state.selected_component_ids.clear()
         state.large_records = []
         state.large_ids = []
@@ -2514,10 +2567,10 @@ def component_operations_widget(
         record = state.fast_index.records.get(int(component_id))
         if record is None:
             return
-        viewer.camera.center = (
-            float(record.centroid_y),
-            float(record.centroid_x),
-        )
+        layer = _target_layer()
+        if layer is None:
+            return
+        viewer.camera.center = _analysis_geometry(layer).data_to_world((record.centroid_y, record.centroid_x))
         if record.grid_id:
             _set_status(
                 f"Centered component {component_id} at {record.grid_id} "
@@ -2528,12 +2581,18 @@ def component_operations_widget(
 
     def _on_large_ready(layer_name: str, index: LargeComponentIndex) -> None:
         layer = _target_layer()
-        if layer is None or layer.name != layer_name or state.closed:
+        if (layer is None or layer.name != layer_name or state.closed
+                or state.analysis_input is not _analysis_data(layer)
+                or state.analysis_input_revision != state.analysis_revision):
             index.close()
             _set_status("Analysis finished, but the selected layer changed; result discarded.")
+            if click_select_check.isChecked():
+                picker_timer.start()
             return
         state.analyzed_layer_name = layer_name
         state.fast_index = index
+        state.analyzed_data = _analysis_data(layer)
+        state.analyzed_revision = state.analysis_revision
         state.large_records = index.active_records()
         state.large_ids = [record.component_id for record in state.large_records]
         _reassign_grid_ids()
@@ -2570,7 +2629,7 @@ def component_operations_widget(
     edit_controllers.append(dynamic_edit_controller)
     from ._reviewed_regions import ReviewedAreaWidget
     reviewed_area_widget = ReviewedAreaWidget(viewer, dynamic_edit_controller, container)
-    # Canvas selection stays with editing; training acceptance lives in Dataset.
+    # Dataset approval belongs with editing; analysis only inspects/cleans masks.
     annotate_layout.insertWidget(annotate_layout.count() - 1, reviewed_area_widget)
     view_compare = quick_compare_toggle_widget(viewer)
     label_tools = label_operations_widget(viewer)
@@ -2587,6 +2646,136 @@ def component_operations_widget(
     component_library_widget = ComponentLibraryWidget(viewer, _editable_target_layer, container)
     component_library_widget.hide()
     container.component_library_widget = component_library_widget
+    confirm_tile_button = QPushButton("Confirm edited tile for training")
+    confirm_tile_button.setToolTip(
+        "Explicitly approve every annotated object and all remaining background "
+        "in the current edit area. Component clicks alone do not approve training coverage."
+    )
+    confirmation_hint = QLabel()
+    confirmation_hint.setWordWrap(True)
+    confirmation_group = QGroupBox("Training confirmation")
+    confirmation_layout = QVBoxLayout(confirmation_group)
+    confirmation_layout.addWidget(confirmation_hint)
+    tile_select_check = QCheckBox('Select checked training tiles from canvas')
+    tile_append_check = QCheckBox('Add each click to selection')
+    tile_select_check.setToolTip('Click anywhere inside the loaded full-resolution tile, including background. Check the entire tile before confirming it for training.')
+    tile_selection_summary = QLabel('No training tiles selected. You can confirm the current edited tile directly.')
+    tile_selection_summary.setWordWrap(True)
+    clear_tiles_button = QPushButton('Clear tile selection')
+    confirmation_layout.addWidget(tile_select_check)
+    confirmation_layout.addWidget(tile_append_check)
+    confirmation_layout.addWidget(tile_selection_summary)
+    confirmation_layout.addWidget(clear_tiles_button)
+    confirmation_layout.addWidget(confirm_tile_button)
+    loaded_tile_section = _collapsible_section('Advanced: confirm loaded edit areas', confirmation_group)
+    annotate_layout.insertWidget(annotate_layout.count() - 1, loaded_tile_section)
+
+    def _update_confirmation_controls():
+        layer = _editable_target_layer()
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        bounds = entry.bounds if entry is not None else dynamic_edit_controller.bounds
+        image = reviewed_area_widget.image_combo.currentData()
+        pair = (image, layer)
+        if state.training_pair is None or any(a is not b for a, b in zip(pair, state.training_pair)):
+            state.training_tiles.clear()
+            state.training_pair = pair
+            state.confirmation_stamp = None
+        tile_selection_summary.setText(
+            f'{len(state.training_tiles)} checked training tiles selected. Confirm to include all their objects and background.'
+            if state.training_tiles else 'No training tiles selected. You can confirm the current edited tile directly.')
+        confirm_tile_button.setText('Confirm selected tiles for training' if state.training_tiles else 'Confirm edited tile for training')
+        available = (layer is not None and bounds is not None and image is not None)
+        confirm_tile_button.setEnabled(available)
+        if available:
+            shape = tuple(part.stop-part.start for part in bounds) if entry is not None else bounds.shape
+            rect = ((bounds[0].start, bounds[1].start, bounds[0].stop, bounds[1].stop)
+                    if entry is not None else (bounds.y0, bounds.x0, bounds.y1, bounds.x1))
+            if state.training_tiles:
+                confirmation_hint.setText(
+                    f'Confirm all objects and background in the selected yellow areas of “{layer.name}” '
+                    f'for image “{image.name}”. Current loaded tile: '
+                    f'x {rect[1]}:{rect[3]}, y {rect[0]}:{rect[2]}.'
+                )
+            else:
+                confirmation_hint.setText(
+                    f'Confirm all objects and background in this {shape[1]} × {shape[0]} area '
+                    f'of “{layer.name}” for image “{image.name}”. '
+                    f'x {rect[1]}:{rect[3]}, y {rect[0]}:{rect[2]}; the yellow outline shows the full area.'
+                )
+            rectangles = list(state.training_tiles) or [rect]
+            stamp = (id(layer), tuple(rectangles))
+            if workflow_tabs.currentIndex() == 0 and loaded_tile_section.isChecked() and stamp != state.confirmation_stamp:
+                active = viewer.layers.selection.active
+                reviewed_area_widget.make_outline(layer, rectangles, 'Tiles for training confirmation', 'yellow', 'tile_confirmation_overlay')
+                state.confirmation_stamp = stamp
+                if active is not None and any(active is candidate for candidate in viewer.layers):
+                    viewer.layers.selection.active = active
+        else:
+            confirmation_hint.setText('Choose the image and mask, then zoom in to load an edit area before confirming it.')
+        overlay = reviewed_area_widget.tile_confirmation_overlay
+        if overlay is not None:
+            overlay.visible = available and workflow_tabs.currentIndex() == 0 and loaded_tile_section.isChecked()
+            if not overlay.visible:
+                state.confirmation_stamp = None
+
+    def _confirm_tile():
+        _update_confirmation_controls()
+        if state.training_tiles:
+            for rect in state.training_tiles:
+                reviewed_area_widget.mark(1, current_tile=True, review_bounds=rect)
+            count = len(state.training_tiles)
+            state.training_tiles.clear()
+            _set_status(f'{count} edited tiles confirmed for training: annotated foreground and checked background. Save the workspace to preserve this selection.')
+        elif reviewed_area_widget.confirm_current_tile():
+            _set_status('Edited tile confirmed for training: annotated foreground and checked background. Save the workspace to preserve this selection.')
+        _update_confirmation_controls()
+
+    def _clear_training_tiles():
+        state.training_tiles.clear()
+        _update_confirmation_controls()
+
+    def _select_training_tile(_source, event):
+        if (workflow_tabs.currentIndex() != 0 or not tile_select_check.isChecked()
+                or str(getattr(event, 'type', '')).lower() != 'mouse_press'
+                or getattr(event, 'button', 1) != 1):
+            return
+        def select():
+            _update_confirmation_controls()
+            image, truth, bounds = reviewed_area_widget.context(current_tile=True)
+            from ._coordinates import mask_world_affine
+            transform = mask_world_affine(full_source(truth))
+            y, x = np.linalg.solve(transform[:2, :2], np.asarray(event.position)[-2:] - transform[:2, 2])
+            if not (bounds.y0 <= y < bounds.y1 and bounds.x0 <= x < bounds.x1):
+                raise ValueError('Click inside the loaded full-resolution tile. Use Edit & Confirm to inspect another area first.')
+            rect = (bounds.y0, bounds.x0, bounds.y1, bounds.x1)
+            if not tile_append_check.isChecked():
+                state.training_tiles.clear()
+            if rect not in state.training_tiles:
+                state.training_tiles.append(rect)
+            _update_confirmation_controls()
+            _set_status('Checked tile selected. Click Confirm selected tiles for training to approve its objects and background.')
+        _run_safely(select)
+
+    def _tile_picker_toggled(checked):
+        if checked:
+            click_select_check.setChecked(False)
+            reviewed_area_widget.mouse_review_check.setChecked(False)
+            layer = _editable_target_layer()
+            for candidate in (layer, dynamic_edit_controller.tile):
+                if candidate is not None and not any(candidate is old for old, _ in state.picker_modes):
+                    state.picker_modes.append((candidate, candidate.mode))
+                    candidate.mode = 'pan_zoom'
+        else:
+            _restore_picker_modes()
+        _sync_mouse_callback()
+
+    confirm_tile_button.clicked.connect(lambda: _run_safely(_confirm_tile))
+    clear_tiles_button.clicked.connect(_clear_training_tiles)
+    tile_select_check.toggled.connect(_tile_picker_toggled)
+    tile_append_check.toggled.connect(lambda checked: tile_select_check.setChecked(True) if checked else None)
+    loaded_tile_section.toggled.connect(lambda _checked: _update_confirmation_controls())
+    grid_tiles._poll.timeout.connect(_update_confirmation_controls)
+    _update_confirmation_controls()
     save_edit_btn.clicked.connect(dynamic_edit_controller.save_now)
     undo_edit_btn.clicked.connect(dynamic_edit_controller.undo_stroke)
     redo_edit_btn.clicked.connect(dynamic_edit_controller.redo_stroke)
@@ -2600,7 +2789,17 @@ def component_operations_widget(
             raise ValueError("Select a Labels layer to analyze.")
         if large_controller.busy:
             raise ValueError("Wait for the current large-label operation to finish.")
-        source = layer.data[0] if isinstance(layer.data, (list, tuple)) else layer.data
+        _watch_analysis_layer(layer)
+        if dynamic_edit_controller.dirty:
+            raise ValueError('Apply pending local edits before finding components.')
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if entry is not None:
+            if entry.bounds is None and not _whole_bounded_analysis(layer):
+                _tile_scope()
+                raise ValueError('No full-resolution edit area loaded. Zoom in or click Load edit area at view center and find components.')
+            entry.manager.flush()
+        _tile_scope()
+        source = _analysis_data(layer)
         shape = _supported_2d_mask_shape(source)
         if shape is None:
             raise ValueError("Analyze requires a 2D Labels layer.")
@@ -2609,30 +2808,67 @@ def component_operations_widget(
                 "This target looks like a grayscale image, not a "
                 "Labels layer. Choose the correct source Labels layer, then analyze it."
             )
-        if shape[0] * shape[1] > LARGE_ANALYSIS_PIXEL_THRESHOLD:
+        if _whole_bounded_analysis(layer) or shape[0] * shape[1] > LARGE_ANALYSIS_PIXEL_THRESHOLD:
             _invalidate_analysis()
+            state.analysis_input = source
+            state.analysis_input_revision = state.analysis_revision
             large_controller.start(source, layer.name, layer=layer)
+            analysis_scope_combo.setEnabled(False)
+            large_controller.worker.finished.connect(lambda: analysis_scope_combo.setEnabled(True) if not state.closed else None)
             return
         _invalidate_analysis()
         use_grid = bool(assign_grid_check.isChecked())
         fast_index = _build_fast_component_index(
-            layer.data,
+            source,
             grid_step_y=int(grid_y_spin.value()) if use_grid else None,
             grid_step_x=int(grid_x_spin.value()) if use_grid else None,
         )
         state.analyzed_layer_name = layer.name
         state.fast_index = fast_index
+        state.analyzed_data = source
+        state.analyzed_revision = state.analysis_revision
         component_table.set_grid_columns_visible(use_grid)
         _render_component_page()
-        if use_grid:
+        scope = 'current edit area' if entry is not None else 'full-resolution mask'
+        if not fast_index.records:
+            _set_status('No components in this edit area. Other parts of the mask were not searched; pan to an annotated area and load it before searching again.' if entry is not None else f'No nonzero mask components found in {layer.name} at full resolution.')
+        elif use_grid:
             _set_status(
-                f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name} "
+                f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name} ({scope}) "
                 f"with grid {int(grid_y_spin.value())}x{int(grid_x_spin.value())} px."
             )
         else:
             _set_status(
-                f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name}."
+                f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name} ({scope})."
             )
+
+    def _load_analysis_area():
+        if large_controller.busy:
+            raise ValueError('Wait for component analysis or cleanup to finish before loading another area.')
+        layer = _editable_target_layer()
+        if getattr(layer, '_label_assistant_mask_entry', None) is None:
+            raise ValueError('Choose a bounded mask layer to load an edit area.')
+        analysis_scope_combo.setCurrentIndex(analysis_scope_combo.findData('area'))
+        viewer.layers.selection.active = layer
+        grid_tiles._local_editing.edit_at_center()
+        if grid_tiles._local_editing.status.text():
+            raise ValueError(grid_tiles._local_editing.status.text())
+        _analyze()
+
+    load_analysis_area_button.clicked.connect(lambda: _run_safely(_load_analysis_area))
+
+    def _analysis_scope_changed():
+        if large_controller.busy:
+            analysis_scope_combo.blockSignals(True)
+            analysis_scope_combo.setCurrentIndex(analysis_scope_combo.findData(state.analysis_scope))
+            analysis_scope_combo.blockSignals(False)
+            _set_status('Wait for analysis or cleanup to finish before changing search scope.')
+            return
+        state.analysis_scope = analysis_scope_combo.currentData()
+        _invalidate_analysis('Search scope changed. Click Find components.')
+        _tile_scope()
+
+    analysis_scope_combo.currentIndexChanged.connect(lambda _index: _analysis_scope_changed())
 
     def _component_pixels_changed(layer, bounds) -> None:
         from ._component_library import annotation_changed, notify_library
@@ -2647,7 +2883,9 @@ def component_operations_widget(
             raise ValueError("Wait for the current large-label operation to finish.")
         if layer is None or not ids:
             raise ValueError("Select component rows to delete.")
-        if not layer.editable or dynamic_edit_controller.stroke_active or dynamic_edit_controller.dirty:
+        whole = _whole_bounded_analysis(layer)
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if (not layer.editable and not (whole and entry.bounds is None)) or dynamic_edit_controller.stroke_active or dynamic_edit_controller.dirty:
             raise ValueError("Finish and apply pending paint edits before deleting components.")
         if getattr(layer, "_label_assistant_library_indexing", False):
             raise ValueError("Wait for the component library scan or cancel it before deleting.")
@@ -2655,11 +2893,47 @@ def component_operations_widget(
             raise ValueError(
                 "Component table is stale. Click Find components before deleting."
             )
+        if state.analyzed_data is not _analysis_data(layer) or state.analyzed_revision != state.analysis_revision:
+            raise ValueError('The mask changed. Find components again before deleting.')
+        if whole:
+            from .workspace.service import _ensure_no_training, _ensure_no_library_scan
+            _ensure_no_training(viewer)
+            _ensure_no_library_scan(viewer)
+            if getattr(entry.source.data, 'read_only', False):
+                raise ValueError('The full-resolution mask is read-only.')
+            entry.manager.flush()
         from ._deletion_history import DeletionHistory
         if deletion_history is not None:
             deletion_history.close()
-        deletion_history = DeletionHistory(layer)
+        deletion_history = DeletionHistory(layer, full_resolution=whole)
         btn_undo_delete.setEnabled(True)
+        if whole:
+            from ._copy_destination import write_region, refresh_destination
+            from ._component_library import notify_library
+            index = state.fast_index
+            history = deletion_history
+            def regions():
+                for tile, mask in index.selected_tiles(ids):
+                    slices = (slice(tile.y0,tile.y1),slice(tile.x0,tile.x1))
+                    yield slices, mask
+            def write(slices, mask):
+                history.capture(slices, mask)
+                values = np.zeros(mask.shape, dtype=entry.source.data.dtype)
+                return write_region(viewer, layer, slices, mask, values, (0,0))
+            def done(changed, message):
+                refresh_destination(layer)
+                notify_library(layer)
+                if message is None:
+                    index.deleted_component_ids.update(map(int,ids))
+                    state.selected_component_ids.difference_update(ids)
+                    state.large_records = index.active_records()
+                    state.large_ids = [record.component_id for record in state.large_records]
+                    _render_component_page()
+                    _set_status(f'Deleted {len(ids):,} component(s), {changed:,} pixels across the entire mask. Undo last deletion is available.')
+                else:
+                    _invalidate_analysis(message + ' Undo last deletion can restore completed writes.')
+            large_controller.copy_regions(regions(), layer, layer, write, done, operation='Cleanup')
+            return
         if isinstance(state.fast_index, LargeComponentIndex):
             index = state.fast_index
 
@@ -2693,6 +2967,8 @@ def component_operations_widget(
             raise ValueError("Selected component delete made no label changes.")
         layer.data = updated
         deletion_history.data = updated
+        state.analyzed_data = _analysis_data(layer)
+        state.analyzed_revision = state.analysis_revision
         state.selected_component_ids.difference_update(ids)
         component_table.set_records(state.fast_index.active_records())
         _update_selection_summary()
@@ -2706,10 +2982,17 @@ def component_operations_widget(
         layer = deletion_history.layer
         if large_controller.busy or getattr(layer, "_label_assistant_library_indexing", False):
             raise ValueError("Wait for the current mask operation to finish before undoing.")
-        if not any(layer is candidate for candidate in viewer.layers) or not layer.editable:
+        whole = deletion_history.full_resolution
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if not any(layer is candidate for candidate in viewer.layers) or (not layer.editable and not (whole and entry is not None and entry.bounds is None)):
             raise ValueError("The original mask must be available and editable.")
         if dynamic_edit_controller.dirty or dynamic_edit_controller.stroke_active:
             raise ValueError("Finish and apply the current paint stroke before undoing deletion.")
+        if whole:
+            from .workspace.service import _ensure_no_training, _ensure_no_library_scan
+            _ensure_no_training(viewer)
+            _ensure_no_library_scan(viewer)
+            entry.manager.flush()
         iterator = deletion_history.restore()
         was_editable = layer.editable
         layer.editable = False
@@ -2731,14 +3014,19 @@ def component_operations_widget(
             try:
                 restored, skipped, slices = next(iterator)
                 totals = (restored, skipped)
-                _component_pixels_changed(layer, (slices[0].start, slices[1].start, slices[0].stop, slices[1].stop))
+                if not whole:
+                    _component_pixels_changed(layer, (slices[0].start, slices[1].start, slices[0].stop, slices[1].stop))
             except Exception as error:
                 large_controller.edit_active = False
                 layer.editable = was_editable
                 layer._label_assistant_component_editing = False
                 if tile is not None:
                     tile.editable = tile_editable
-                layer.refresh()
+                if whole:
+                    from ._copy_destination import refresh_destination
+                    refresh_destination(layer)
+                else:
+                    layer.refresh()
                 _invalidate_analysis()
                 dynamic_edit_controller.sync(force=True)
                 if isinstance(error, StopIteration):
@@ -2789,6 +3077,39 @@ def component_operations_widget(
         from .workspace.service import _ensure_no_training, _ensure_no_library_scan
         _ensure_no_training(viewer)
         _ensure_no_library_scan(viewer)
+        if _whole_bounded_analysis(source_layer):
+            from . import _copy_destination as destination
+            if state.analyzed_revision != state.analysis_revision:
+                raise ValueError('The mask changed. Find components again before copying.')
+            source = full_source(source_layer)
+            if target_layer is None:
+                name = copy_target_combo.currentText().strip() if manual_copy_target_check.isChecked() else 'Curated copy'
+                target_layer, _, _ = destination.create_matching(viewer, source, None, name or 'Curated copy')
+            records = [index.records[value] for value in ids]
+            offset = destination.fitted_offset(source, target_layer, records)
+            if offset is None:
+                if not manual_copy_target_check.isChecked():
+                    raise ValueError('Choose an aligned full-size destination for entire-mask copying.')
+                if not destination.confirm_manual_destination(container, source, target_layer, True):
+                    return
+                target_layer, _, restore = destination.create_matching(viewer, source, target_layer, target_layer.name)
+                if restore is not None:
+                    state.restore_copy_destination = restore
+                offset = destination.fitted_offset(source, target_layer, records)
+                state.confirmed_copy_targets.add(destination.confirmation_key(target_layer))
+            if manual_copy_target_check.isChecked() and destination.confirmation_key(target_layer) not in state.confirmed_copy_targets:
+                if not destination.confirm_manual_destination(container, source, target_layer, False):
+                    return
+                state.confirmed_copy_targets.add(destination.confirmation_key(target_layer))
+            def copy_write(slices, mask, values, placement, preserving):
+                return destination.write_region(viewer, target_layer, slices, mask, values, placement)
+            def copy_done(count, message):
+                destination.refresh_destination(target_layer)
+                state.last_copy_target_name = target_layer.name
+                _set_status(message or f'Copied {count:,} selected pixels at full-image coordinates.')
+            large_controller.copy_regions(destination.copy_work(source,index,ids,target_layer,offset),
+                source_layer,target_layer,copy_write,copy_done)
+            return
         if target_layer is None and not manual_copy_target_check.isChecked():
             manual_copy_target_check.setChecked(True)
             copy_target_combo.setEditText('Curated' if source_layer.name!='Curated' else 'Curated copy')
@@ -2961,27 +3282,34 @@ def component_operations_widget(
     def _mouse_enabled_for_layer(layer) -> bool:
         return (
             click_select_check.isChecked()
+            and workflow_tabs.currentIndex() == 1
             and state.analyzed_layer_name == getattr(layer, "name", None)
             and state.fast_index is not None
+            and state.analyzed_data is _analysis_data(layer)
+            and state.analyzed_revision == state.analysis_revision
         )
 
     def _handle_mouse_click(_source, event):
-        if reviewed_area_widget.mouse_review_check.isChecked():
+        if (str(getattr(event, 'type', '')).lower() != 'mouse_press'
+                or getattr(event, 'button', 1) != 1
+                or workflow_tabs.currentIndex() != 1 or not click_select_check.isChecked()
+                or reviewed_area_widget.mouse_review_check.isChecked()):
             return
         layer = _target_layer()
         if layer is None:
             return
         if not _mouse_enabled_for_layer(layer):
-            return
-        if str(getattr(event, "type", "")).lower() != "mouse_press":
-            return
+            _run_safely(_prepare_picker)
+            if not _mouse_enabled_for_layer(layer):
+                return
         position = getattr(event, "position", None)
         if position is None:
             return
         try:
-            data_position = layer.world_to_data(position)
-            y = int(round(float(data_position[-2])))
-            x = int(round(float(data_position[-1])))
+            from ._coordinates import mask_world_affine
+            transform = mask_world_affine(_analysis_geometry(layer))
+            data_position = np.linalg.solve(transform[:2,:2], np.asarray(position)[-2:]-transform[:2,2])
+            y, x = (int(np.floor(float(value)+0.5)) for value in data_position)
         except Exception:
             return
         fast_index = state.fast_index
@@ -2989,6 +3317,7 @@ def component_operations_widget(
             return
         component_id = fast_index.component_id_at((y, x))
         if component_id is None:
+            _set_status('No component at this point. Click inside an annotated object; use Confirm edited tile for training to approve the checked area.')
             return
         if append_click_select_check.isChecked():
             state.selected_component_ids.add(component_id)
@@ -3020,6 +3349,11 @@ def component_operations_widget(
         # Layer callbacks only receive events while that layer is active. A
         # viewer callback keeps picking available under grid and other overlays.
         viewer_callbacks = getattr(viewer, "mouse_drag_callbacks", None)
+        if viewer_callbacks is not None and _select_training_tile in viewer_callbacks:
+            viewer_callbacks.remove(_select_training_tile)
+        if (viewer_callbacks is not None and tile_select_check.isChecked()
+                and workflow_tabs.currentIndex() == 0 and layer is not None):
+            viewer_callbacks.append(_select_training_tile)
         if (
             viewer_callbacks is not None
             and _handle_mouse_click in viewer_callbacks
@@ -3030,13 +3364,83 @@ def component_operations_widget(
             if callbacks is not None and _handle_mouse_click in callbacks:
                 callbacks.remove(_handle_mouse_click)
         state.callback_registered = False
-        if click_select_check.isChecked() and layer is not None:
+        if click_select_check.isChecked() and workflow_tabs.currentIndex() == 1 and layer is not None:
             if (
                 viewer_callbacks is not None
                 and _handle_mouse_click not in viewer_callbacks
             ):
                 viewer_callbacks.append(_handle_mouse_click)
                 state.callback_registered = True
+
+    def _restore_picker_modes():
+        for layer, mode in state.picker_modes:
+            if any(layer is candidate for candidate in viewer.layers):
+                layer.mode = mode
+        state.picker_modes.clear()
+
+    def _prepare_picker():
+        if state.closed or not click_select_check.isChecked() or workflow_tabs.currentIndex() != 1:
+            return
+        layer = _editable_target_layer()
+        if layer is None:
+            raise ValueError('Choose a Labels layer for component selection.')
+        _watch_analysis_layer(layer)
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if dynamic_edit_controller.stroke_active or (entry is not None and (entry.manager.stroke_active or entry.manager.loading)):
+            picker_timer.start()
+            return
+        for candidate in (layer, dynamic_edit_controller.tile):
+            if candidate is not None and not any(candidate is old for old, _ in state.picker_modes):
+                state.picker_modes.append((candidate, candidate.mode))
+                candidate.mode = 'pan_zoom'
+        if not _mouse_enabled_for_layer(layer) and not large_controller.busy:
+            _analyze()
+
+    def _analysis_pixels_changed(_event=None):
+        layer = state.analysis_layer
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if entry is not None and entry.manager.loading and _whole_bounded_analysis(layer):
+            return
+        state.analysis_revision += 1
+        if click_select_check.isChecked() and workflow_tabs.currentIndex() == 1:
+            picker_timer.start()
+
+    def _watch_analysis_layer(layer):
+        if layer is state.analysis_layer:
+            return
+        if state.analysis_layer is not None:
+            for name in ('data', 'labels_update'):
+                with suppress(Exception):
+                    getattr(state.analysis_layer.events, name).disconnect(_analysis_pixels_changed)
+        state.analysis_layer = layer
+        if layer is not None:
+            for name in ('data', 'labels_update'):
+                emitter = getattr(layer.events, name, None)
+                if emitter is not None:
+                    emitter.connect(_analysis_pixels_changed)
+
+    def _picker_toggled(checked):
+        if checked:
+            tile_select_check.setChecked(False)
+            reviewed_area_widget.mouse_review_check.setChecked(False)
+            _run_safely(_prepare_picker)
+        else:
+            picker_timer.stop()
+            _restore_picker_modes()
+        _sync_mouse_callback()
+
+    def _workflow_changed(index):
+        if index == 1:
+            grid_tiles._local_editing.follow.retain_review_area()
+            tile_select_check.setChecked(False)
+            reviewed_area_widget.mouse_review_check.setChecked(False)
+            _run_safely(_prepare_picker)
+        else:
+            picker_timer.stop()
+            _restore_picker_modes()
+            grid_tiles._local_editing.follow.resume_from_review()
+        _sync_mouse_callback()
+        _update_confirmation_controls()
 
     def _run_safely(fn) -> None:
         try:
@@ -3052,6 +3456,8 @@ def component_operations_widget(
             _set_status("Wait for the current tile edit before changing Labels layers.")
             return
         selected_layer = _target_layer()
+        _restore_picker_modes()
+        _watch_analysis_layer(selected_layer)
         if selected_layer is not None:
             state.activity_layer = selected_layer
             state.activity_generation += 1
@@ -3072,6 +3478,10 @@ def component_operations_widget(
         _sync_mouse_callback()
         _refresh_copy_targets()
         dynamic_edit_controller.sync()
+        if click_select_check.isChecked():
+            picker_timer.start()
+        elif tile_select_check.isChecked() and workflow_tabs.currentIndex() == 0:
+            _tile_picker_toggled(True)
         if display_grid_check.isChecked():
             try:
                 _show_grid_overlay()
@@ -3166,6 +3576,11 @@ def component_operations_widget(
 
     def _cleanup_callbacks(*_args) -> None:
         state.closed = True
+        picker_timer.stop()
+        _restore_picker_modes()
+        _watch_analysis_layer(None)
+        with suppress(Exception):
+            reviewed_area_widget.tile_confirmation_overlay.visible = False
         grid_tiles._local_editing.shutdown()
         reviewed_area_widget.shutdown()
         component_library_widget.shutdown()
@@ -3197,6 +3612,8 @@ def component_operations_widget(
         with suppress(Exception):
             click_select_check.setChecked(False)
         viewer_callbacks = getattr(viewer, "mouse_drag_callbacks", None)
+        if viewer_callbacks is not None and _select_training_tile in viewer_callbacks:
+            viewer_callbacks.remove(_select_training_tile)
         if (
             viewer_callbacks is not None
             and _handle_mouse_click in viewer_callbacks
@@ -3243,7 +3660,12 @@ def component_operations_widget(
     display_grid_check.toggled.connect(_on_display_grid_toggled)
     grid_y_spin.valueChanged.connect(lambda _value: _on_grid_size_changed())
     grid_x_spin.valueChanged.connect(lambda _value: _on_grid_size_changed())
-    click_select_check.toggled.connect(lambda _checked: _sync_mouse_callback())
+    click_select_check.toggled.connect(_picker_toggled)
+    append_click_select_check.toggled.connect(lambda checked: click_select_check.setChecked(True) if checked else None)
+    reviewed_area_widget.mouse_review_check.toggled.connect(lambda checked: click_select_check.setChecked(False) if checked else None)
+    reviewed_area_widget.mouse_review_check.toggled.connect(lambda checked: tile_select_check.setChecked(False) if checked else None)
+    workflow_tabs.currentChanged.connect(_workflow_changed)
+    picker_timer.timeout.connect(lambda: _run_safely(_prepare_picker))
     grid_label_timer.timeout.connect(lambda: _run_safely(_refresh_grid_labels))
     viewer.camera.events.zoom.connect(_schedule_grid_label_update)
     viewer.camera.events.center.connect(_schedule_grid_label_update)
@@ -3277,6 +3699,19 @@ def component_operations_widget(
     container._manual_copy_target_check = manual_copy_target_check
     container._click_select_check = click_select_check
     container._append_click_select_check = append_click_select_check
+    container._confirm_tile_button = confirm_tile_button
+    container._loaded_tile_section = loaded_tile_section
+    container._analysis_scope_label = tile_scope
+    container._analysis_scope_combo = analysis_scope_combo
+    container._load_analysis_area_button = load_analysis_area_button
+    container._analysis_options_section = analysis_options_section
+    container._confirm_training_tiles = lambda: _run_safely(_confirm_tile)
+    container._tile_select_check = tile_select_check
+    container._tile_append_check = tile_append_check
+    container._tile_selection_summary = tile_selection_summary
+    container._clear_training_tiles_button = clear_tiles_button
+    container._local_editing_controls = grid_tiles._local_editing
+    container._confirmation_hint = confirmation_hint
     container._copy_button = btn_copy
     container._delete_button = btn_delete
     container._undo_delete_button = btn_undo_delete

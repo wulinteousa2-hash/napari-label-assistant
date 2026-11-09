@@ -5,6 +5,7 @@ from uuid import uuid4
 from contextlib import suppress
 
 import numpy as np
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget
 
 KEY = "label_assistant_review"
@@ -42,6 +43,18 @@ def associate(mask, image, truth=None):
 
 
 def write_area(mask, bounds, value):
+    if hasattr(mask, '_label_assistant_mask_entry'):
+        from ._copy_destination import write_region, refresh_destination
+        for y in range(bounds.y0, bounds.y1, 512):
+            for x in range(bounds.x0, bounds.x1, 512):
+                region = (slice(y, min(y+512, bounds.y1)), slice(x, min(x+512, bounds.x1)))
+                pixels = np.full((region[0].stop-y, region[1].stop-x), value, dtype=mask._label_assistant_mask_entry.source.data.dtype)
+                write_region(mask._label_assistant_mask_entry.manager.viewer, mask, region,
+                             np.ones(pixels.shape, dtype=bool), pixels, (0, 0))
+        refresh_destination(mask)
+        from ._component_library import notify_library
+        notify_library(mask)
+        return
     for y in range(bounds.y0, bounds.y1, 512):
         for x in range(bounds.x0, bounds.x1, 512):
             mask.data[y:min(y + 512, bounds.y1), x:min(x + 512, bounds.x1)] = value
@@ -107,9 +120,47 @@ def review_progress(shape, cell_shape, state):
     return count, rows * columns
 
 
+def record_training_usage(viewer, model):
+    """Persist historical training footprints, excluding held-out patches."""
+    for history in model.history:
+        source = history.get('source', {})
+        for truth in list(viewer.layers):
+            truth_id = truth.metadata.get(KEY, {}).get('id')
+            if not truth_id:
+                continue
+            pairs = source.get('pairs', [])
+            image_ids = {p['image_id'] for p in pairs if p.get('ground_truth_id') == truth_id}
+            single = not pairs and source.get('ground_truth_id') == truth_id
+            areas = list(truth.metadata.get(KEY, {}).get('training_areas', []))
+            known = {tuple(area) for area in areas}
+            for patch in history.get('locations', []):
+                if not single and patch.get('image_id') not in image_ids:
+                    continue
+                if patch.get('split') != 'training' and history.get('mode') != 'final_all_reviewed':
+                    continue
+                y, x = patch['y0'], patch['x0']
+                size = patch.get('size', model.crop_pixels)
+                rect = (y, x, patch.get('y1', y + size), patch.get('x1', x + size))
+                if rect not in known:
+                    areas.append(list(rect))
+                    known.add(rect)
+            if areas != truth.metadata.get(KEY, {}).get('training_areas', []):
+                truth.metadata = {**truth.metadata, KEY: {**truth.metadata[KEY], 'training_areas': areas}}
+                entry = getattr(truth, '_label_assistant_mask_entry', None)
+                if entry is not None:
+                    entry.sync_metadata()
+    for widget in getattr(viewer, '_label_assistant_review_widgets', ()):
+        widget.update_status()
+        if widget.selected_cell is not None:
+            widget.update_review_overlay(widget.selected_cell[0])
+
+
 class ReviewedAreaWidget(QGroupBox):
+    coverage_changed = Signal()
+    feedback = Signal(str)
+
     def __init__(self, viewer, controller, parent=None):
-        super().__init__("Review", parent)
+        super().__init__("Confirm tiles for dataset", parent)
         self.viewer, self.controller = viewer, controller
         self.closed = False
         widgets = getattr(viewer, "_label_assistant_review_widgets", None)
@@ -120,16 +171,18 @@ class ReviewedAreaWidget(QGroupBox):
         self.selected_cell = None
         self.editor_summary = QLabel()
         self.editor_summary.setWordWrap(True)
-        self.next_button = QPushButton("Mark reviewed && next")
+        self.next_button = QPushButton("Confirm tile && next")
         self.next_button.setEnabled(False)
         self.next_button.setToolTip("Confirm all objects and background in this cell, then move to the next unreviewed cell.")
         self.next_button.clicked.connect(lambda: self.run(self.finish_and_next))
         self.grid_config = None
         self.selection_overlay = None
         self.review_overlay = None
+        self.training_overlay = None
+        self.tile_confirmation_overlay = None
         self._previous_modes = []
         layout = QVBoxLayout(self)
-        self.progress_label = QLabel("Reviewed cells: 0 / 0")
+        self.progress_label = QLabel("Confirmed grid tiles: 0 / 0")
         layout.addWidget(self.progress_label)
         self.image_combo = QComboBox()
         self.image_combo.setMinimumContentsLength(8)
@@ -137,30 +190,30 @@ class ReviewedAreaWidget(QGroupBox):
         self.image_combo.setToolTip("Select the image corresponding to the Curated layer being reviewed.")
         layout.addWidget(self.image_combo)
         options_toggle = QToolButton()
-        options_toggle.setText("Review options")
+        options_toggle.setText("Advanced review options")
         options_toggle.setCheckable(True)
         self.options_panel = QWidget()
         options_layout = QVBoxLayout(self.options_panel)
         options_layout.setContentsMargins(0, 0, 0, 0)
         self.options_panel.hide()
         options_toggle.toggled.connect(self.options_panel.setVisible)
-        self.mouse_review_check = QCheckBox("Select an editable/review cell on the canvas")
+        self.mouse_review_check = QCheckBox("Select review tiles on canvas")
         self.mouse_review_check.setToolTip("Enable this mode to select or mark whole address-grid cells. Turn it off to resume painting objects.")
         self.grid_form = QFormLayout()
-        options_layout.addLayout(self.grid_form)
+        layout.addLayout(self.grid_form)
         self.mouse_action_combo = QComboBox()
         self.mouse_action_combo.addItem("Click to select a cell", "select")
         self.mouse_action_combo.addItem("Click to mark a cell reviewed", "mark")
         self.mouse_action_combo.addItem("Click to remove reviewed status", "remove")
         self.mouse_action_combo.setEnabled(False)
         layout.addWidget(self.mouse_review_check)
-        self.advanced_check = QCheckBox("Mark already-checked cells with clicks")
+        self.advanced_check = QCheckBox("Click tiles to confirm for dataset")
         self.advanced_check.setToolTip("Use only for cells you have already checked completely. The normal workflow selects a cell first, then finishes its review.")
-        options_layout.addWidget(self.advanced_check)
+        layout.addWidget(self.advanced_check)
         options_layout.addWidget(self.mouse_action_combo)
         self.mouse_action_combo.hide()
         self.advanced_check.toggled.connect(self._advanced_changed)
-        self.cell_label = QLabel("No grid cell selected. Enable mouse review, then click a cell.")
+        self.cell_label = QLabel("Choose the review-tile size, then select a tile on the canvas.")
         self.cell_label.setWordWrap(True)
         layout.addWidget(self.cell_label)
         self.mouse_review_check.toggled.connect(self.toggle_mouse_review)
@@ -168,7 +221,7 @@ class ReviewedAreaWidget(QGroupBox):
         note = QLabel("Confirm every target and the background in this cell before including it.")
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.mark_button = QPushButton("Finish review — include this cell in training")
+        self.mark_button = QPushButton("Confirm tile for dataset")
         self.mark_button.setToolTip("Confirms every target in the selected cell has been annotated. Remaining pixels are confirmed background.")
         self.mark_button.setEnabled(False)
         self.remove_button = QPushButton("Remove reviewed status")
@@ -176,17 +229,20 @@ class ReviewedAreaWidget(QGroupBox):
         self.preview_button = QPushButton("Show reviewed annotations in this area")
         for button, action in ((self.mark_button, self.finish_review), (self.remove_button, self.remove_review), (self.preview_button, self.preview)):
             if button is not self.preview_button:
-                (options_layout if button is self.mark_button else layout).addWidget(button)
+                (options_layout if button is self.remove_button else layout).addWidget(button)
             else:
                 button.hide()
             button.clicked.connect(lambda _checked=False, fn=action: self.run(fn))
         layout.addWidget(self.next_button)
-        self.coverage_button = QPushButton("Show Review Coverage")
+        self.coverage_button = QPushButton("Show confirmed tiles")
         self.coverage_button.clicked.connect(lambda: self.run(self.show_coverage))
         layout.addWidget(self.coverage_button)
+        self.prepare_dataset_button = QPushButton("Go to dataset preparation")
+        self.prepare_dataset_button.setEnabled(False)
+        layout.addWidget(self.prepare_dataset_button)
         layout.addWidget(options_toggle)
         layout.addWidget(self.options_panel)
-        self.status = QLabel("Use local-area editing to define the review boundary.")
+        self.status = QLabel("Set the review-tile size, check objects and background, then confirm tiles for the dataset.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.image_combo.currentIndexChanged.connect(self.clear_cell)
@@ -196,6 +252,8 @@ class ReviewedAreaWidget(QGroupBox):
         self.refresh_images()
 
     def _advanced_changed(self, enabled):
+        if self.closed:
+            return
         self.mouse_action_combo.setVisible(enabled)
         if enabled:
             self.mouse_action_combo.setCurrentIndex(self.mouse_action_combo.findData("mark"))
@@ -220,7 +278,7 @@ class ReviewedAreaWidget(QGroupBox):
 
     def configure_grid(self, source, height, width, show):
         self.grid_config = (source, height, width, show)
-        for label, original in (("Review-cell height (px)", height), ("Review-cell width (px)", width)):
+        for label, original in (("Review-tile height (px)", height), ("Review-tile width (px)", width)):
             spin = QSpinBox()
             spin.setRange(original.minimum(), original.maximum())
             spin.setValue(original.value())
@@ -234,19 +292,23 @@ class ReviewedAreaWidget(QGroupBox):
         self.viewer.mouse_drag_callbacks.append(self.mouse_click)
 
     def clear_cell(self, *_args):
+        if self.closed:
+            return
         self.selected_cell = None
         self.mark_button.setEnabled(False)
         self.next_button.setEnabled(False)
         self.remove_button.setEnabled(False)
-        self.cell_label.setText("No grid cell selected. Enable mouse review, then click a cell.")
+        self.cell_label.setText("Choose the review-tile size, then select a tile on the canvas.")
         if self.selection_overlay is not None:
             self.selection_overlay.visible = False
-        self.mark_button.setText("Finish review — include this cell in training")
+        self.mark_button.setText("Confirm tile for dataset")
         self.remove_button.setText("Remove reviewed status")
 
         self.update_status()
 
     def toggle_mouse_review(self, enabled):
+        if self.closed:
+            return
         self.mouse_action_combo.setEnabled(enabled)
         if enabled:
             if self.grid_config is None:
@@ -287,6 +349,8 @@ class ReviewedAreaWidget(QGroupBox):
 
     def make_outline(self, truth, rectangles, name, color, attribute):
         from ._dynamic_edit import INTERNAL_LAYER_ROLE_KEY
+        from ._mask_tiles import full_source
+        truth = full_source(truth)
         data = [np.asarray([[y0,x0], [y0,x1], [y1,x1], [y1,x0]], dtype=float) for y0,x0,y1,x1 in rectangles]
         layer = getattr(self, attribute)
         if layer is None or not any(layer is candidate for candidate in self.viewer.layers):
@@ -308,6 +372,8 @@ class ReviewedAreaWidget(QGroupBox):
         mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
         areas = effective_areas(mask.metadata.get(KEY, {})) if mask is not None else []
         self.make_outline(truth, areas, "Reviewed areas — green outlines", "lime", "review_overlay")
+        self.make_outline(truth, truth.metadata.get(KEY, {}).get('training_areas', []),
+                          "Used in training — blue outlines", "deepskyblue", "training_overlay")
 
     def show_coverage(self):
         truth = self.grid_config[0]() if self.grid_config else getattr(self.controller, 'source', None)
@@ -316,7 +382,7 @@ class ReviewedAreaWidget(QGroupBox):
         self.update_review_overlay(truth)
 
     def mouse_click(self, _viewer, event):
-        if not self.mouse_review_check.isChecked() or self.grid_config is None:
+        if self.closed or not self.mouse_review_check.isChecked() or self.grid_config is None:
             return
         if str(getattr(event, "type", "")).lower() != "mouse_press" or getattr(event, "button", 1) != 1:
             return
@@ -326,9 +392,12 @@ class ReviewedAreaWidget(QGroupBox):
             return
         try:
             from ._dynamic_edit import TileBounds
-            position = truth.world_to_data(event.position)
-            y, x = np.floor(position[-2:]).astype(int)
-            h, w = truth.data.shape
+            from ._mask_tiles import full_source, full_data
+            from ._coordinates import mask_world_affine
+            transform = mask_world_affine(full_source(truth))
+            position = np.linalg.solve(transform[:2, :2], np.asarray(event.position)[-2:]-transform[:2, 2])
+            y, x = np.floor(position).astype(int)
+            h, w = full_data(truth).shape
             if not (0 <= y < h and 0 <= x < w):
                 return
             sy, sx = height.value(), width.value()
@@ -339,7 +408,7 @@ class ReviewedAreaWidget(QGroupBox):
             self.next_button.setEnabled(True)
             self.remove_button.setEnabled(True)
             self.cell_label.setText(f"Selected R{row:02d}C{col:02d} · {bounds.shape[1]} × {bounds.shape[0]} px")
-            self.mark_button.setText("Finish review — include this cell in training")
+            self.mark_button.setText("Confirm tile for dataset")
             self.remove_button.setText("Remove reviewed status")
             layer = self.make_outline(truth, [[bounds.y0,bounds.x0,bounds.y1,bounds.x1]], "Selected review cell", "yellow", "selection_overlay")
             self.viewer.layers.selection.active = layer
@@ -349,6 +418,7 @@ class ReviewedAreaWidget(QGroupBox):
                 self.mark(1 if action == "mark" else 0)
         except Exception as error:
             self.status.setText(str(error))
+            self.feedback.emit(str(error))
 
     def shutdown(self):
         if self.closed:
@@ -356,7 +426,10 @@ class ReviewedAreaWidget(QGroupBox):
         self.closed = True
         with suppress(ValueError):
             self.viewer._label_assistant_review_widgets.remove(self)
-        self.mouse_review_check.setChecked(False)
+        # This may run from QObject.destroyed after the Vispy canvas and child
+        # controls have gone away. Disabling review interactively restores the
+        # active layer and redraws its highlights; terminal cleanup must not.
+        self._previous_modes.clear()
         with suppress(ValueError):
             self.viewer.mouse_drag_callbacks.remove(self.mouse_click)
         for emitter in (self.viewer.layers.events.inserted, self.viewer.layers.events.removed):
@@ -368,8 +441,11 @@ class ReviewedAreaWidget(QGroupBox):
             action()
         except Exception as error:
             self.status.setText(str(error))
+            self.feedback.emit(str(error))
 
     def refresh_images(self, *_args):
+        if self.closed:
+            return
         import napari
         from ._dynamic_edit import is_internal_layer
         current = self.image_combo.currentData()
@@ -385,6 +461,8 @@ class ReviewedAreaWidget(QGroupBox):
         self.update_status()
 
     def update_status(self, *_args):
+        if self.closed:
+            return
         truth = self.selected_cell[0] if self.selected_cell is not None else self.grid_config[0]() if self.grid_config else getattr(self.controller, 'source', None)
         mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
         state = mask.metadata.get(KEY, {}) if mask is not None else {}
@@ -397,29 +475,43 @@ class ReviewedAreaWidget(QGroupBox):
                 self._progress_stamp = stamp
                 count, total = review_progress(shape, cell_shape, state)
                 detail = f"{count:,}" if mask is None or 'areas' in state else "not counted (external mask)"
-                self.progress_label.setText(f"Reviewed cells: {detail} / {total:,}")
+                self.progress_label.setText(f"Confirmed grid tiles: {detail} / {total:,}")
         elif truth is None:
             self.progress_label.setText("Choose a Labels layer to inspect review progress.")
         if self.selected_cell is not None:
             _, bounds, sy, sx = self.selected_cell
             rect = (bounds.y0, bounds.x0, bounds.y1, bounds.x1)
             stale = any(a < bounds.y1 and b < bounds.x1 and c > bounds.y0 and d > bounds.x0 for a,b,c,d in state.get('invalid_regions', []))
-            status = "Needs re-review after edits" if stale else "Reviewed" if region_reviewed(rect, effective_areas(state)) else "Not reviewed"
-            self.cell_label.setText(f"Current cell: R{bounds.y0 // sy:02d}C{bounds.x0 // sx:02d}\nStatus: {status}")
+            status = "Needs recheck after edits" if stale else "Confirmed for dataset" if region_reviewed(rect, effective_areas(state)) else "Not confirmed"
+            used = truth.metadata.get(KEY, {}).get('training_areas', [])
+            overlaps = any(a < bounds.y1 and b < bounds.x1 and c > bounds.y0 and d > bounds.x0 for a, b, c, d in used)
+            usage = "Used in training (entire cell)" if region_reviewed(rect, used) else "Used in training (part of cell)" if overlaps else "No recorded training use"
+            self.cell_label.setText(f"Current cell: R{bounds.y0 // sy:02d}C{bounds.x0 // sx:02d} · {bounds.shape[1]} × {bounds.shape[0]} px\nStatus: {status}\n{usage}")
         if mask is not None:
-            self.status.setText("Edits revoke approval until re-review.")
+            self.status.setText("Green: approved for dataset preparation. Blue: recorded training use. Edits require re-review; historical training use remains recorded.")
         else:
-            self.status.setText("No reviewed coverage yet. Marking an area creates a separate mask.")
+            self.status.setText("No confirmed tiles yet. Confirm a fully checked tile to include it in the dataset.")
         self.editor_summary.setText(self.cell_label.text() + "\n" + self.status.text())
 
-    def context(self):
+    def context(self, *, current_tile=False, review_bounds=None):
         from ._quick_train import array_2d
+        from ._mask_tiles import full_data, full_source
+        from ._coordinates import matching_mask_transforms, mask_world_affine
+        from ._dynamic_edit import TileBounds
         c = self.controller
         image = self.image_combo.currentData()
         if image is None or not any(image is layer for layer in self.viewer.layers):
             raise ValueError("Select the corresponding image.")
         truth, bounds = c.source, c.bounds
-        if self.selected_cell is not None:
+        if current_tile:
+            truth = self.grid_config[0]() if self.grid_config else c.source
+            entry = getattr(truth, '_label_assistant_mask_entry', None)
+            if entry is not None and entry.bounds is not None:
+                bounds = TileBounds(entry.bounds[0].start, entry.bounds[1].start,
+                                    entry.bounds[0].stop, entry.bounds[1].stop)
+            elif truth is not c.source or c.tile is None or bounds is None or c.loading:
+                raise ValueError('Zoom in to load an edit area before confirming it for training.')
+        elif self.selected_cell is not None:
             truth, bounds, sy, sx = self.selected_cell
             source, height, width, _ = self.grid_config
             if source() is not truth or (sy, sx) != (height.value(), width.value()):
@@ -427,8 +519,18 @@ class ReviewedAreaWidget(QGroupBox):
                 raise ValueError("The source or grid changed. Click a cell again.")
         elif c.bounds is None or c.tile is None or c.source is None or c.loading:
             raise ValueError("Enable mouse review and click a grid cell, or load a local editable area first.")
-        if hasattr(truth, '_label_assistant_mask_entry'):
-            raise ValueError('Use grid-tile navigation to record completion. Full-image reviewed-cell coverage requires Local-area or Full-layer editing; tile completion alone is not training supervision.')
+        if truth is None or bounds is None:
+            raise ValueError('Choose a mask and load an edit area before confirming it.')
+        entry = getattr(truth, '_label_assistant_mask_entry', None)
+        if entry is not None:
+            from .workspace.service import _commit_pending_local_edits
+            _commit_pending_local_edits(self.viewer)
+            if entry.bounds is None:
+                raise ValueError('Zoom in to load an editable mask area first.')
+            expected = mask_world_affine(entry.source).copy()
+            expected[:2, 2] += expected[:2, :2] @ [s.start for s in entry.bounds]
+            if not np.allclose(mask_world_affine(truth), expected, rtol=0, atol=1e-8):
+                raise ValueError('Restore the original edit-area registration before confirming training coverage.')
         if c.stroke_active:
             raise ValueError("Finish the current stroke first.")
         if truth.metadata.get(KEY, {}).get("role") in ("reviewed_regions", "reviewed_annotations"):
@@ -436,41 +538,79 @@ class ReviewedAreaWidget(QGroupBox):
         tile_editable = c.source is truth and c.tile is not None and c.tile.editable
         if not truth.editable and not tile_editable:
             raise ValueError("Wait for training or indexing to finish before changing review coverage.")
-        if tuple(array_2d(image.data).shape) != tuple(truth.data.shape):
+        if review_bounds is not None:
+            bounds = TileBounds(*review_bounds)
+        shape = tuple(full_data(truth).shape)
+        if not (0 <= bounds.y0 < bounds.y1 <= shape[0] and 0 <= bounds.x0 < bounds.x1 <= shape[1]):
+            raise ValueError('The review area is outside the full mask.')
+        if tuple(array_2d(image.data).shape) != shape:
             raise ValueError("The selected image and Curated layer must have matching dimensions.")
-        for attribute in ("scale", "translate", "rotate", "shear", "affine"):
-            a, b = getattr(image, attribute), getattr(truth, attribute)
-            a, b = getattr(a, "affine_matrix", a), getattr(b, "affine_matrix", b)
-            if not np.allclose(a, b):
-                raise ValueError("The selected image and Curated layer must have matching spatial transforms.")
+        if not matching_mask_transforms(image, full_source(truth)):
+            raise ValueError("The selected image and Curated layer must have matching spatial transforms.")
         if c.source is truth and c.dirty and not c.commit():
             raise ValueError("Could not apply pending edits. Review status was not changed.")
         return image, truth, bounds
 
-    def mark(self, value):
+    def _managed_coverage(self, truth, image):
+        """Create sparse full-size coverage without rendering its full array."""
+        from tempfile import TemporaryDirectory
+        from .workspace.service import _common_record, _require_zarr
+        entry = truth._label_assistant_mask_entry
+        manager = entry.manager
+        resource = TemporaryDirectory(prefix='label-assistant-reviewed-')
+        manager._temporary_stores.append(resource)
+        path = Path(resource.name)/'coverage.zarr'
+        array = _require_zarr().open_array(str(path), mode='w-', shape=entry.source.data.shape,
+                                           chunks=(512, 512), dtype='uint8', fill_value=0)
+        base = _common_record(entry.source, 'Labels')
+        record = {key: base[key] for key in ('scale', 'translate', 'rotate', 'shear', 'affine')}
+        record.update(name='Reviewed regions', visible=False, opacity=.15,
+                      label_assistant_review=dict(id=str(uuid4()), role='reviewed_regions',
+                                                  image_id=identity(image), truth_id=identity(truth)))
+        active = self.viewer.layers.selection.active
+        try:
+            layer = manager.add(record, array, {'path': path, 'array_path': ''})
+            layer._label_assistant_mask_entry.source._label_assistant_mask_temporary = True
+        finally:
+            if active is not None and any(active is candidate for candidate in self.viewer.layers):
+                self.viewer.layers.selection.active = active
+        return layer
+
+    def confirm_current_tile(self):
+        return self.mark(1, current_tile=True)
+
+    def mark(self, value, *, current_tile=False, review_bounds=None):
         from .workspace.service import _require_zarr
-        image, truth, bounds = self.context()
+        from ._mask_tiles import full_data, full_source
+        from ._coordinates import matching_mask_transforms
+        active = self.viewer.layers.selection.active
+        image, truth, bounds = self.context(current_tile=current_tile, review_bounds=review_bounds)
         mask = associated_mask(self.viewer, image, truth)
         if mask is None:
             if not value:
                 raise ValueError("This image has no reviewed-region mask.")
-            path, _ = QFileDialog.getSaveFileName(self, "Store Reviewed Areas", "reviewed-regions.zarr", "Zarr mask (*.zarr)")
-            if not path:
-                return False
-            if not path.endswith(".zarr"):
-                path += ".zarr"
-            data = _require_zarr().open_array(path, mode="w-", shape=truth.data.shape,
-                                             chunks=(512, 512), dtype="uint8", fill_value=0)
-            mask = self.viewer.add_labels(data, name="Reviewed regions", scale=image.scale,
-                                          translate=image.translate, rotate=image.rotate,
-                                          shear=image.shear, affine=image.affine, opacity=.15,
-                                          metadata={KEY: {"role": "reviewed_regions", "image_id": identity(image), "truth_id": identity(truth)}})
+            if hasattr(truth, '_label_assistant_mask_entry'):
+                mask = self._managed_coverage(truth, image)
+            else:
+                path, _ = QFileDialog.getSaveFileName(self, "Store Reviewed Areas", "reviewed-regions.zarr", "Zarr mask (*.zarr)")
+                if not path:
+                    return False
+                if not path.endswith(".zarr"):
+                    path += ".zarr"
+                data = _require_zarr().open_array(path, mode="w-", shape=truth.data.shape,
+                                                 chunks=(512, 512), dtype="uint8", fill_value=0)
+                mask = self.viewer.add_labels(data, name="Reviewed regions", scale=image.scale,
+                                              translate=image.translate, rotate=image.rotate,
+                                              shear=image.shear, affine=image.affine, opacity=.15,
+                                              metadata={KEY: {"role": "reviewed_regions", "image_id": identity(image), "truth_id": identity(truth)}})
         state = dict(mask.metadata[KEY])
         truth_id = identity(truth)
         if state.get("truth_id", truth_id) != truth_id:
             raise ValueError("This mask belongs to another ground-truth layer. Select that layer before reviewing.")
-        if tuple(mask.data.shape) != tuple(truth.data.shape) or not mask.editable:
+        if tuple(full_data(mask).shape) != tuple(full_data(truth).shape) or not mask.editable:
             raise ValueError("Reviewed mask must match the source dimensions and be available for editing.")
+        if not matching_mask_transforms(full_source(mask), full_source(truth)):
+            raise ValueError('Reviewed coverage must match the full mask registration.')
         rect = [bounds.y0, bounds.x0, bounds.y1, bounds.x1]
         areas = list(state.get("areas", []))
         if value:
@@ -487,7 +627,10 @@ class ReviewedAreaWidget(QGroupBox):
                 else:
                     remaining.extend(r for r in ([a,b,u,e], [w,b,d,e], [u,b,w,v], [u,z,w,e]) if r[0] < r[2] and r[1] < r[3])
             areas = remaining
-        self.update_annotations(image, truth, mask, bounds, value)
+        # Managed masks already expose the full-resolution trusted source to
+        # training. Coverage selects it without creating another foreground copy.
+        if not hasattr(truth, '_label_assistant_mask_entry'):
+            self.update_annotations(image, truth, mask, bounds, value)
         write_area(mask, bounds, value)
         from ._component_library import subtract_rectangle
         review_cells = list(state.get("review_cells", state.get("areas", [])))
@@ -504,11 +647,20 @@ class ReviewedAreaWidget(QGroupBox):
             ]
         mask.metadata = {**mask.metadata, KEY: {**state, "truth_id": truth_id,
                          "areas": areas, "invalid_regions": invalid_regions, "review_cells": review_cells}}
+        entry = getattr(mask, '_label_assistant_mask_entry', None)
+        if entry is not None:
+            entry.sync_metadata()
         from ._component_library import notify_library
         notify_library(mask)
         self.update_status()
         if self.grid_config is not None:
             self.update_review_overlay(truth)
+        if active is not None and any(active is candidate for candidate in self.viewer.layers):
+            self.viewer.layers.selection.active = active
+        message = 'Confirmed foreground and background in the checked area for training.' if value else 'Removed training approval from this area.'
+        self.coverage_changed.emit()
+        self.status.setText(message)
+        self.feedback.emit(message)
         return True
 
     def finish_and_next(self):
@@ -518,7 +670,8 @@ class ReviewedAreaWidget(QGroupBox):
         if not self.mark(1):
             return
         mask = associated_mask(self.viewer, self.image_combo.currentData(), truth)
-        h, w = truth.data.shape
+        from ._mask_tiles import full_data
+        h, w = full_data(truth).shape
         columns = (w + sx - 1) // sx
         total = ((h + sy - 1) // sy) * columns
         start = (current.y0 // sy) * columns + current.x0 // sx
@@ -537,8 +690,8 @@ class ReviewedAreaWidget(QGroupBox):
             self.selected_cell = (truth, bounds, sy, sx)
             self.cell_label.setText(f"Selected R{row:02d}C{col:02d} · {bounds.shape[1]} × {bounds.shape[0]} px")
             self.make_outline(truth, [[bounds.y0,bounds.x0,bounds.y1,bounds.x1]], "Selected review cell", "yellow", "selection_overlay")
-            self.mouse_review_check.setChecked(False)
-            self.viewer.camera.center = truth.data_to_world(((bounds.y0+bounds.y1)/2, (bounds.x0+bounds.x1)/2))
+            from ._mask_tiles import full_source
+            self.viewer.camera.center = full_source(truth).data_to_world(((bounds.y0+bounds.y1)/2, (bounds.x0+bounds.x1)/2))
             self.update_status()
             return
         self.status.setText("All cells in this grid are reviewed. Prepare the dataset in Training.")

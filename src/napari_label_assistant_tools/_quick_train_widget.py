@@ -92,7 +92,7 @@ class QuickTrainWidget(QWidget):
         self.dataset_source_layout = layout
         layout.setContentsMargins(0, 6, 0, 0)
         note = QLabel(
-            "Choose annotations and prepare the dataset. Patch preview is optional."
+            "Prepare confirmed tiles from Edit & Confirm. Unconfirmed areas are excluded."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -105,14 +105,16 @@ class QuickTrainWidget(QWidget):
         self.image_combo = QComboBox()
         self.truth_combo = QComboBox()
         self.dataset_source_mode = QComboBox()
-        self.dataset_source_mode.addItem('Current pair', 'current')
-        self.dataset_source_mode.addItem('Multiple pairs', 'multiple')
+        self.dataset_source_mode.addItem('This image', 'current')
+        self.dataset_source_mode.addItem('Multiple images', 'multiple')
         self.manage_pairs_button = QPushButton('Manage pairs…')
         self.manage_pairs_button.clicked.connect(lambda: self._safe(self._manage_pairs))
-        source_row = QHBoxLayout()
+        self.dataset_source_row = QWidget()
+        source_row = QHBoxLayout(self.dataset_source_row)
+        source_row.setContentsMargins(0, 0, 0, 0)
         source_row.addWidget(self.dataset_source_mode, 1)
         source_row.addWidget(self.manage_pairs_button)
-        form.addRow('Source mode', source_row)
+        form.addRow('Source mode', self.dataset_source_row)
         self.pairs_summary = QLabel()
         self.pairs_summary.setWordWrap(True)
         form.addRow(self.pairs_summary)
@@ -126,7 +128,7 @@ class QuickTrainWidget(QWidget):
         self.workflow_combo.addItem("All patches (recommended)", "coverage")
         self.workflow_combo.addItem("Sample patches", "sampled")
         self.annotation_combo = QComboBox()
-        self.annotation_combo.addItem("Partial — reviewed cells + selected objects", "partial")
+        self.annotation_combo.addItem("Partial — confirmed tiles", "partial")
         self.annotation_combo.addItem("Complete — whole image", "complete")
         self.create_reviewed_button = QPushButton("Create reviewed mask…")
         self.create_reviewed_button.setToolTip("Create an empty disk-backed Labels layer matching the training image. In Labels, mark only regions with complete annotations as reviewed using label 1.")
@@ -185,6 +187,11 @@ class QuickTrainWidget(QWidget):
         form.addRow("Model input size", self.resolution_combo)
         form.addRow("Crop count", self.samples_spin)
         self.dataset_form = form
+        self.dataset_advanced_toggle = QToolButton()
+        self.dataset_advanced_toggle.setText('Advanced source options')
+        self.dataset_advanced_toggle.setCheckable(True)
+        self.dataset_advanced_toggle.toggled.connect(self._update_dataset_advanced_visibility)
+        layout.addWidget(self.dataset_advanced_toggle)
         self.validation_note = validation = QLabel(
             "Find targets across the whole mask, then sample positives, nearby "
             "background, and ordinary background. Separate spatial blocks are "
@@ -233,8 +240,49 @@ class QuickTrainWidget(QWidget):
             label.setWordWrap(True)
             overview_layout.addWidget(label)
         layout.addWidget(overview)
+        self.training_tile_actions = QGroupBox('Confirmed tiles for dataset')
+        tile_layout = QVBoxLayout(self.training_tile_actions)
+        self.edit_confirm_button = QPushButton('Edit && confirm tiles…')
+        self.edit_confirm_button.setEnabled(False)
+        tile_layout.addWidget(self.edit_confirm_button)
+        self.show_confirmed_tiles_button = QPushButton('Show confirmed tiles on image')
+        self.show_confirmed_tiles_button.setEnabled(False)
+        tile_layout.addWidget(self.show_confirmed_tiles_button)
+        self.show_dataset_split_button = QPushButton('Show training / validation patches on image')
+        self.show_dataset_split_button.setEnabled(False)
+        self.show_dataset_split_button.clicked.connect(lambda: self._safe(self._preview_validation))
+        tile_layout.addWidget(self.show_dataset_split_button)
+        tile_hint = QLabel('Confirm reviewed objects and background in Edit & Confirm, then prepare the dataset here. Unconfirmed areas remain excluded.')
+        tile_hint.setWordWrap(True)
+        tile_layout.addWidget(tile_hint)
+        layout.addWidget(self.training_tile_actions)
+        self.legacy_tile_controls = QGroupBox('Advanced: confirm loaded edit areas')
+        legacy_layout = QVBoxLayout(self.legacy_tile_controls)
+        tile_form = QFormLayout()
+        self.review_tile_height = QSpinBox()
+        self.review_tile_width = QSpinBox()
+        for spin in (self.review_tile_height, self.review_tile_width):
+            spin.setRange(1, 100000)
+            spin.setSuffix(' px')
+            spin.setValue(1024)
+        tile_form.addRow('Training tile height', self.review_tile_height)
+        tile_form.addRow('Training tile width', self.review_tile_width)
+        legacy_layout.addLayout(tile_form)
+        self.confirm_tiles_on_canvas = QCheckBox('Click tiles to confirm reviewed masks for dataset')
+        self.confirm_tiles_on_canvas.setToolTip('Clicking approves every object and the remaining background inside the chosen grid tile. Only confirm tiles you have checked completely. Turn off to paint again.')
+        self.confirm_tiles_on_canvas.setEnabled(False)
+        legacy_layout.addWidget(self.confirm_tiles_on_canvas)
+        self.cleanup_masks_button = QPushButton('Optional: find small masks in current edit area…')
+        self.cleanup_masks_button.setEnabled(False)
+        self.cleanup_masks_button.setToolTip('Index connected objects in the loaded edit area, then preview an area threshold before removing small masks. This does not clean the entire image.')
+        legacy_layout.addWidget(self.cleanup_masks_button)
+        self.select_training_tiles_button = QPushButton('Select checked tiles on canvas…')
+        self.confirm_training_tiles_button = QPushButton('Confirm edited / selected tiles for training')
+        for button in (self.select_training_tiles_button, self.confirm_training_tiles_button):
+            button.setEnabled(False)
+            legacy_layout.addWidget(button)
         self.selection_toggle = QToolButton()
-        self.selection_toggle.setText("Manage Training Selection")
+        self.selection_toggle.setText("Advanced: saved object selections and coverage")
         self.selection_toggle.setCheckable(True)
         layout.addWidget(self.selection_toggle)
         self.training_selection_panel = QWidget()
@@ -243,9 +291,10 @@ class QuickTrainWidget(QWidget):
         self.selection_form = QFormLayout()
         self.selection_form.addRow("Reviewed-region mask", self.reviewed_combo)
         self.training_selection_layout.addLayout(self.selection_form)
-        self.selection_hint = QLabel("Review cells in Labels → Local Editing. Build the component library to include individual foreground objects here.")
+        self.selection_hint = QLabel("Existing foreground-only selections are preserved here. For new training data, confirm complete tiles in Edit & Confirm.")
         self.selection_hint.setWordWrap(True)
         self.training_selection_layout.addWidget(self.selection_hint)
+        self.training_selection_layout.addWidget(self.legacy_tile_controls)
         self.training_selection_panel.hide()
         self.selection_toggle.toggled.connect(self._update_source_mode_visibility)
         self.review_pair_toggle = QToolButton()
@@ -256,6 +305,14 @@ class QuickTrainWidget(QWidget):
         layout.addWidget(self.training_selection_panel)
         layout.addStretch(0)
         prepare_layout.insertWidget(0, self.annotation_note)
+        self.dataset_feedback = QLabel()
+        self.dataset_feedback.setWordWrap(True)
+        prepare_layout.addWidget(self.dataset_feedback)
+        self.smaller_patches_button = QPushButton()
+        self.smaller_patches_button.hide()
+        self.smaller_patches_button.setToolTip('Keep the confirmed tile selection and retry preparation using smaller source and model patches. Validation still requires separate spatial groups.')
+        self.smaller_patches_button.clicked.connect(lambda: self._safe(self._prepare_smaller_patches))
+        prepare_layout.addWidget(self.smaller_patches_button)
         dataset_layout.addWidget(prepare_group)
         self.reviewed_area_widget = None
         self.component_library_widget = None
@@ -648,6 +705,7 @@ class QuickTrainWidget(QWidget):
         for spec in panel.candidates:
             panel.candidate_list.addItem(ModelSpec(**spec).label())
         self.model_state_label.setText("Workspace restored. Select its saved model in Models to continue or predict.")
+        self._use_single_included_pair()
         self._update_controls()
 
     def _multiple_pairs(self):
@@ -659,7 +717,7 @@ class QuickTrainWidget(QWidget):
     def _output_mode_changed(self, *_args):
         multilabel = self._is_multilabel()
         self.dataset_source_mode.model().item(0).setEnabled(not multilabel)
-        self.dataset_source_mode.setItemText(1, 'Images / target channels' if multilabel else 'Multiple pairs')
+        self.dataset_source_mode.setItemText(1, 'Images / target channels' if multilabel else 'Multiple images')
         if multilabel:
             self.dataset_source_mode.setCurrentIndex(1)
         self._workflow_changed()
@@ -669,8 +727,50 @@ class QuickTrainWidget(QWidget):
         if self._is_multilabel() and not self._multiple_pairs():
             self.dataset_source_mode.setCurrentIndex(1)
             return
+        self._use_single_included_pair()
         self._workflow_changed()
         self._sources_changed()
+
+    def _use_single_included_pair(self):
+        """A single selected image uses spatial validation, including old projects."""
+        if not self._multiple_pairs() or self._is_multilabel():
+            return
+        included = [row for row in self.dataset_pairs if row.get('included')]
+        if len(included) != 1:
+            return
+        from ._dataset_pairs import associate_pair_coverage, source_layers, is_prediction
+        associate_pair_coverage(self.viewer, self.dataset_pairs)
+        row = included[0]
+        if not row.get('image_id') or not row.get('truth_id'):
+            return
+        images, labels, masks = source_layers(self.viewer)
+        def matches(layer, identifier):
+            return layer.metadata.get('label_assistant_review', {}).get('id') == identifier
+        image = next((layer for layer in images if matches(layer, row.get('image_id'))), None)
+        truth = next((layer for layer in labels if matches(layer, row.get('truth_id'))), None)
+        if image is None or truth is None or row.get('coverage') not in ('partial', 'complete'):
+            return  # Keep invalid definitions visible to pair validation.
+        if is_prediction(truth) and not row.get('confirmed'):
+            return
+        if row['coverage'] == 'partial':
+            candidates = [mask for mask in masks
+                          if mask.metadata['label_assistant_review'].get('image_id') == row['image_id']
+                          and mask.metadata['label_assistant_review'].get('truth_id') == row['truth_id']]
+            if row.get('reviewed_id'):
+                if not any(matches(mask, row['reviewed_id']) for mask in candidates):
+                    return
+            elif len(candidates) > 1:
+                return
+        self.dataset_source_mode.blockSignals(True)
+        self.dataset_source_mode.setCurrentIndex(self.dataset_source_mode.findData('current'))
+        self.dataset_source_mode.blockSignals(False)
+        for combo, key in ((self.image_combo, 'image_id'), (self.truth_combo, 'truth_id'), (self.reviewed_combo, 'reviewed_id')):
+            for index in range(combo.count()):
+                layer = combo.itemData(index)
+                if layer is not None and layer.metadata.get('label_assistant_review', {}).get('id') == row.get(key):
+                    combo.setCurrentIndex(index)
+                    break
+        self.annotation_combo.setCurrentIndex(self.annotation_combo.findData(row.get('coverage', 'partial')))
 
     def _update_source_mode_visibility(self, *_args):
         multiple = self._multiple_pairs()
@@ -704,6 +804,7 @@ class QuickTrainWidget(QWidget):
             self.pairs_summary.setToolTip('\n'.join(issues))
             self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
             self.selection_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+            self._update_dataset_advanced_visibility()
             return
         included = [row for row in self.dataset_pairs if row.get('included')]
         from ._dataset_pairs import resolve_pairs
@@ -718,6 +819,17 @@ class QuickTrainWidget(QWidget):
         self.pairs_summary.setToolTip('\n'.join(issues))
         self.reviewed_combo.setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
         self.selection_form.labelForField(self.reviewed_combo).setVisible(reviewing and self.annotation_combo.currentData() == 'partial')
+        self._update_dataset_advanced_visibility()
+
+    def _update_dataset_advanced_visibility(self, *_args):
+        advanced = self.dataset_advanced_toggle.isChecked()
+        for control in (self.workflow_combo, self.samples_spin):
+            visible = advanced and (control is not self.samples_spin or self.workflow_combo.currentData() != 'coverage')
+            control.setVisible(visible)
+            self.dataset_form.labelForField(control).setVisible(visible)
+        source_visible = advanced or self._multiple_pairs() or self._is_multilabel()
+        self.dataset_source_row.setVisible(source_visible)
+        self.dataset_form.labelForField(self.dataset_source_row).setVisible(source_visible)
 
     def _manage_pairs(self):
         if self._is_multilabel():
@@ -797,6 +909,12 @@ class QuickTrainWidget(QWidget):
             self._update_training_overview()
             self.status_label.setText(message)
             self.status_label.setToolTip(message)
+            self.dataset_feedback.setText(message)
+            smaller = self._smaller_patch_size()
+            retry = 'Reviewed targets need at least two separate spatial blocks' in message and smaller is not None
+            self.smaller_patches_button.setVisible(retry)
+            if retry:
+                self.smaller_patches_button.setText(f'Try {smaller} px model patches and prepare again')
             if hasattr(self, "activity_log"):
                 scrollbar = self.activity_log.verticalScrollBar()
                 old_position = scrollbar.value()
@@ -805,9 +923,26 @@ class QuickTrainWidget(QWidget):
                 scrollbar.setValue(scrollbar.maximum() if at_end else old_position)
             self.viewer.status = message
 
+    def _smaller_patch_size(self):
+        current = self.crop_combo.currentData()
+        sizes = [self.crop_combo.itemData(i) for i in range(self.crop_combo.count())]
+        return max((size for size in sizes if size is not None and size < current), default=None)
+
+    def _prepare_smaller_patches(self):
+        size = self._smaller_patch_size()
+        if size is None or self.worker is not None:
+            return
+        self.crop_combo.setCurrentIndex(self.crop_combo.findData(size))
+        if self.resolution_combo.findData(size) < 0:
+            self.resolution_combo.addItem(f'{size} × {size}', size)
+        self.resolution_combo.setCurrentIndex(self.resolution_combo.findData(size))
+        self._start_preparing()
+
     def refresh_layers(self):
         if self.closed or self.worker is not None:
             return
+        from ._dataset_pairs import associate_pair_coverage
+        pair_coverage_changed = associate_pair_coverage(self.viewer, self.dataset_pairs)
         previous = (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData())
         for combo, layer_type in (
             (self.image_combo, napari.layers.Image),
@@ -836,7 +971,7 @@ class QuickTrainWidget(QWidget):
                     break
             combo.blockSignals(False)
         self._select_associated_reviewed_mask()
-        if any(a is not b for a, b in zip(previous, (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()))):
+        if pair_coverage_changed or any(a is not b for a, b in zip(previous, (self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_combo.currentData()))):
             self._sources_changed()
         else:
             self._update_controls()
@@ -860,6 +995,13 @@ class QuickTrainWidget(QWidget):
 
     def _source_event(self, event):
         layer = getattr(event, 'source', None)
+        entry = getattr(layer, '_label_assistant_mask_entry', None)
+        if (entry is not None and entry.manager.loading
+                and getattr(event, 'type', '') in ('data', 'paint', 'labels_update',
+                                                  'scale', 'translate', 'rotate', 'shear', 'affine')):
+            # Loading a different crop/overview does not edit the full s0 store
+            # or its registration. Actual edits notify separately.
+            return
         if (getattr(event, 'type', '') in ('data', 'paint', 'labels_update')
                 and isinstance(layer, napari.layers.Labels)
                 and layer.metadata.get('label_assistant_review', {}).get('role') not in ('reviewed_regions', 'reviewed_annotations')
@@ -873,6 +1015,7 @@ class QuickTrainWidget(QWidget):
         self._invalidate_crops()
 
     def _sources_changed(self, *_args):
+        self._use_single_included_pair()
         self._select_associated_reviewed_mask()
         for emitter in self._source_emitters:
             with suppress(Exception):
@@ -930,6 +1073,7 @@ class QuickTrainWidget(QWidget):
     def _update_controls(self):
         busy = self.worker is not None
         for control in (
+            self.select_training_tiles_button, self.confirm_training_tiles_button,
             self.validation_method_combo, self.holdout_spin, self.fold_spin, self.validation_seed_spin,
             self.rotation_check, self.flip_check, self.intensity_check,
             self.prepare_button, self.image_combo, self.truth_combo, self.samples_spin,
@@ -939,6 +1083,13 @@ class QuickTrainWidget(QWidget):
             self.workflow_combo, self.annotation_combo, self.reviewed_combo, self.epochs_spin, self.batch_spin, self.extra_targets_spin, self.create_reviewed_button,
         ):
             control.setEnabled(not busy)
+        for button in (self.select_training_tiles_button, self.confirm_training_tiles_button,
+                       self.confirm_tiles_on_canvas, self.show_confirmed_tiles_button,
+                       self.review_tile_height, self.review_tile_width, self.cleanup_masks_button,
+                       self.edit_confirm_button):
+            button.setEnabled(not busy and self.reviewed_area_widget is not None)
+        self.smaller_patches_button.setEnabled(not busy)
+        self.show_dataset_split_button.setEnabled(not busy and isinstance(self.prepared, IndexedPatches))
         self.contrast_spin.setEnabled(not busy and self.intensity_check.isChecked())
         self.brightness_spin.setEnabled(not busy and self.intensity_check.isChecked())
         self.plateau_group.setEnabled(not busy and self.workflow_combo.currentData() == "coverage")
@@ -1338,7 +1489,7 @@ class QuickTrainWidget(QWidget):
                     library = library_for(truth)
                     if library is not None:
                         _, included, changed = library.counts()
-                        needs_review += int(bool(library.state()['pending']))
+                        needs_review += int(bool(included and library.state()['pending']))
                 except Exception:
                     needs_review += 1
             objects += included
@@ -1356,19 +1507,17 @@ class QuickTrainWidget(QWidget):
             areas = effective_areas(state)
             cells = state.get('review_cells', state.get('areas', []))
             count = sum(region_reviewed(cell, areas) for cell in cells)
-            if (mask is not None and hasattr(self, 'reviewed_area_widget') and self.reviewed_area_widget is not None
-                    and self.reviewed_area_widget.grid_config is not None and 'areas' in state):
-                from ._reviewed_regions import review_progress
-                config = self.reviewed_area_widget.grid_config
-                count, _ = review_progress(full_data(truth).shape, (config[1].value(), config[2].value()), state)
             external = mask is not None and 'areas' not in state
             eligible |= bool(areas) or external
-            detail = "external coverage mask; measured on preparation" if external else f"{count:,} reviewed cells"
-            lines.append(f"{name}: {detail} · {included:,} selected objects" + (f" · {changed:,} objects need review" if changed else ""))
+            detail = "external coverage mask; measured on preparation" if external else f"{count:,} confirmed tiles available"
+            legacy = f" · {included:,} saved object selections" if included else ''
+            lines.append(f"{name}: {detail}{legacy}" + (f" · {changed:,} objects need review" if changed else ""))
         visible_lines = lines[:4] + ([f"{len(lines) - 4:,} more sources; see Manage pairs / channels."] if len(lines) > 4 else [])
         self.annotation_sources_label.setText("Annotation sources\n" + "\n".join(visible_lines))
         self.annotation_sources_label.setToolTip("\n".join(lines))
         dataset = self.prepared
+        self.annotation_combo.setItemText(self.annotation_combo.findData('partial'),
+            'Partial — confirmed tiles + saved object selections' if objects else 'Partial — confirmed tiles')
         if isinstance(dataset, IndexedPatches):
             self._dataset_outdated = False
             if dataset is getattr(self, '_overview_dataset', None):
@@ -1396,15 +1545,18 @@ class QuickTrainWidget(QWidget):
             self.supervision_label.setText(
                 "Foreground annotations available. Background has not been verified.\nUnknown pixels are excluded. Review background in Labels; training and validation require targets and verified background."
                 if objects and not eligible else
-                "Reviewed cells: foreground + verified background.\nSelected objects: foreground only.\nUnknown pixels excluded; coverage measured on preparation.")
+                "Confirmed tiles include annotated objects and checked background.\nUnconfirmed areas are excluded."
+                + ("\nSaved object selections add foreground only; they do not approve surrounding background." if objects else ''))
             self.dataset_state_label.setText(
                 "Outdated because source annotations or dataset settings changed. Prepare again." if self._dataset_outdated else
                 "Update the component library after edits before preparation." if needs_review else
                 "Ready to prepare" if eligible else
-                "Foreground only — review background in Labels before preparation." if objects else "No eligible annotations")
+                "Foreground only — confirm reviewed tiles in Edit & Confirm before preparation." if objects else "No confirmed tiles yet — use Edit & Confirm.")
 
     def _update_annotation_note(self):
         partial = self.annotation_combo.currentData() == "partial"
+        partial_tiles = partial if not self._multiple_pairs() else any(row.get('included') and row.get('coverage') == 'partial' for row in self.dataset_pairs)
+        self.training_tile_actions.setVisible(partial_tiles and not self._is_multilabel())
         self.reviewed_combo.setVisible(partial)
         self.create_reviewed_button.setVisible(False)
         self.selection_form.labelForField(self.reviewed_combo).setVisible(partial)
@@ -1445,7 +1597,7 @@ class QuickTrainWidget(QWidget):
         associate(layer, image, self.truth_combo.currentData() if self._is_multilabel() else None)
         self.refresh_layers()
         self.reviewed_combo.setCurrentIndex(self.reviewed_combo.findData(layer))
-        self._status("Empty reviewed-region mask created. Correct and approve cells in Labels → Local Editing → Review.")
+        self._status("Empty coverage created. Correct masks and confirm tiles in Labels → Edit & Confirm.")
 
     def _unlock_sources(self):
         if self._locked_layer is not None:
@@ -1514,6 +1666,7 @@ class QuickTrainWidget(QWidget):
         return crops
 
     def _start_preparing(self):
+        self.refresh_layers()
         from .workspace.service import _commit_pending_local_edits
         _commit_pending_local_edits(self.viewer)
         if self._is_multilabel():
@@ -1534,7 +1687,7 @@ class QuickTrainWidget(QWidget):
         if partial and not coverage:
             raise ValueError("Partial annotations require coverage training with a reviewed-region mask.")
         if partial and self.reviewed_combo.currentData() is None:
-            raise ValueError("Selected objects provide foreground only. Review targets and background in Labels → Local Editing → Review before preparation.")
+            raise ValueError("No checked tiles are confirmed for training. Open Edit & Confirm, choose the review-tile size, and confirm fully checked objects and background.")
         reviewed_layer = self._layer(self.reviewed_combo) if partial else None
         from ._reviewed_regions import KEY
         if reviewed_layer is not None:
@@ -1549,6 +1702,9 @@ class QuickTrainWidget(QWidget):
         if partial:
             from ._component_library import library_for, TrainingSupervision
             library = library_for(truth)
+            # Whole-tile coverage does not depend on an unused object library.
+            if library is not None and library.counts()[1] == 0:
+                library = None
             if library is not None and library.state()["pending"]:
                 raise ValueError("Update the component library in Manage Training Selection after editing annotations.")
             invalid = reviewed_layer.metadata.get(KEY, {}).get("invalid_regions", []) if reviewed_layer else []
@@ -1960,6 +2116,8 @@ class QuickTrainWidget(QWidget):
 
     def _training_done(self, model, register=True):
         self.model = model
+        from ._reviewed_regions import record_training_usage
+        record_training_usage(self.viewer, model)
         if register:
             from ._model_project import remember_model
             remember_model(self.viewer, model, task_id=self.models_panel.ensure_task()["id"], name=self.models_panel.name.text().strip() or None)
@@ -2215,6 +2373,84 @@ class QuickTrainWidget(QWidget):
         library = components.component_library_widget
         self.reviewed_area_widget = review
         self.component_library_widget = library
+        _, height, width, _ = review.grid_config
+        for spin, original in ((self.review_tile_height, height), (self.review_tile_width, width)):
+            spin.setRange(original.minimum(), original.maximum())
+            spin.setValue(original.value())
+            spin.valueChanged.connect(original.setValue)
+            original.valueChanged.connect(spin.setValue)
+        self.confirm_tiles_on_canvas.setEnabled(True)
+        def toggle_canvas_confirmation(enabled):
+            if enabled and self._multiple_pairs():
+                self.review_pair_toggle.setChecked(True)
+            review.advanced_check.setChecked(enabled)
+            if enabled and not review.mouse_review_check.isChecked():
+                self._status(review.status.text())
+
+        self.confirm_tiles_on_canvas.toggled.connect(toggle_canvas_confirmation)
+        review.advanced_check.toggled.connect(self.confirm_tiles_on_canvas.setChecked)
+        review.coverage_changed.connect(self.refresh_layers)
+        review.feedback.connect(self._status)
+        self.show_confirmed_tiles_button.setEnabled(True)
+        self.show_confirmed_tiles_button.clicked.connect(lambda: self._safe(review.show_coverage))
+        self.select_training_tiles_button.setEnabled(True)
+        self.confirm_training_tiles_button.setEnabled(True)
+        self.edit_confirm_button.setEnabled(True)
+        review.prepare_dataset_button.setEnabled(True)
+
+        def show_labels():
+            ancestor = components.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QTabWidget) and ancestor.indexOf(components) >= 0:
+                    ancestor.setCurrentWidget(components)
+                    break
+                ancestor = ancestor.parentWidget()
+
+        def select_training_tiles():
+            show_labels()
+            components._workflow_tabs.setCurrentIndex(0)
+            components._loaded_tile_section.setChecked(True)
+            components._tile_select_check.setChecked(True)
+            scroll = components._workflow_tabs.widget(0)
+            scroll.ensureWidgetVisible(components._tile_select_check)
+
+        def edit_confirm_tiles():
+            show_labels()
+            components._workflow_tabs.setCurrentIndex(0)
+            components._workflow_tabs.widget(0).ensureWidgetVisible(review)
+
+        def show_dataset():
+            ancestor = self.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QTabWidget) and ancestor.indexOf(self) >= 0:
+                    ancestor.setCurrentWidget(self)
+                    break
+                ancestor = ancestor.parentWidget()
+            self.workflow_tabs.setCurrentIndex(0)
+            self.refresh_layers()
+
+        self.edit_confirm_button.clicked.connect(edit_confirm_tiles)
+        review.prepare_dataset_button.clicked.connect(show_dataset)
+
+        def cleanup_masks():
+            self.confirm_tiles_on_canvas.setChecked(False)
+            show_labels()
+            components._workflow_tabs.setCurrentIndex(1)
+            components._analysis_scope_combo.setCurrentIndex(components._analysis_scope_combo.findData('area'))
+            components._analyze_button.click()
+            components._workflow_tabs.widget(1).ensureWidgetVisible(components._small_component_size_spin)
+
+        self.cleanup_masks_button.setEnabled(True)
+        self.cleanup_masks_button.clicked.connect(cleanup_masks)
+
+        def confirm_training_tiles():
+            components._confirm_training_tiles()
+            self.refresh_layers()
+            self._status(components._status_label.text())
+            self._sources_changed()
+
+        self.select_training_tiles_button.clicked.connect(select_training_tiles)
+        self.confirm_training_tiles_button.clicked.connect(confirm_training_tiles)
         self.selection_hint.hide()
         self.training_selection_layout.addWidget(library)
         library.show()

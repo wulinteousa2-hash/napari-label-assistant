@@ -514,6 +514,15 @@ class TrainingSupervision:
         ys,xs = region
         valid = (np.asarray(self.reviewed[region])!=0) if self.reviewed is not None else np.zeros(
             (ys.stop-ys.start,xs.stop-xs.start),bool)
+        if self.reviewed_areas is not None:
+            # Metadata is the explicit approval boundary. Stale or imported
+            # coverage pixels must never approve the rest of a storage chunk.
+            approved = np.zeros(valid.shape, dtype=bool)
+            for a,b,c,d in self.reviewed_areas:
+                y0,x0,y1,x1 = max(a,ys.start),max(b,xs.start),min(c,ys.stop),min(d,xs.stop)
+                if y0<y1 and x0<x1:
+                    approved[y0-ys.start:y1-ys.start,x0-xs.start:x1-xs.start] = True
+            valid &= approved
         for a,b,c,d in self.invalid_regions:
             y0,x0,y1,x1 = max(a,ys.start),max(b,xs.start),min(c,ys.stop),min(d,xs.stop)
             if y0<y1 and x0<x1:

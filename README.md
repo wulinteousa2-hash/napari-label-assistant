@@ -13,7 +13,31 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 6.3.0: Automatic editing and fast loading for existing projects
+## Version 6.4.0: Clear tile confirmation and whole-mask analysis
+
+- **Edit & Confirm:** retain camera-follow painting, bounded edit crops, undo/redo,
+  and save/load. Confirm fully reviewed tiles, including objects and checked
+  background, from the same panel. Unconfirmed areas remain excluded from training.
+- **Mask Analysis & Cleanup:** **Find components** defaults to **Entire mask —
+  full resolution**, independent of zoom. Stream OME-Zarr `s0` in bounded chunks,
+  join components across chunk boundaries, and inspect the population in the
+  sortable table. **Current edit area** remains available for local searches.
+- **Global cleanup with recovery:** locating, picking, copying, noise filtering,
+  and undo use full-image coordinates without loading the complete mask into RAM.
+- **Simpler partial-training preparation:** Dataset displays confirmed-tile counts,
+  editor navigation, and training/validation overlays. Missing single-image review
+  associations recover automatically; older foreground-only selections stay under
+  advanced controls. Edits require rechecking affected approvals.
+- **Reliable coverage and shutdown:** preparation respects exact saved approval
+  rectangles, viewing-crop navigation preserves unchanged prepared datasets, and
+  closing the app no longer triggers review callbacks against a deleted canvas.
+
+Full read-only validation of one **49,976 × 59,716** curated mask found **16
+connected components** in approximately **30 seconds** in the validation
+environment. This is a dataset-specific measurement, not a general performance
+guarantee. See [whole-mask validation](validation_reports/17_entire_mask_analysis.md).
+
+### Existing automatic editing and loading
 
 - **Automatic camera-follow editing:** keep complete Zarr masks on disk and
   zoom in to paint bounded full-resolution areas. **Edit at View Center** stays
@@ -25,9 +49,9 @@ used for training, measurement, quantification, or export.
   expose only GPU-safe pyramid levels, preserving source alignment, colors, and
   full-resolution edit crops. Resolution locks cannot expose the full mask.
 - **Simpler annotation and training controls:** main tabs are **Workspace,
-  Labels, Training**. Review stays in Local Editing, with collapsible View &
+  Labels, Training**. Review stays in Edit & Confirm, with collapsible View &
   Compare and Label Tools. Dataset summarizes supervision and preparation state;
-  component selections live under **Manage Training Selection**.
+  component selections live under **Advanced: saved object selections and coverage**.
 - **Full-source label tools:** relabel, merge, compose, vote, and consensus
   operations stream disk-backed masks in bounded tiles. Results keep full image
   dimensions and become durable with workspace Save.
@@ -80,7 +104,7 @@ the workspace. Existing one-mask workflows remain available.
 
 ## Multiple-image datasets, multiclass training, and tiled inference
 
-- **Train across image–label pairs:** in **1. Dataset**, choose **Multiple pairs**
+- **Train across image–label pairs:** in **1. Dataset → Advanced source options**, choose **Multiple images**
   and open **Manage pairs…**. Select pairs, configure annotation coverage per
   image, and keep related images in the same specimen/split group. The table
   opens separately, and review controls remain collapsed until needed.
@@ -200,7 +224,7 @@ data (portable)** when the entire workspace needs to move between computers.
 
 ### Annotation and review workflow
 
-- Finish a cell with **Mark reviewed & next** directly in Local Editing; move
+- Finish a cell with **Confirm tile & next** directly in Edit & Confirm; move
   to the next unreviewed cell without switching to Training.
 - See the shared image/annotation pair in editing and training, with associations
   remembered in workspace metadata and clear training/prediction prerequisites.
@@ -229,7 +253,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
 ## Workflow at a glance
 
-1. **Local Editing:** create, extend, erase, or reshape labels at full
+1. **Edit & Confirm:** create, extend, erase, or reshape labels at full
    resolution through a memory-controlled editable area when needed.
 2. **Inspect:** analyze each nonzero label value as one or more connected
    components and sort the results by size, topology, position, or grid
@@ -243,9 +267,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
 ## Everyday workflow shortcuts
 
-- **Labels → Local Editing** shows the image and annotation pair shared with
+- **Labels → Edit & Confirm** shows the image and annotation pair shared with
   Training. After checking every object and the background in a selected grid
-  cell, use **Mark reviewed & next** to include it in training and move to the
+  cell, use **Confirm tile & next** to include it in training and move to the
   next unreviewed cell. Navigation wraps at the end of the image.
 - Training shows the missing prerequisites for training and prediction. Image
   and annotation associations are remembered in workspace metadata.
@@ -305,12 +329,12 @@ available, while Curated and review masks appear as editable 1024 × 1024 crops.
 The complete masks stay in their original on-disk stores; no manual crop files
 or final stitching step is needed.
 
-Under **Labels → Local Editing → Mask editing**, zoom in and paint. New
+Under **Labels → Edit & Confirm → Mask editing**, zoom in and paint. New
 workspaces use bounded editing with camera follow by default; no editing-mode
 choice is needed. **Edit at View Center** remains visible for manual control.
 The collapsed **Advanced** section contains the editing-mode selector, camera
 follow toggle, and grid controls: 512–4096-pixel tile sizes, zero-based row/column
-addresses, **Go**, **Previous**, **Save & Next**, and **Mark done**. Older projects
+addresses, **Go**, **Previous**, **Save & Next**, and **Save navigation progress**. Older projects
 saved with full-mask loading now open through bounded crops automatically.
 Opening a project does not rewrite its JSON or masks; the next Workspace Save
 records the bounded mode. An explicit editing-mode choice in Advanced takes
@@ -349,13 +373,19 @@ locking protocol.
 the visible crops. New aligned masks matching the active tile are backed by
 sparse full-size stores and become durable with workspace Save. Full-image
 training reads the backing masks rather than mistaking the displayed crop for
-the dataset. Component inspection in grid mode describes only that tile;
-boundary objects may continue in neighboring tiles. The training component
+the dataset. Component analysis defaults to the entire full-resolution mask;
+the optional current-area mode describes only that crop, where boundary objects
+may continue into neighboring areas. The training component
 library still scans the full backing mask in bounded chunks, and selecting a
-library object loads its tile. Creating or approving reviewed-cell coverage
-currently requires **Advanced → Editing mode → Local-area editing** or
-**Full-layer editing** for that session; existing coverage remains preserved.
-**Mark done** records navigation progress and does not approve pixels for training.
+library object loads its tile. After checking a review tile, confirm it under **Edit & Confirm → Confirm tiles
+for dataset**. Confirmation includes annotated objects and checked background;
+unconfirmed regions remain excluded. Approval uses sparse full-size coverage and
+bounded writes. Save the workspace to preserve it.
+**Save navigation progress** records navigation only. Review-tile height and width
+do not change the separate **Editable tile size**, which supports custom sides up
+to 4096 pixels and camera following. Green outlines show approval; blue outlines
+show historical training use. Editing invalidates approval without erasing that
+history.
 
 This path applies to 2D Zarr Labels stores. It reduces mask display/working memory;
 source chunk sizes, storage speed, image rendering and other analyses still
@@ -375,7 +405,7 @@ unconditional hardware-independent limit.
 ## Interface
 
 The dock widget has three main tabs: **Workspace**, **Labels**, and **Training**.
-Labels contains **Local Editing** and **Review & QC**.
+Labels contains **Edit & Confirm** and **Mask Analysis & Cleanup**.
 
 ### Workspace
 
@@ -430,18 +460,18 @@ format.
 
 Choose a Labels layer for editing and QC:
 
-- **Local Editing** contains the memory-controlled Paint and Erase workflow.
+- **Edit & Confirm** contains the memory-controlled Paint and Erase workflow.
   It edits a bounded local view and applies changes to the selected source
   Labels layer.
-- **Review & QC** inspects the full source Labels layer through grid
+- **Mask Analysis & Cleanup** inspects the current Labels area through grid
   registration, component actions, canvas selection, and an expandable
-  results table for large result sets.
+  results table for large result sets. Training confirmation stays in Edit & Confirm.
 
 Layer selectors update automatically when layers are opened, added, removed,
 or renamed. **Refresh layers** remains beside the shared Labels-layer selector
 as an always-visible fallback; it is no longer buried among component actions.
 
-Review & QC's **Copy destination** lists other Labels layers with the same 2D
+Mask Analysis & Cleanup's **Copy destination** lists other Labels layers with the same 2D
 shape and matching spatial transform as the selected source, preferring **Curated**.
 Review/coverage masks and preserved originals are available only through manual
 selection, so they are not accidentally chosen as an annotation destination.
@@ -495,13 +525,14 @@ manual control. **Advanced** retains size-based Automatic, Local-area, and
 Full-layer editing for older workflows, along with manual grid navigation.
 
 **Connected-component analysis** provides measurement and region-management
-tools. Click **Find components**, then:
+tools. Canvas picking finds components automatically and pauses painting;
+**Find components** also populates the table manually. You can:
 
 - click a column heading to sort the table;
 - double-click a result row to center that component in the viewer;
 - enable **Select components from canvas** to select a table row by clicking
   the labeled region;
-- enable **Add each click to selection** to build a multi-component selection;
+- enable **Keep earlier component selections** to enable picking and build a multi-component selection;
 - use **Delete selected**, **Copy selected**, or **Remove small components** as needed.
 
 The results table reports component ID, source label, pixel count, Euler
@@ -510,18 +541,25 @@ column, and cell containing each component centroid.
 
 ### Training
 
-Training has five pages: **1. Dataset** for sources, reviewed cells, selected objects, and patch previews; **2. Models** for biological tasks, architecture selection, checkpoints, training history, and controlled comparisons; **3. Train** for training and validation; **4. Inference** for predictions; and **5. Advanced** for patch size, model input size, optimization, and augmentation. Progress and Cancel remain available across pages. Models supports the existing custom U-Net, a standard U-Net, and optional SMP U-Net, U-Net++, and DeepLabV3+ encoders. Prepare dataset enables training without adding canvas layers. Show patch preview is optional and displays a separate contact sheet beside the image; Return to image restores the previous view. Workspace Save includes changed model weights; standalone export remains available. See [model management and benchmarking](docs/model-management.md) for the workflow and optional dependency installation.
+Training has five pages: **1. Dataset** for confirmed tiles, preparation, and optional patch previews; **2. Models** for biological tasks, architecture selection, checkpoints, training history, and controlled comparisons; **3. Train** for training and validation; **4. Inference** for predictions; and **5. Advanced** for patch size, model input size, optimization, and augmentation. Progress and Cancel remain available across pages. Models supports the existing custom U-Net, a standard U-Net, and optional SMP U-Net, U-Net++, and DeepLabV3+ encoders. Prepare dataset enables training without adding canvas layers. Show patch preview is optional and displays a separate contact sheet beside the image; Return to image restores the previous view. Workspace Save includes changed model weights; standalone export remains available. See [model management and benchmarking](docs/model-management.md) for the workflow and optional dependency installation.
 
-For partial Curated annotations, combine **Local Editing** reviewed cells with
-the **Training → Dataset → Manage Training Selection** library. Build the library once, then
-check **Train** for individual objects. IDs, bounds, pixel counts, and selections
-persist with the workspace; Save As and portable projects keep independent
-library copies. Object selection confirms foreground only; review background
-in **Labels → Local Editing → Review**. Its **Mark reviewed & next** action
-confirms all targets and remaining background in the cell; **Remove reviewed
-status** revokes approval. Review progress uses stored spatial coverage rather
-than scanning the full mask. Editable Area changes update affected components and invalidate
-edited review cells. See [the training guide](docs/TRAINING.md).
+For partial annotations, open **Labels → Edit & Confirm**. Set the review-tile
+height and width, inspect all objects and background, then choose **Confirm tile
+for dataset** or **Confirm tile & next**. Enable **Click tiles to confirm for
+dataset** to approve successive fully checked tiles directly on the canvas.
+Turn selection off to paint again. **Go to dataset preparation** opens Training.
+
+**Training → Dataset** shows confirmed-tile counts and preparation status.
+**Edit & confirm tiles…** returns to the editor; **Show confirmed tiles on image**
+displays approval outlines. After preparation, **Show training / validation
+patches on image** locates the current dataset partitions. Model patch sizes
+remain in **5. Advanced**, independent of review-tile size and editable crop size.
+
+Saved foreground-only object selections remain available under **Advanced: saved
+object selections and coverage**. They are preserved when reopening or saving a
+project. Selecting a component in **Mask Analysis & Cleanup** is for inspection,
+copying, or deletion; it does not approve training data. Cleanup that changes
+confirmed pixels requires rechecking the affected tiles.
 
 Dataset now presents one training-data overview: annotation-source counts,
 supervision information, and No eligible annotations / Ready to prepare /
@@ -547,7 +585,7 @@ training, prediction, or model loading is requested; other tools work without it
 
 1. Open **Training → 1. Dataset**, or the plugin's **Model Training** panel.
    Choose **Current pair** for one single-channel 2D image and its aligned
-   ground-truth Labels layer, or **Multiple pairs → Manage pairs…** for several.
+   ground-truth Labels layer, or **Advanced source options → Multiple images → Manage pairs…** for several.
    Use complete coverage only when the entire image is annotated; partial
    annotations require associated reviewed regions and/or selected objects.
 2. In **2. Models**, choose a biological task and architecture. Leave
@@ -599,7 +637,7 @@ enter comma-separated **Foreground classes**, for example `axon, myelin`.
 The semantic ground-truth Labels layer must use `0 = background`, `1 = axon`,
 and `2 = myelin`. These IDs represent tissue types, not individual objects.
 All axons share ID 1, and all myelin pixels share ID 2. If annotations are in
-separate layers, **Labels → Local Editing → Label Tools → Compose Layers As Distinct Classes** can prepare a
+separate layers, **Labels → Edit & Confirm → Label Tools → Compose Layers As Distinct Classes** can prepare a
 semantic layer; check class order and overlaps before training. Existing object
 IDs are never automatically reinterpreted or converted.
 
@@ -623,7 +661,7 @@ current crop or training step, restores editing, and keeps the existing model.
 Huge NumPy/memmap, Zarr, and other sliceable sources are accessed by small
 regions; the full arrays are never converted to in-memory training copies.
 
-To train across several images, choose **Source mode → Multiple pairs** in
+To train across several images, choose **Advanced source options → Source mode → Multiple images** in
 **1. Dataset**, then open **Manage pairs…**. The pair table stays in a separate
 dialog to keep the Dataset panel compact. Suggested associations are not included
 automatically. Check each image–label pair, choose complete annotations or its
@@ -685,7 +723,7 @@ retains Pulse, Dim, Toggle, and Restore. Both new Labels sections start collapse
 
 ### Labels: Label Tools
 
-Expand **Label Tools** under **Local Editing** and select an operation. Only its
+Expand **Label Tools** under **Edit & Confirm** and select an operation. Only its
 relevant settings are displayed. Select compatible, aligned 2D Labels layers:
 
 - reassign one label value;
@@ -698,7 +736,7 @@ Results create a new Labels layer by default. **Overwrite first selected layer**
 is explicit and remains unavailable for vote-count maps. Large and disk-backed
 sources run in bounded tiles in the background, using full source masks rather
 than their display crops. Temporary results are included when saving a workspace.
-The existing **Review & QC** subtab and **Training** workflow are unchanged.
+These mask-composition tools do not approve tiles for training.
 
 ## Editing at 100,000 × 100,000-pixel scale
 
@@ -710,7 +748,7 @@ and training always use `s0`. Very small masks stop before repeating 1 × 1 leve
 
 Large masks keep their editable grid tile and add a read-only **overview** layer
 for the whole mask. Its visibility, opacity, and colors follow the source Labels
-layer. Use **Show whole mask** in Local Editing to zoom out; double-click while
+layer. Use **Show whole mask** in Edit & Confirm to zoom out; double-click while
 the source or overview is selected to move the editable tile to that location.
 Overview layers are excluded from annotations, training sources, and saved layer
 records. Paint and erase update affected pyramid regions when edits are applied.
@@ -763,15 +801,16 @@ less memory; a 4096 × 4096 area requires fewer reloads while navigating.
 
 ## Component analysis at full-image scale
 
-In default bounded editing, **Review & QC** measures the active crop; objects
-can continue beyond its edges. The panel identifies this local scope. The
-training component library separately scans the full backing mask in bounded
-chunks.
+**Mask Analysis & Cleanup → Entire mask — full resolution** searches the complete
+`s0` mask independently of camera zoom and the current editing crop. This is the
+default. Search streams bounded chunks, joins components crossing their edges,
+and displays paged results with progress and Cancel. There is no need to enable
+full-layer editing or load the complete mask into memory.
 
-When an explicit full-source mode is selected in Advanced, large component
-analysis processes the source in tiles and pages its results. Analysis can be
-cancelled, and component IDs and optional grid coordinates refer to that full
-source's coordinate system.
+Choose **Current edit area** for local inspection; its boundaries are shown in
+the panel and objects may continue beyond them. Whole-mask results use full-image
+coordinates for locating, picking, copying, cleanup, and undo. Cleanup invalidates
+affected dataset approvals; selecting results alone does not approve training data.
 
 ## Requirements and scope
 
@@ -787,7 +826,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (6.3.0):
+Install the current GitHub version (6.4.0):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"

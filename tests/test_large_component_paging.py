@@ -32,6 +32,7 @@ def test_large_component_table_pages_thousands_of_objects(
     }
     assert shown_ids == set(range(1001, 1153))
 
+    widget._workflow_tabs.setCurrentIndex(1)
     widget._click_select_check.setChecked(True)
     widget._append_click_select_check.setChecked(True)
     callback = next(

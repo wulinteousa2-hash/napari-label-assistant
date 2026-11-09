@@ -137,9 +137,9 @@ def test_components_tab_exposes_full_component_controls(make_napari_viewer):
 
     assert components._workflow_tabs.count() == 2
     assert [
-        components._workflow_tabs.tabText(index)
+        components._workflow_tabs.tabText(index).replace('&&', '&')
         for index in range(components._workflow_tabs.count())
-    ] == ["Local Editing", "Review & QC"]
+    ] == ["Edit & Confirm", "Mask Analysis & Cleanup"]
     assert components._target_combo.findText("mask") >= 0
     assert components._component_table.columnCount() == 10
     assert components._analyze_button.text() == "Find components"
@@ -297,7 +297,7 @@ def test_labels_owns_review_and_dataset_shares_training_selection(make_napari_vi
     assert review.selected_cell is None
     panel._tool_tabs.setCurrentIndex(1)
     assert not library.isVisible()
-    assert not review.mark_button.isVisible()
+    assert review.mark_button.isVisible()
     assert review.mouse_review_check.parentWidget() is review
     training.workflow_tabs.setCurrentIndex(next(
         i for i in range(training.workflow_tabs.count())

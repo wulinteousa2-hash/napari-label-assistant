@@ -13,6 +13,7 @@ def test_canvas_component_pick_uses_layer_data_coordinates(make_napari_viewer):
         mask, name="transformed mask", scale=(2.0, 3.0), translate=(4.0, 5.0)
     )
     widget = component_operations_widget(viewer)
+    widget._workflow_tabs.setCurrentIndex(1)
     widget._target_combo.setCurrentText("transformed mask")
     widget._analyze_button.click()
 
@@ -39,6 +40,7 @@ def test_canvas_component_pick_can_append_selections(make_napari_viewer):
     mask[7:9, 7:9] = 1
     layer = viewer.add_labels(mask, name="mask")
     widget = component_operations_widget(viewer)
+    widget._workflow_tabs.setCurrentIndex(1)
     widget._target_combo.setCurrentText("mask")
     widget._analyze_button.click()
     widget._click_select_check.setChecked(True)

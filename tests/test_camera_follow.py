@@ -12,6 +12,27 @@ from napari_label_assistant_tools._local_editing import LocalEditingControls
 from napari_label_assistant_tools._mask_tiles import MaskTileManager, set_mode
 
 
+def test_review_keeps_crop_on_layout_change_and_follows_camera_with_editor_hidden(editor, qtbot):
+    viewer, manager, controls, _ = editor
+    controls.auto_follow.setChecked(True)
+    ready(controls, qtbot)
+    entry = manager.entries[0]
+    bounds, pixels = entry.bounds, entry.layer.data.copy()
+    controls.active_view = lambda: True  # Labels panel remains visible in QC.
+    controls.hide()
+    controls.follow.retain_review_area()
+    controls.follow.schedule()
+    controls.follow.evaluate()
+    qtbot.wait(250)
+    assert entry.bounds == bounds
+    np.testing.assert_array_equal(entry.layer.data, pixels)
+    viewer.camera.center = (0, 20000, 20000)
+    qtbot.waitUntil(lambda: entry.bounds != bounds, timeout=10000)
+    assert entry.bounds[0].start <= 20000 < entry.bounds[0].stop
+    assert entry.layer.visible and entry.layer.editable
+    assert entry.layer.data.nbytes <= 4096**2 * 4
+
+
 def test_window_planner():
     shape = (100000, 100000)
     window = plan_window((20000, 30000, 20500, 30600), shape, 1)
@@ -24,6 +45,15 @@ def test_window_planner():
     assert plan_window((0, 0, 200, 200), shape, .4) is None
     assert plan_window((100, 100, 200, 200), shape, .4,
                        current=FollowWindow((0, 0), 1024)) is not None
+
+
+def test_window_planner_honors_selected_size():
+    bounds, shape = (10000, 10000, 10500, 10600), (100000, 100000)
+    large = plan_window(bounds, shape, 1, requested_size=4096)
+    assert large.size == 4096
+    small = plan_window(bounds, shape, 1, current=large, requested_size=1024)
+    assert small.size == 1024
+    assert plan_window(bounds, shape, 1, requested_size=4090).size == 4090
 
 
 def test_native_canvas_mapping_round_trip(make_napari_viewer):
@@ -75,6 +105,19 @@ def editor(tmp_path, make_napari_viewer, qtbot, monkeypatch, request):
 
 def ready(controls, qtbot):
     qtbot.waitUntil(lambda: controls.follow.state == 'following', timeout=10000)
+
+
+def test_follow_uses_custom_size_and_keeps_it_separate_from_navigation_step(editor, qtbot):
+    _, manager, controls, _ = editor
+    controls._size_control.addItem('4090 px', 4090)
+    controls._size_control.setCurrentIndex(controls._size_control.findData(4090))
+    controls.auto_follow.setChecked(True)
+    qtbot.waitUntil(lambda: controls.follow.window is not None and controls.follow.window.size == 4090,
+                    timeout=10000)
+    bounds = manager.entries[0].bounds
+    assert tuple(s.stop - s.start for s in bounds) == (4090, 4090)
+    assert manager.state()['edit_tile_size'] == 4090
+    assert manager.size == 512  # Camera-follow navigation stride is independent.
 
 
 def test_follow_paint_pan_overview_manual_and_save(editor, qtbot):

@@ -23,7 +23,7 @@ class FollowWindow:
     size: int
 
 
-def plan_window(bounds, shape, pixel_size, *, current=None, bytes_per_pixel=4):
+def plan_window(bounds, shape, pixel_size, *, current=None, bytes_per_pixel=4, requested_size=None):
     """Plan source-coordinate windows without reading image or mask pixels."""
     threshold = EXIT_PIXEL_SIZE if current is not None else ENTER_PIXEL_SIZE
     if pixel_size < threshold:
@@ -39,8 +39,16 @@ def plan_window(bounds, shape, pixel_size, *, current=None, bytes_per_pixel=4):
     size = 1024
     while size < required:
         size *= 2
+    if requested_size is not None:
+        size = requested_size
     if size > MAX_WINDOW or size * size * bytes_per_pixel > MAX_READ_BYTES:
         return None
+    if requested_size is not None and span + 2 * padding > size:
+        # A user-sized crop can cover only the center of a larger viewport.
+        # Its visible boundary tells the user which pixels are editable.
+        origin = tuple(max(0, floor(((lo + hi - size) / 2) / STEP) * STEP)
+                       for lo, hi in ((y0, y1), (x0, x1)))
+        return FollowWindow(origin, size)
     if current is not None:
         a, b = current.origin
         margin = min(128, current.size * 0.1)
@@ -51,6 +59,7 @@ def plan_window(bounds, shape, pixel_size, *, current=None, bytes_per_pixel=4):
             and y1 <= a + current.size - margin
             and x1 <= b + current.size - margin
             and current.size <= 2 * size
+            and (requested_size is None or current.size == requested_size)
         ):
             return current
     starts = []
@@ -92,6 +101,7 @@ class CameraFollowController(QObject):
         self.deadline = 0
         self._manual_depth = 0
         self._manual_view = None
+        self._review_view = None
         self._future = None
         self._request = None
         self._executor = None
@@ -146,6 +156,11 @@ class CameraFollowController(QObject):
     def schedule(self, event=None):
         if self.closed or not self.enabled:
             return
+        if self._review_view is not None:
+            camera = self.host.adapter.camera
+            if self._review_view == (tuple(camera.center), float(camera.zoom)):
+                return
+            self._review_view = None
         self.generation += 1
         self.deadline = time.monotonic() + self.DEBOUNCE_MS / 1000
         if self._manual_depth or self.project.busy:
@@ -166,6 +181,17 @@ class CameraFollowController(QObject):
         self.timer.stop()
         if self.enabled:
             self._status("Following pauses during the project operation.", "waiting")
+
+    def retain_review_area(self):
+        """Keep detail across tab/layout changes; resume on camera navigation."""
+        camera = self.host.adapter.camera
+        self._review_view = (tuple(camera.center), float(camera.zoom))
+        self.generation += 1
+        self.timer.stop()
+
+    def resume_from_review(self):
+        self._review_view = None
+        self.schedule()
 
     @contextmanager
     def manual_control(self):
@@ -210,9 +236,10 @@ class CameraFollowController(QObject):
     def evaluate(self):
         if (
             self.closed
+            or self._review_view is not None
             or not self.enabled
             or self.project.busy
-            or not self.host.isVisible()
+            or not self.project.active_view()
         ):
             return
         if self._manual_depth or (
@@ -274,6 +301,7 @@ class CameraFollowController(QObject):
                 shape,
                 pixel_size,
                 current=self.window,
+                requested_size=getattr(self.project, 'follow_size', None),
                 bytes_per_pixel=sum(
                     np.dtype(entry.source.data.dtype).itemsize
                     for entry in manager.entries

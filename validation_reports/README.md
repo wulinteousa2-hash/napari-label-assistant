@@ -1,10 +1,11 @@
 # Independent software and scientific audit
 
-**Current release: 6.3.0 (2026-11-07).** See
-[6.3.0 release validation](12_release_6_3_0.md) for the current editing, display,
-legacy-project loading, packaging, and test results: **425 passed, 0 failures or
-skips** in 396.60 seconds (Qt offscreen). The preceding 5.3.0 release
-passed 353 tests; its [validation report](11_release_5_3_0.md) and the initial
+**Current release: 6.4.0 (2026-11-08).** See
+[6.4.0 release validation](18_release_6_4_0.md) for the editing/confirmation UI,
+whole-mask OME-Zarr analysis, recovery, packaging, and complete regression results:
+**464 passed, 0 failures or skips** in 540.83 seconds (Qt offscreen).
+The preceding [6.3.0 release](12_release_6_3_0.md) passed 425 tests and the
+[5.3.0 release](11_release_5_3_0.md) passed 353 tests. Their evidence and the initial
 audit findings below remain historical records.
 
 Original audit repository: [wulinteousa2-hash/napari-label-assistant](https://github.com/wulinteousa2-hash/napari-label-assistant). Exact reviewed/local/remote-main SHA during that audit: `cb95a5e97717aca24db658c488fd810647955bcd`. Audit date: **2026-11-03**. At that commit, source declared version **4.3.0** and multilabel work was documented under Unreleased.
@@ -29,7 +30,13 @@ Existing suite: **289 passed, 0 failed/skipped**. Final independent suites: **19
 
 | Deliverable | Report |
 |---|---|
-| Current release: automatic editing, bounded display, and legacy loading | [12_release_6_3_0.md](12_release_6_3_0.md) |
+| Current release: confirmed-tile workflows and whole-mask analysis | [18_release_6_4_0.md](18_release_6_4_0.md) |
+| Whole-mask population, global cleanup, copy, and undo | [17_entire_mask_analysis.md](17_entire_mask_analysis.md) |
+| OME-Zarr component-search reproduction and fixes | [16_ome_component_search.md](16_ome_component_search.md) |
+| Editing, confirmation, and cleanup interface | [15_workflow_clarity.md](15_workflow_clarity.md) |
+| Real-workspace partial-training investigation | [14_partial_training_example_review.md](14_partial_training_example_review.md) |
+| Checked-tile training confirmation | [13_qc_training_tiles.md](13_qc_training_tiles.md) |
+| Previous release: automatic editing, bounded display, and legacy loading | [12_release_6_3_0.md](12_release_6_3_0.md) |
 | Previous release validation | [11_release_5_3_0.md](11_release_5_3_0.md) |
 | A: Executive assessment, provisional scores and G: release recommendation | [00_executive_assessment.md](00_executive_assessment.md) |
 | Phase 1: Architecture/feature inventory, interactions, implementation and tests | [01_feature_inventory.md](01_feature_inventory.md) |

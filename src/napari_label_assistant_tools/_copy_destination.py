@@ -94,6 +94,9 @@ def create_matching(viewer, source, target, name):
     """Keep the chosen name usable; preserve the previous layer as recovery."""
     from .workspace.service import _common_record
     template=full_source(source)
+    source_manager=manager_for(viewer)
+    bounded_source=hasattr(source,'_label_assistant_mask_entry') or (
+        source_manager is not None and any(entry.source is template for entry in source_manager.entries))
     data=array_data(template)
     shape=tuple(data.shape)
     if len(shape)!=2:
@@ -114,7 +117,7 @@ def create_matching(viewer, source, target, name):
         target.name=backup_name
     created=None
     try:
-        if int(np.prod(shape))*dtype.itemsize<=MEMORY_LIMIT and not hasattr(source,'_label_assistant_mask_entry'):
+        if int(np.prod(shape))*dtype.itemsize<=MEMORY_LIMIT and not bounded_source:
             created=viewer.add_labels(np.zeros(shape,dtype=dtype),name=name,**crop_transform_kwargs(template))
         else:
             import zarr

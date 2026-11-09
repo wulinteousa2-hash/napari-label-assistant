@@ -153,7 +153,7 @@ class LargeComponentController:
         if not delete and not matching_mask_transforms(source_layer, target_layer):
             raise ValueError("Copy destination must have matching spatial transforms. Align the layers first; no pixels were copied.")
         source_data = source_layer.data
-        if not delete and isinstance(source_data, (list, tuple)):
+        if not delete and (getattr(source_layer, 'multiscale', False) or isinstance(source_data, (list, tuple))):
             source_data = source_data[0]
         iterator = iter(index.selected_tiles(component_ids))
         changed = 0
@@ -239,7 +239,7 @@ class LargeComponentController:
 
         QTimer.singleShot(0, step)
 
-    def copy_regions(self, regions, source_layer, target_layer, write, on_done):
+    def copy_regions(self, regions, source_layer, target_layer, write, on_done, *, operation='Copy'):
         """Keep ROI copying responsive while preserving source/target locks."""
         if self.busy:
             raise ValueError('Wait for the current mask operation to finish.')
@@ -253,10 +253,10 @@ class LargeComponentController:
             layer.editable=False
         self.analyze_button.setEnabled(False)
         old_cancel_text=self.cancel_button.text()
-        self.cancel_button.setText('Cancel copy')
+        self.cancel_button.setText(f'Cancel {operation.lower()}')
         self.cancel_button.setVisible(True)
         self.progress.setVisible(True);self.progress.setRange(0,0)
-        self.progress.setFormat('Copying selected components…')
+        self.progress.setFormat(f'{operation}: selected components…')
         iterator=iter(regions)
         changed=0
         def finish(message=None):

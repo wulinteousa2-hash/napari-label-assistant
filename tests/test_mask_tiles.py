@@ -84,6 +84,26 @@ def test_navigation_paint_erase_global_alignment_and_progress(tmp_path,make_napa
     assert int(other.layers['Curated'].data[-1,-1])==2**31+17
 
 
+def test_custom_tile_size_control_and_workspace_persistence(tmp_path, make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._mask_tiles import tile_controls
+    path, _ = workspace(tmp_path)
+    viewer = make_napari_viewer()
+    load_workspace(viewer, path)
+    controls = tile_controls(viewer)
+    qtbot.addWidget(controls)
+    controls._size.setEditText('4090')
+    controls._size.lineEdit().editingFinished.emit()
+    assert controls._size.currentData() == 4090
+    controls._go.click()
+    manager = manager_for(viewer)
+    assert manager.size == manager.edit_size == 4090
+    save_workspace(viewer, path)
+    restored = make_napari_viewer()
+    load_workspace(restored, path)
+    assert manager_for(restored).edit_size == 4090
+    controls._local_editing.shutdown()
+
+
 def test_include_all_data_copies_entire_masks_and_rebinds_stores(tmp_path,make_napari_viewer):
     path,arrays=workspace(tmp_path)
     originals=[array[:] for array in arrays]

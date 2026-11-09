@@ -3,6 +3,53 @@
 All notable changes to napari-label-assistant are documented here. The project
 uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [6.4.0] - 2026-11-08
+
+### Changed
+
+- Organize Labels into **Edit & Confirm** and **Mask Analysis & Cleanup**.
+  Keep tile approval with editing and component inspection, sorting, noise
+  removal, copy, and undo in analysis. Camera-follow editing, Paint/Erase,
+  bounded rendering, edit undo/redo, and workspace save/load retain their behavior.
+- Simplify Dataset to confirmed-tile counts, editor navigation, preparation, and
+  training/validation overlays. Preserve saved foreground-only object selections
+  and loaded-edit-area confirmation under advanced controls.
+- Default **Find components** to **Entire mask — full resolution**, independent
+  of camera position and zoom. Retain **Current edit area** for local inspection.
+
+### Added
+
+- Stream complete OME-Zarr s0 masks in bounded chunks, join components across
+  chunk boundaries, and page global results with progress and cancellation.
+  Use full-image coordinates for inspection, copy, cleanup, and recoverable undo.
+- Expose exact review-tile dimensions, persistent canvas confirmation, confirmed
+  coverage outlines, and separate historical training-use footprints. Tile sizes
+  remain independent of editable crop and model patch sizes.
+- Support custom editable sides up to 4096 pixels during camera following and
+  preserve the selected size with the workspace. Offer smaller-model-patch retry
+  when approved targets lack separate spatial validation groups.
+
+### Fixed
+
+- Resolve native napari MultiScaleData to full-resolution s0 for analysis and
+  copy, avoiding coarse display-level counts and pyramid-container indexing errors.
+- Recover missing partial-coverage references only from an unambiguous image/mask
+  association. Route valid one-image projects saved in Multiple pairs through
+  spatial validation, retaining invalid-source and prediction-review checks.
+- Limit partial supervision to saved approval rectangles, excluding stale
+  coverage pixels outside them. Preserve external masks without rectangle metadata.
+- Keep canvas review enabled between confirmations; stop competing component and
+  tile pickers from interfering with each other. Component selection alone never
+  approves surrounding background for training.
+- Preserve prepared datasets across viewing-crop data and registration changes;
+  actual annotation edits still invalidate affected approvals and datasets.
+- Keep global indexes valid across crop navigation and preserve bounded copy
+  destinations, cleanup recovery, and repeated size-filter operations.
+- Avoid active-layer changes and destroyed Qt controls during review shutdown,
+  preventing CanvasBackendDesktop-already-deleted errors from late callbacks.
+
 ## [6.3.0] - 2026-11-07
 
 ### Changed

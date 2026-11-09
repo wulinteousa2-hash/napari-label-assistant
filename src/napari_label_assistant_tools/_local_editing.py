@@ -17,6 +17,7 @@ class LocalEditingControls(QWidget):
         self.busy = False
         self._manager = None
         self._size_control = size_control
+        self.active_view = self.isVisible
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.auto_follow = QCheckBox("Follow camera automatically")
@@ -34,6 +35,17 @@ class LocalEditingControls(QWidget):
         self.follow = CameraFollowController(self)
         self.auto_follow.toggled.connect(self._toggled)
         self.manual_edit.clicked.connect(self.edit_at_center)
+        size_control.currentIndexChanged.connect(self._size_changed)
+
+    def _size_changed(self, _index):
+        if self._manager is not None:
+            self._manager.edit_size = self.follow_size
+        self.follow._manual_view = None
+        self.follow.schedule()
+
+    @property
+    def follow_size(self):
+        return int(self._size_control.currentData())
 
     def _update(self):
         pass  # Status labels are updated directly by the follow controller.
@@ -55,6 +67,11 @@ class LocalEditingControls(QWidget):
         self._manager = manager
         if manager is not None:
             manager.follow = self.follow
+            index = self._size_control.findData(manager.edit_size)
+            if index < 0:
+                self._size_control.addItem(f'{manager.edit_size} px', manager.edit_size)
+                index = self._size_control.count() - 1
+            self._size_control.setCurrentIndex(index)
         enabled = bool(manager is not None and manager.follow_enabled)
         self.auto_follow.blockSignals(True)
         self.auto_follow.setChecked(enabled)

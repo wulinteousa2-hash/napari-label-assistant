@@ -1,0 +1,9 @@
+Processing ./.
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: napari-label-assistant
+  Building wheel for napari-label-assistant (pyproject.toml): started
+  Building wheel for napari-label-assistant (pyproject.toml): finished with status 'done'
+  Created wheel for napari-label-assistant: filename=napari_label_assistant-6.4.0-py3-none-any.whl size=260367 sha256=0e2f55d3cc0fd7c65ef32c8397a81a4b3055867b78fa34a7dd7e4d57315f2d64
+  Stored in directory: /home/wteox/.cache/pip/wheels/03/cc/8d/8377be5bf9a2ad2cb605d9ed677670599a2bc4916ffb120d3e
+Successfully built napari-label-assistant

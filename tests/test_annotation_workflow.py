@@ -9,6 +9,25 @@ from napari_label_assistant_tools._reviewed_regions import (
 from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
 
 
+def test_stale_coverage_pixels_outside_saved_approvals_are_not_training_data():
+    truth = np.zeros((32, 48), dtype=np.uint8)
+    coverage = np.ones_like(truth)
+    areas = [[3, 5, 13, 15], [10, 12, 20, 25]]
+    supervision = TrainingSupervision(truth, coverage, reviewed_areas=areas,
+                                     invalid_regions=[[8, 8, 12, 12]])
+    expected = np.zeros_like(truth)
+    expected[3:13, 5:15] = 1
+    expected[10:20, 12:25] = 1
+    expected[8:12, 8:12] = 0
+    np.testing.assert_array_equal(supervision[slice(0,32),slice(0,48)], expected)
+    np.testing.assert_array_equal(supervision[slice(7,18),slice(9,30)], expected[7:18,9:30])
+    empty = TrainingSupervision(truth, coverage, reviewed_areas=[])
+    assert not empty[slice(0,32),slice(0,48)].any()
+    # External masks without rectangle metadata retain their explicit coverage.
+    external = TrainingSupervision(truth, coverage)
+    assert external[slice(0,32),slice(0,48)].all()
+
+
 def test_review_progress_matches_pixel_reference_without_image_reads():
     rng = np.random.default_rng(17)
     for _ in range(100):
@@ -81,18 +100,18 @@ def test_review_progress_revoked_until_explicit_reapproval(make_napari_viewer, q
     configure_mouse(review, truth, qtbot, cell_size=16)
     click(review, truth, 4, 4)
     review.mark(1)
-    assert review.progress_label.text() == "Reviewed cells: 1 / 4"
-    assert "Status: Reviewed" in review.cell_label.text()
+    assert review.progress_label.text() == "Confirmed grid tiles: 1 / 4"
+    assert "Status: Confirmed for dataset" in review.cell_label.text()
     from napari_label_assistant_tools._component_library import annotation_changed
     truth.data[4, 4] = 0
     annotation_changed(viewer, truth, (4, 4, 5, 5))
-    assert review.progress_label.text() == "Reviewed cells: 0 / 4"
-    assert "Needs re-review" in review.cell_label.text()
+    assert review.progress_label.text() == "Confirmed grid tiles: 0 / 4"
+    assert "Needs recheck" in review.cell_label.text()
     assert not region_reviewed((0, 0, 16, 16), effective_areas(mask.metadata[KEY]))
     review.mark(1)
-    assert review.progress_label.text() == "Reviewed cells: 1 / 4"
+    assert review.progress_label.text() == "Confirmed grid tiles: 1 / 4"
     review.remove_review()
-    assert review.progress_label.text() == "Reviewed cells: 0 / 4"
+    assert review.progress_label.text() == "Confirmed grid tiles: 0 / 4"
 
 
 def test_unified_overview_and_outdated_state(make_napari_viewer, qtbot):
@@ -105,7 +124,7 @@ def test_unified_overview_and_outdated_state(make_napari_viewer, qtbot):
     training.selection_toggle.setChecked(True)
     assert not training.training_selection_panel.isHidden()
     review.mark(1)
-    assert '1 reviewed cells' in training.annotation_sources_label.text()
+    assert '1 confirmed tiles available' in training.annotation_sources_label.text()
     assert training.dataset_state_label.text() == 'Ready to prepare'
     training.prepared = object()
     training._update_training_overview()
@@ -144,7 +163,7 @@ def test_foreground_only_overview_does_not_claim_background(tmp_path, make_napar
     qtbot.addWidget(training)
     library.select(library.records()[0]['id'], True)
     notify_library(truth)
-    assert 'selected objects' in training.annotation_sources_label.text()
+    assert 'saved object selections' in training.annotation_sources_label.text()
     assert 'Background has not been verified' in training.supervision_label.text()
     assert 'Foreground only' in training.dataset_state_label.text()
 

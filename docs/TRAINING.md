@@ -46,8 +46,8 @@ mode are stored in checkpoints, with mask assignments saved in the workspace.
 Training has five pages: **Dataset**, **Models**, **Train**, **Inference**, and **Advanced**.
 Choose annotations and prepare the dataset in Dataset; patch preview is optional. Select a biological task and
 model configuration or checkpoint in Models, then open Train to start or
-continue a model. Detailed metrics/history expand on demand. Local Editing keeps
-the cell selection and mask correction tools; Review & QC keeps component sorting,
+continue a model. Detailed metrics/history expand on demand. Edit & Confirm keeps
+the cell selection and mask correction tools; Mask Analysis & Cleanup keeps component sorting,
 copying, and deletion. Switching pages preserves the selected cell and annotations.
 
 ## Optional model dependencies
@@ -58,10 +58,10 @@ napari from the same environment before training. See
 [SMP installation and troubleshooting](model-management.md#installing-and-checking-smp)
 for commands and how to distinguish missing SMP from a broken dependency import.
 
-## Two ways to include annotations
+## Confirmed tiles and saved object selections
 
-These annotation workflows apply to **Current pair** mode. For several images,
-choose **Source mode → Multiple pairs → Manage pairs…**. Select pairs,
+These annotation workflows apply to **This image** mode. For several images,
+open **Advanced source options → Source mode → Multiple images → Manage pairs…**. Select pairs,
 configure coverage and reviewed masks separately, and confirm corrected model
 predictions before using them as ground truth. Pair definitions persist by layer
 ID in the workspace. The dialog's **Review selected pair** opens the regular
@@ -73,7 +73,7 @@ images the same split group, and use comparable image scales. Each split needs
 targets and background; semantic classes need examples in both splits. The
 single-pair workflow continues to reserve spatial regions within its image.
 
-Keep **Partial — reviewed cells + selected objects** when Curated contains only some targets.
+Keep **Partial — confirmed tiles** when Curated contains only some targets.
 Zero pixels may contain missing objects, so they must not automatically become
 background. Partial mode uses **All patches (recommended)**.
 
@@ -83,37 +83,74 @@ when the active editable tile shows only part of the source. Overview layers
 never become training masks, and visually overlapping preview objects do not
 change annotation IDs or review validity.
 
-### Labels → Local Editing → Review: review a region
+### Edit and confirm tiles
 
-1. In **Training → Dataset**, choose the image and Curated Labels layer.
-2. In **Labels → Local Editing**, select a review cell on the canvas.
-3. Correct or add Curated masks in **Mask editing**. Check every target
-   and its background inside the cell.
-4. In **Labels → Local Editing → Review**, choose **Mark reviewed & next**.
-   **Review options** retains **Finish review — include this cell in training**
-   for approving without advancing. Coverage is created
-   automatically; no manual mask creation is needed.
-5. Review several independent regions with both targets and genuine background.
+1. Load the workspace and choose the image and curated mask.
+2. Open **Labels → Edit & Confirm**. Zoom, paint, erase, and save as before.
+3. Under **Confirm tiles for dataset**, set **Review-tile height/width**. These
+   dimensions define approval areas independently of the memory-limited edit crop.
+4. Select a tile, check all target objects and background, then click **Confirm
+   tile for dataset** or **Confirm tile & next**. For repeated approvals, enable
+   **Click tiles to confirm for dataset** and click fully checked tiles. Turn
+   selection off before painting again.
+5. Use **Go to dataset preparation**. In **Training → Dataset**, keep **Partial —
+   confirmed tiles** and click **Prepare dataset**. Unconfirmed areas are excluded.
 
-Grid navigation's completion marker remains separate from training approval.
-Creating or approving full reviewed-cell coverage currently requires
-**Labels → Local Editing → Mask editing → Advanced → Editing mode → Local-area
-editing** or **Full-layer editing** for that session. Older saved full-mask
-loading preferences now open through bounded crops by default; select the
-legacy mode explicitly when using this coverage editor. Existing coverage and
-training assignments remain preserved. Tile completion alone never verifies
-training background.
+Tile status distinguishes **Not confirmed**, **Confirmed for dataset**, and
+**Needs recheck after edits**. Historical training use is a separate status.
+Green outlines show current approval; blue outlines show recorded training patch
+footprints. Save the workspace to preserve approvals and history. Existing small
+approvals remain valid when the review grid changes, even if they do not cover
+entire cells in the new grid.
 
-For cells you have already checked, enable **Mark already-checked cells with
-clicks** under **Labels → Local Editing → Review → Review options**. This activates canvas review mode
-and selects **Click to mark a cell reviewed** automatically. Click cells on the
-canvas to include them; turn the option off to return to editing. Disabling the
-address grid also turns off click marking.
+Dataset shows confirmed-tile counts, **Edit & confirm tiles…**, and **Show
+confirmed tiles on image**. After preparation, **Show training / validation
+patches on image** displays dataset membership in the current view. Model patch
+and input sizes remain under **5. Advanced**. If there are too few separate
+spatial groups, confirm more distant regions or use the smaller-patch retry;
+this does not change review-grid dimensions or approvals.
 
-### Dataset → Manage Training Selection: select components
+Single-image projects saved in Multiple pairs automatically use spatial
+validation. Missing review references recover when exactly one coverage mask
+matches the image and curated mask. Saved approval rectangles bound partial
+supervision even if the coverage array contains extra nonzero pixels. External
+coverage without rectangle metadata retains its explicit validity mask.
+
+The older loaded-edit-area confirmation controls remain under **Edit & Confirm →
+Advanced: confirm loaded edit areas**. They approve the loaded crop, which may
+differ from the review grid. **Save navigation progress** is only a navigation
+marker and never grants dataset approval.
+
+### Mask Analysis & Cleanup
+
+Use this tab to **Find components**, sort the index table, inspect components on
+the canvas, preview **Remove below** thresholds, and explicitly remove noise.
+**Undo last deletion** restores the latest cleanup. **Entire mask — full resolution**
+is the default search scope, independent of zoom and the current edit crop. Choose
+**Current edit area** for a quicker local search. Objects may continue beyond a
+local area's edge. Grid addresses and copy-destination settings remain available
+in a collapsed advanced section.
+
+OME-Zarr `s0` is the annotation data; `s1`–`s6` are display resolutions of that
+same mask. Component search uses full-resolution data, never the currently
+displayed coarse resolution. Entire-mask search streams `s0` in bounded chunks,
+joins components across chunk boundaries, and pages results with progress and
+Cancel. It works while zoomed out with only an overview displayed. Component
+coordinates, canvas picking, cleanup, copy, and undo use full-image coordinates.
+It does not switch to full-layer rendering or allocate a full-image ID map.
+
+In **Current edit area** mode, only the loaded crop is searched and its bounds
+are displayed. An empty crop does not imply an empty mask. Pan and use **Load
+edit area at view center and find components**, or choose **Entire mask** instead.
+
+Selecting a table row or a canvas component does not approve training data.
+Return to **Edit & Confirm** to approve complete tiles. Cleanup affecting an
+already confirmed area invalidates its approval until rechecked.
+
+### Dataset → Advanced: saved object selections and coverage: select components
 
 1. In **Training → Dataset**, choose Curated as ground truth and open
-   **Manage Training Selection**. The panel also selects reviewed coverage;
+   **Advanced: saved object selections and coverage**. The panel also selects reviewed coverage;
    cell approval itself stays in Labels.
 2. Click **Build / update library**. The first scan is a background operation
    with progress and Cancel; subsequent local edits update affected components.
@@ -122,7 +159,7 @@ address grid also turns off click marking.
    calculation is performed for the library.
 4. Save the workspace once to include the library asset. Later checkbox changes
    are written immediately to that library.
-5. Keep background confirmed under **Labels → Local Editing → Review**. A checked component
+5. Confirm complete checked tiles under **Labels → Edit & Confirm → Confirm tiles for dataset**. A checked component
    supplies foreground, not confirmation of its surroundings.
 
 Both methods feed the same training dataset. Shared patches and pixels are
@@ -274,35 +311,36 @@ Partial annotations require coverage training with a reviewed-region mask.
 ### Review Curated cells for training
 
 1. Select the SAM3 **Curated** source layer and the corresponding image under
-   **Reviewed areas for training**. Set the review-cell height and width; these
-   share the address-grid settings in Review/QC.
-2. Enable **Select a review cell on the canvas**, then click a cell. Its yellow
+   **Edit & Confirm → Confirm tiles for dataset**. Set the review-tile height and
+   width independently of the editable crop size.
+2. Enable **Select review tiles on canvas**, then click a cell. Its yellow
    outline and address identify the whole region that needs review.
 3. Turn cell selection off while editing Curated. Correct false positives and
    add every missing target throughout the yellow cell boundary. The editable
    area may cover only part of that cell; inspect and edit the remaining parts
    before declaring the cell complete. Check objects crossing cell boundaries.
-4. Click **Finish review — include this cell in training**. Pending edits are
-   applied first. The first use asks where to store the disk-backed review mask;
-   no separate Create mask action is needed. Green outlines show reviewed areas.
-5. In Training choose **Partial — reviewed cells + selected objects**. This automatically
+4. Click **Confirm tile for dataset**. Pending edits are
+   applied first. Bounded editing creates a sparse review mask automatically;
+   legacy full-layer editing asks for a storage location. Green outlines show reviewed areas.
+5. In Training choose **Partial — confirmed tiles**. This automatically
    uses **All patches (recommended)**; sampled-patch training is available only
    for complete annotations. The associated
    **Curated** ground truth and **Reviewed regions** coverage are selected
-   automatically. Click **Preview training patches**, then train.
+   automatically. Click **Prepare dataset**, then train. Patch preview is optional.
 
 **Remove reviewed status** clears the selected cell's coverage without deleting
 Curated objects. Marking, unmarking, or editing sources requires dataset reindexing.
 Changing grid size clears the selection but preserves previously marked pixels.
 
-**Reviewed annotations** is a read-only binary copy: objects from reviewed cells
+In the legacy workflow, **Reviewed annotations** is a read-only binary copy: objects from reviewed cells
 have value 1, background 0. It is updated when a cell is marked or remarked, and
 is excluded from Training ground-truth choices. Curated retains its object IDs.
 **Reviewed regions** records entire trusted cells including background; Training
 uses this coverage to ignore unreviewed pixels. Green outlines are viewing helpers.
-Workspace saves preserve both data layers and their source associations.
+Bounded editing reads original Curated IDs through this coverage without creating
+another foreground copy. Workspace saves preserve coverage and source associations.
 
-**Mark already-checked cells with clicks** activates direct click-to-mark
+**Click tiles to confirm for dataset** activates direct click-to-mark
 and click-to-remove actions. Use these only after the cells have been checked.
 Normal review selects a cell first and finishes its review explicitly.
 

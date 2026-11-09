@@ -180,6 +180,87 @@ def test_dialog_suggests_without_silently_including_predictions(make_napari_view
         resolve_pairs(viewer, unreviewed)
 
 
+def test_missing_pair_coverage_is_recovered_only_from_unique_exact_association(make_napari_viewer):
+    from napari_label_assistant_tools._reviewed_regions import associate, identity
+    viewer = make_napari_viewer()
+    rows = viewer_pairs(viewer)
+    image, truth = viewer.layers[:2]
+    mask = viewer.add_labels(np.ones(truth.data.shape, dtype='uint8'))
+    associate(mask, image, truth)
+    rows[0].update(coverage='partial', reviewed_id=None)
+    resolved = resolve_pairs(viewer, rows)
+    assert resolved[0][3] is mask
+    assert rows[0]['reviewed_id'] == identity(mask)
+    # Never guess between two coverage masks or repair an explicitly wrong ID.
+    duplicate = viewer.add_labels(np.ones(truth.data.shape, dtype='uint8'))
+    associate(duplicate, image, truth)
+    rows[0]['reviewed_id'] = None
+    with pytest.raises(ValueError, match='associated reviewed-region mask'):
+        resolve_pairs(viewer, rows)
+    assert rows[0]['reviewed_id'] is None
+    rows[0]['reviewed_id'] = rows[1]['truth_id']
+    with pytest.raises(ValueError, match='associated reviewed-region mask'):
+        resolve_pairs(viewer, rows)
+
+
+def test_saved_one_image_multiple_mode_recovers_coverage_and_prepares_spatial_split(make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+    from napari_label_assistant_tools._reviewed_regions import associate, identity, KEY
+    viewer = make_napari_viewer()
+    yy, xx = np.indices((256, 256))
+    image = viewer.add_image((xx % 255).astype('uint8'), name='EM image')
+    truth = viewer.add_labels(((yy//8+xx//8) % 2).astype('uint8'), name='curate')
+    mask = viewer.add_labels(np.ones((256,256), dtype='uint8'), name='Reviewed regions')
+    associate(mask, image, truth)
+    mask.metadata[KEY].update(areas=[[0,0,32,32], [192,192,224,224]], invalid_regions=[])
+    row = dict(image_id=identity(image), truth_id=identity(truth), image_name=image.name,
+               included=True, coverage='partial', reviewed_id=None, confirmed=True,
+               split_group=image.name)
+    widget = QuickTrainWidget(viewer)
+    qtbot.addWidget(widget)
+    settings = widget.project_settings()
+    settings['dataset_pairs'] = [row]
+    settings['combos'].update(dataset_source_mode='multiple', annotation_combo='partial')
+    widget.restore_project_settings(settings)
+    assert not widget._multiple_pairs()
+    assert widget.dataset_pairs[0]['reviewed_id'] == identity(mask)
+    assert widget.reviewed_combo.currentData() is mask
+    assert '2 confirmed tiles available' in widget.annotation_sources_label.text()
+    assert not widget.training_tile_actions.isHidden()
+    for combo in (widget.crop_combo, widget.resolution_combo):
+        combo.addItem('32 px',32)
+        combo.setCurrentIndex(combo.findData(32))
+    widget.prepare_button.click()
+    qtbot.waitUntil(lambda: widget.worker is None, timeout=15000)
+    assert widget.prepared is not None, widget.status_label.text()
+    assert widget.prepared.reviewed_pixels == 2*32*32
+    assert len(widget.prepared.indices('training')) == 1
+    assert len(widget.prepared.indices('validation')) == 1
+
+
+@pytest.mark.parametrize('broken', ['missing_truth', 'invalid_coverage', 'wrong_review', 'unconfirmed_prediction'])
+def test_single_image_recovery_does_not_bypass_invalid_pair_settings(make_napari_viewer, qtbot, broken):
+    from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+    viewer = make_napari_viewer()
+    row = viewer_pairs(viewer)[0]
+    if broken == 'missing_truth':
+        row['truth_id'] = 'missing'
+    elif broken == 'invalid_coverage':
+        row['coverage'] = 'invalid'
+    elif broken == 'wrong_review':
+        row.update(coverage='partial', reviewed_id=row['truth_id'])
+    else:
+        row['confirmed'] = False
+    widget = QuickTrainWidget(viewer)
+    qtbot.addWidget(widget)
+    widget.dataset_pairs = [row]
+    widget.dataset_source_mode.setCurrentIndex(widget.dataset_source_mode.findData('multiple'))
+    assert widget._multiple_pairs()
+    with pytest.raises(ValueError):
+        widget._start_preparing()
+    assert widget.prepared is None
+
+
 def test_multi_pair_panel_prepares_trains_and_invalidates_any_source(make_napari_viewer, qtbot, monkeypatch):
     from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
     viewer = make_napari_viewer()

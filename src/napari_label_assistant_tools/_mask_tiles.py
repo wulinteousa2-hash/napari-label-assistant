@@ -326,8 +326,9 @@ class MaskTileManager:
         self.overview_guard = LabelOverviewGuard(viewer, limit)
         self.entries = []
         self.size = int(state.get('tile_size', DEFAULT_SIZE))
-        if self.size not in (512, 1024, 2048, 4096):
+        if not 1 <= self.size <= 4096:
             self.size = DEFAULT_SIZE
+        self.edit_size = max(1, min(4096, int(state.get('edit_tile_size', self.size))))
         self.row = max(0, int(state.get('row', 0)))
         self.col = max(0, int(state.get('col', 0)))
         self.progress = dict(state.get('progress', {}))
@@ -488,6 +489,7 @@ class MaskTileManager:
 
     def state(self):
         return dict(mode=getattr(self.viewer, MODE, 'grid'), tile_size=self.size,
+                    edit_tile_size=self.edit_size,
                     camera_follow=self.follow_enabled,
                     row=self.row, col=self.col, progress=self.progress,
                     editing_strategy=getattr(self.viewer, '_label_assistant_editing_strategy', 'auto'))
@@ -507,8 +509,8 @@ class MaskTileManager:
         _commit_pending_local_edits(self.viewer)
         self.flush()
         new_size = self.size if size is None else int(size)
-        if new_size not in (512, 1024, 2048, 4096):
-            raise ValueError('Choose a tile size of 512, 1024, 2048 or 4096 pixels.')
+        if not 1 <= new_size <= 4096:
+            raise ValueError('Choose a tile size from 1 to 4096 pixels.')
         h, w = self.shape
         row, col = int(row), int(col)
         if not (0 <= row < (h+new_size-1)//new_size and 0 <= col < (w+new_size-1)//new_size):
@@ -516,6 +518,8 @@ class MaskTileManager:
         # Read every destination crop before replacing any editable buffers.
         prepared = [entry.prepare(row,col,new_size) for entry in self.entries]
         self.row, self.col, self.size = row, col, new_size
+        if size is not None:
+            self.edit_size = new_size
         self.loading = True
         try:
             for entry, pixels in zip(self.entries,prepared):
@@ -696,16 +700,36 @@ def tile_controls(viewer, parent=None, strategy=None):
     size = QComboBox()
     for value in (512, 1024, 2048, 4096):
         size.addItem(f'{value} px', value)
+    size.setCurrentIndex(size.findData(DEFAULT_SIZE))
+    from qtpy.QtGui import QIntValidator
+    size.setEditable(True)
+    size.setInsertPolicy(QComboBox.NoInsert)
+    size.lineEdit().setValidator(QIntValidator(1, 4096, size))
+    size.setToolTip('Editable crop side length in source pixels (1–4096). Review-cell height and width are configured separately in Review.')
+    def accept_size():
+        if size.lineEdit().hasAcceptableInput():
+            value = int(size.currentText().split()[0])
+            index = size.findData(value)
+            if index < 0:
+                size.addItem(f'{value} px', value)
+                index = size.count() - 1
+            size.setCurrentIndex(index)
+    size.lineEdit().editingFinished.connect(accept_size)
     address = QHBoxLayout()
-    for control in (row, col, size):
+    for control in (row, col):
         address.addWidget(control)
+    size_row = QHBoxLayout()
+    size_row.addWidget(QLabel('Editable tile size'))
+    size_row.addWidget(size)
+    layout.addLayout(size_row)
     advanced_layout.addLayout(address)
     from ._local_editing import LocalEditingControls
     local_editing = LocalEditingControls(viewer, size, panel)
     layout.addWidget(local_editing)
     advanced_layout.insertWidget(0, local_editing.auto_follow)
     buttons = QHBoxLayout()
-    previous, go, following, done = (QPushButton(text) for text in ('Previous', 'Go', 'Save & Next', 'Mark done'))
+    previous, go, following, done = (QPushButton(text) for text in ('Previous', 'Go', 'Save & Next', 'Save navigation progress'))
+    done.setToolTip('Records navigation progress only. Use Confirm for training & next cell to approve reviewed segmentation and background for the dataset.')
     for button in (previous, go, following, done):
         buttons.addWidget(button)
     advanced_layout.addLayout(buttons)
@@ -743,7 +767,7 @@ def tile_controls(viewer, parent=None, strategy=None):
         fit.setToolTip(message)
         if stamp[0] != key:
             row.setValue(manager.row); col.setValue(manager.col)
-            size.setCurrentIndex(size.findData(manager.size)); stamp[0] = key
+            stamp[0] = key
         progress = manager.progress.get(f'{manager.size}:{manager.row}:{manager.col}', 'unvisited')
         bounds = next((entry.bounds for entry in manager.entries if entry.bounds is not None), (slice(0,0),slice(0,0)))
         note.setText(manager.error or f'Grid tile R{manager.row:02d}C{manager.col:02d} · {progress}\n'

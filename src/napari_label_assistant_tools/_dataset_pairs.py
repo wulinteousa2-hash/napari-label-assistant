@@ -33,10 +33,28 @@ def is_prediction(layer):
     return bool(layer.metadata.get('quick_train', {}).get('experimental')) or layer.name.startswith(('Model Training prediction', 'Model Training preview'))
 
 
+def associate_pair_coverage(viewer, definitions):
+    """Fill missing coverage references only for an unambiguous exact pair."""
+    _, _, masks = source_layers(viewer)
+    changed = False
+    for row in definitions:
+        if row.get('coverage') != 'partial' or row.get('reviewed_id'):
+            continue
+        matches = [mask for mask in masks
+                   if mask.metadata['label_assistant_review'].get('image_id') == row.get('image_id')
+                   and mask.metadata['label_assistant_review'].get('truth_id') == row.get('truth_id')
+                   and row.get('image_id') and row.get('truth_id')]
+        if len(matches) == 1:
+            row['reviewed_id'] = layer_id(matches[0])
+            changed = True
+    return changed
+
+
 def suggest_pairs(viewer, definitions=()):
     """Reuse IDs and only suggest labels from an association or unique name."""
     images, labels, masks = source_layers(viewer)
     result = deepcopy(list(definitions))
+    associate_pair_coverage(viewer, result)
     known = {row['image_id'] for row in result}
     for image in images:
         identifier = layer_id(image)
@@ -73,6 +91,7 @@ def suggest_pairs(viewer, definitions=()):
 def resolve_pairs(viewer, definitions, *, minimum=2):
     """Validate explicit pairs without reading full arrays or changing pixels."""
     images, labels, masks = source_layers(viewer)
+    associate_pair_coverage(viewer, definitions)
     all_layers = {layer_id(layer): layer for layer in images + labels + masks}
     result, seen = [], set()
     for row in definitions:
