@@ -10,12 +10,22 @@ METRICS = {'dice': '#16a085', 'iou': '#2980b9', 'precision': '#d35400', 'recall'
 def history_points(history):
     points = []
     for round_index, record in enumerate(history, 1):
+        evaluation = record.get('validation', {}).get('evaluation', {})
+        trial = evaluation.get('mode') == 'trial'
         for checkpoint in record.get('checkpoints', []):
             if checkpoint.get('validation'):
                 points.append({'epoch': checkpoint.get('epoch', checkpoint.get('step', 0)),
                                'axis_unit': 'epoch' if 'epoch' in checkpoint else 'step',
-                               'series': f"Round {round_index}", 'step': checkpoint.get('step', ''),
+                               'series': f"Round {round_index}" + (' · Trial validation' if trial else ''),
+                               'validation_scope': 'trial' if trial else 'full' if record.get('workflow') == 'coverage' else 'recorded',
+                               'validation_patches': evaluation.get('selected_patches', record.get('dataset_summary', {}).get('validation', {}).get('total', '')),
+                               'step': checkpoint.get('step', ''),
                                'training_loss_last_batch': checkpoint.get('training_loss_last_batch', checkpoint.get('loss', '')), 'metrics': checkpoint['validation']})
+        for full in record.get('evaluations', []):
+            points.append({'epoch': record.get('retained_epoch', 0), 'axis_unit': 'epoch',
+                           'series': f"Round {round_index} · Full validation", 'validation_scope': 'full',
+                           'validation_patches': full['patches'], 'step': full.get('training_steps', ''),
+                           'metrics': full['metrics']})
     if not points and history:
         report = history[-1].get('cross_validation_report', {})
         for fold in report.get('fold_results', []):
@@ -28,6 +38,10 @@ def history_points(history):
 
 
 def learning_svg(points, title='Validation learning progress', *, background='#fafafa', foreground='#333333', grid='#dddddd', dark=False, loss=False, series_colors=None):
+    trial = any(p.get('validation_scope') == 'trial' or 'Trial validation' in p.get('series', '') for p in points)
+    if trial:
+        full = any(p.get('validation_scope') == 'full' or 'Trial validation' not in p.get('series', '') for p in points)
+        title = title + ' (trial / full)' if full else 'Trial ' + title[0].lower() + title[1:]
     width, height, left, top, plot_w, plot_h = 760, 360, 60, 55, 650, 220
     if series_colors:
         height += 20 * len(series_colors)
@@ -77,7 +91,7 @@ def learning_svg(points, title='Validation learning progress', *, background='#f
 
 def write_metrics_csv(points, path):
     """Export raw validation values; absent legacy metrics remain empty."""
-    fields = ['series', 'fold', 'epoch', 'step', 'validation_loss', 'dice', 'iou', 'precision', 'recall', 'training_loss_last_batch']
+    fields = ['series', 'fold', 'epoch', 'step', 'validation_loss', 'dice', 'iou', 'precision', 'recall', 'training_loss_last_batch', 'validation_scope', 'validation_patches']
     with Path(path).open('w', newline='', encoding='utf-8') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -88,4 +102,6 @@ def write_metrics_csv(points, path):
                 'epoch': point['epoch'] if point.get('axis_unit', 'epoch') == 'epoch' else '', 'step': point.get('step', ''),
                 'validation_loss': metrics.get('loss', ''),
                 **{key: metrics.get(key, '') for key in ('dice','iou','precision','recall')},
+                'validation_scope': point.get('validation_scope', 'trial' if 'Trial validation' in series else ''),
+                'validation_patches': point.get('validation_patches', ''),
                 'training_loss_last_batch': point.get('training_loss_last_batch', '')})

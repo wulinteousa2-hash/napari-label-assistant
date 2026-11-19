@@ -1,10 +1,12 @@
 # Independent software and scientific audit
 
-**Current release: 6.4.0 (2026-11-08).** See
-[6.4.0 release validation](18_release_6_4_0.md) for the editing/confirmation UI,
-whole-mask OME-Zarr analysis, recovery, packaging, and complete regression results:
-**464 passed, 0 failures or skips** in 540.83 seconds (Qt offscreen).
-The preceding [6.3.0 release](12_release_6_3_0.md) passed 425 tests and the
+**Current release: 7.0.0 (2026-11-19).** See
+[7.0.0 release validation](24_release_7_0_0.md) for Simple/Advanced curation,
+annotation batches and colors, training subsets, workspace recovery, packaging,
+and complete regression results: **631 passed, 0 failures or skips** in
+977.19 seconds (Qt offscreen).
+The preceding [6.4.0 release](18_release_6_4_0.md) passed **464 tests**, the
+[6.3.0 release](12_release_6_3_0.md) passed 425 tests, and the
 [5.3.0 release](11_release_5_3_0.md) passed 353 tests. Their evidence and the initial
 audit findings below remain historical records.
 
@@ -30,7 +32,14 @@ Existing suite: **289 passed, 0 failed/skipped**. Final independent suites: **19
 
 | Deliverable | Report |
 |---|---|
-| Current release: confirmed-tile workflows and whole-mask analysis | [18_release_6_4_0.md](18_release_6_4_0.md) |
+| Current release: Simple curation, annotation batches, and training controls | [24_release_7_0_0.md](24_release_7_0_0.md) |
+| Persistent batch colors and independent display | [23_batch_history_colors.md](23_batch_history_colors.md) |
+| Overview review-selection repair | [22_batch_overview_selection.md](22_batch_overview_selection.md) |
+| Annotation batches, persistence, and training selection | [21_annotation_batches.md](21_annotation_batches.md) |
+| Quick trial validation | [20_quick_trial_validation.md](20_quick_trial_validation.md) |
+| Reproducible training-patch subsets | [19_training_patch_subsets.md](19_training_patch_subsets.md) |
+| Simple curation and tile-progress recovery | [18_simple_curation.md](18_simple_curation.md) |
+| Previous release: confirmed-tile workflows and whole-mask analysis | [18_release_6_4_0.md](18_release_6_4_0.md) |
 | Whole-mask population, global cleanup, copy, and undo | [17_entire_mask_analysis.md](17_entire_mask_analysis.md) |
 | OME-Zarr component-search reproduction and fixes | [16_ome_component_search.md](16_ome_component_search.md) |
 | Editing, confirmation, and cleanup interface | [15_workflow_clarity.md](15_workflow_clarity.md) |

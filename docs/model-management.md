@@ -14,6 +14,15 @@ The task's dataset associations use stable layer IDs. Training history records t
 
 ## Patch preview and canvas placement
 
+Annotation batches separate cumulative review progress from the annotation selection
+used for a training run. Choose the named batch in the **Training** dropdown in
+Labels, Simple Progress & Dataset, or Dataset; then prepare it and continue the
+selected checkpoint. Batch buttons and the colored display controls let you
+inspect review history without changing that training selection. Batch identity,
+membership revision, and bounds are saved in run provenance. Changing a batch does
+not create a model or change its weights. New checkpoint names include the batch name
+for a single active image/Labels pair. Earlier runs keep their saved provenance.
+
 Preparation does not add preview layers or move the canvas. **Show patch preview** opens a separate contact sheet to the right of the source image and focuses it. Placement accounts for the source image's world extent and pixel scale, including rotated or sheared images. The gallery is a rearrangement of patches, not an overlay at their source coordinates.
 
 - **Crop images:** Normalized model input patches.
@@ -25,7 +34,7 @@ Double-click a tile to hide the gallery and focus its original source region. **
 
 ## Architectures
 
-- **Custom small U-Net:** The existing five-level GroupNorm model, with widths 4, 8, 12, or 16.
+- **Custom small U-Net:** The existing five-level GroupNorm model, with widths 4, 8, 12, 16, 32, or 64; the default remains 8. The selector displays the parameter count and estimated float32 weight storage for the current output classes/channels without allocating a model. Binary widths 8, 16, 32, and 64 have approximately 0.49, 1.97, 7.85, and 31.39 million parameters. Wider models require more computation and memory; reduce batch size if needed. Changing width applies to **Train new model**. **Continue training** retains the loaded checkpoint's width and weights.
 - **Standard U-Net:** Four levels, BatchNorm, transpose-convolution upsampling, and widths 16, 32, or 64.
 - **SMP:** U-Net, U-Net++, or DeepLabV3+, with selectable encoders. Common encoder choices appear in the dropdown; another supported encoder name can be typed.
 
@@ -86,7 +95,19 @@ The library groups trained models by biological task and displays configuration,
 
 Workspace Save persists changed model weights, including separate revisions for previous runs. **Export current model** writes a standalone `.pt` file and readable history, metric CSV, and learning/loss SVG files. Weights are held in memory until one of these saves occurs; training completion itself does not save to disk.
 
+New workspace checkpoints and export suggestions use readable names, for example:
+
+```text
+Remak_EM08_unet-w8_in1024_run01_20261118_7a72a518.pt
+```
+
+The fields identify the model, source image, architecture/width (or encoder), model input size, run number, recorded UTC training date, and a short revision ID. Names are sanitized and shortened for filenames. Missing historical dates are shown as `undated`; they are not reconstructed. Full model and revision IDs remain in workspace metadata. History, metrics, and chart files share the checkpoint stem. Export filenames remain editable. Copying an external checkpoint into the workspace also uses a readable name, without moving the original.
+
+Existing saved files are not renamed. Complete-package Save As preserves existing `.pt` filenames; legacy exports with another extension receive a readable `.pt` name in the new package. Collisions receive an additional unique suffix. Renaming a model in the library changes its display name and future save suggestions, not already-saved files.
+
 Checkpoints include weights, architecture specification, preprocessing, task/model identity, library versions, configuration, and complete training history. Version-1 checkpoints are recognized as the original custom U-Net. Continue training starts a fresh optimizer from stored weights; this is not exact recovery of an interrupted optimizer/scheduler state.
+
+With **Dataset → Quick trial — smaller validation set**, checkpoint selection uses a fixed subset of the reserved validation pool. These metrics are labeled **Trial validation** in the model library and reports. **Train → Validation → Evaluate full validation set** evaluates the retained weights on the complete pool without training or replacing the trial-selection scores. The additional evaluation is saved on the same run, with separate metrics, source coordinates and dataset provenance. It does not create a training round or add optimizer steps. Save the workspace or export the model to preserve it. Scores from trial and full validation should not be treated as the same evaluation protocol; neither is an independent test-image score.
 
 ## Controlled comparisons
 

@@ -128,7 +128,8 @@ def create_matching(viewer, source, target, name):
             manager=manager_for(viewer) or MaskTileManager(viewer)
             manager._temporary_stores.append(temporary)
             record=_common_record(template,'Labels')
-            for key in ('quick_train','label_assistant_review','label_assistant_component_library'):
+            for key in ('quick_train','label_assistant_review','label_assistant_component_library',
+                        'label_assistant_annotation_batches'):
                 record.pop(key,None)
             record['name']=name
             record['visible']=True

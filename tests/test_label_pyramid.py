@@ -121,7 +121,7 @@ def manifest(tmp_path, reference):
     return path
 
 
-def test_whole_mask_overview_and_editable_tile_stay_linked(tmp_path, make_napari_viewer):
+def test_whole_mask_overview_and_editable_tile_stay_linked(tmp_path, make_napari_viewer, qtbot):
     from types import SimpleNamespace
     from napari_label_assistant_tools.workspace import load_workspace, save_workspace
     from napari_label_assistant_tools._mask_tiles import manager_for, full_data
@@ -174,7 +174,8 @@ def test_whole_mask_overview_and_editable_tile_stay_linked(tmp_path, make_napari
     assert payload['layers'][0]['storage']['datasets'] == [f's{i}' for i in range(7)]
     manager.show_whole_mask()
     viewer.layers.remove(entry.layer)
-    assert not viewer.layers
+    # Derived layers leave after napari finishes its deletion snapshot.
+    qtbot.waitUntil(lambda: not viewer.layers)
 
 
 def test_huge_pyramid_load_never_materializes_full_resolution(tmp_path, make_napari_viewer, monkeypatch):

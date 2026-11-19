@@ -235,6 +235,22 @@ class LargeComponentIndex:
         component_id = int(self.provisional_to_final[tile.base + local_id])
         return component_id if component_id not in self.deleted_component_ids else None
 
+    def component_mask(self, component_id, bounds):
+        """Read a bounded footprint from cached ID tiles, without source reads."""
+        y0, x0, y1, x1 = bounds
+        result = np.zeros((y1 - y0, x1 - x0), dtype=bool)
+        for y in range(y0 // self.tile_size * self.tile_size, y1, self.tile_size):
+            for x in range(x0 // self.tile_size * self.tile_size, x1, self.tile_size):
+                tile = self._tile_for(y, x)
+                if not tile.count:
+                    continue
+                ay, ax = max(y0, tile.y0), max(x0, tile.x0)
+                by, bx = min(y1, tile.y1), min(x1, tile.x1)
+                ids = self._final_tile(tile)
+                result[ay-y0:by-y0, ax-x0:bx-x0] = ids[
+                    ay-tile.y0:by-tile.y0, ax-tile.x0:bx-tile.x0] == component_id
+        return result
+
     def selected_tiles(
         self, component_ids: list[int]
     ) -> Iterator[tuple[_Tile, np.ndarray]]:

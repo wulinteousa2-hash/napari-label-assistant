@@ -25,6 +25,7 @@ from qtpy.QtWidgets import (
     QHeaderView,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -50,7 +51,7 @@ from ._dynamic_edit import (
 )
 from ._large_component_controller import LargeComponentController
 from ._mask_validation import looks_like_grayscale_image
-from ._mask_tiles import full_source
+from ._mask_tiles import full_source, full_data
 from ._large_components import (
     LARGE_ANALYSIS_PIXEL_THRESHOLD,
     LARGE_TABLE_PAGE_SIZE,
@@ -1179,7 +1180,8 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
                 record = _common_record(full_source(ref), "Labels")
                 record["name"] = target_name
                 record["visible"] = True
-                for key in ("quick_train", "label_assistant_review", "label_assistant_component_library"):
+                for key in ("quick_train", "label_assistant_review", "label_assistant_component_library",
+                            "label_assistant_annotation_batches"):
                     record.pop(key, None)
                 created = manager.add(record, result, reference)
                 full_source(created)._label_assistant_mask_temporary = True
@@ -1905,15 +1907,14 @@ def component_operations_widget(
     grid_tiles._poll.timeout.connect(_tile_scope)
     _tile_scope()
     analysis_note = QLabel(
-        "Find components, sort by area, and inspect objects using the table or canvas. "
-        "Preview a size threshold before removing small masks. Selection here is for "
-        "inspection and cleanup; confirm dataset tiles in Edit & Confirm."
+        "Click objects or select rows to screen feature groups. "
+        "Approve training regions separately in Edit & Confirm."
     )
     analysis_note.setWordWrap(True)
     analysis_layout.addWidget(analysis_note)
     analysis_options = QWidget()
     analysis_options.setLayout(form)
-    analysis_options_section = _collapsible_section('Advanced: grid addresses and copy destination', analysis_options)
+    analysis_options_section = _collapsible_section('Advanced: grid addresses and destination matching', analysis_options)
     analysis_layout.addWidget(analysis_options_section)
     qc_layout.addWidget(analysis_group, 1)
 
@@ -1973,7 +1974,18 @@ def component_operations_widget(
         "Receives selected components. Crops use original image coordinates; "
         "manual selection prepares a matching canvas when needed, preserving the original."
     )
-    form.addRow("Copy destination", copy_target_combo)
+    screening_group = QGroupBox('Screen && Group Objects')
+    screening_layout = QVBoxLayout(screening_group)
+    destination_row = QWidget()
+    destination_layout = QHBoxLayout(destination_row)
+    destination_layout.setContentsMargins(0, 0, 0, 0)
+    destination_layout.addWidget(QLabel('Group / destination'))
+    destination_layout.addWidget(copy_target_combo, 1)
+    new_group_button = QPushButton('+ New')
+    new_group_button.setToolTip('Name a feature group. Its Labels layer is created when you copy objects.')
+    destination_layout.addWidget(new_group_button)
+    screening_layout.addWidget(destination_row)
+    analysis_layout.insertWidget(analysis_layout.indexOf(analysis_options_section), screening_group)
     manual_copy_target_check = QCheckBox("Choose destination manually")
     manual_copy_target_check.setToolTip(
         "Choose a Labels layer or type a new name. Confirm an existing destination once. "
@@ -1987,16 +1999,33 @@ def component_operations_widget(
 
     click_select_check = QCheckBox("Select components from canvas")
     click_select_check.setToolTip(
-        "Find components in the current edit area, then click objects to select "
-        "them for curation. Picking temporarily pauses painting."
+        "Find components in the selected analysis scope, then click objects to "
+        "select them for curation. Picking temporarily pauses painting."
     )
-    analysis_layout.addWidget(click_select_check)
+    screening_layout.addWidget(click_select_check)
 
     append_click_select_check = QCheckBox("Keep earlier component selections")
     append_click_select_check.setToolTip(
-        "Keep earlier component selections when clicking additional objects."
+        "Add objects to the group selection; click a selected object again to remove it."
     )
-    analysis_layout.addWidget(append_click_select_check)
+    screening_layout.addWidget(append_click_select_check)
+    selection_actions = QWidget()
+    selection_actions_layout = QHBoxLayout(selection_actions)
+    selection_actions_layout.setContentsMargins(0, 0, 0, 0)
+    undo_selection_button = QPushButton('Undo selection')
+    clear_selection_button = QPushButton('Clear selection')
+    # Keep the original copy button and callback, next to its destination.
+    action_layout.removeWidget(btn_copy)
+    selection_actions_layout.addWidget(btn_copy)
+    selection_actions_layout.addWidget(undo_selection_button)
+    selection_actions_layout.addWidget(clear_selection_button)
+    screening_layout.addWidget(selection_actions)
+    clear_after_copy_check = QCheckBox('Clear selection after successful copy')
+    clear_after_copy_check.setToolTip('Leave off to reuse the same selection for another destination.')
+    screening_layout.addWidget(clear_after_copy_check)
+    screening_hint = QLabel('Selections group foreground objects; they do not confirm surrounding background.')
+    screening_hint.setWordWrap(True)
+    screening_layout.addWidget(screening_hint)
 
     selection_summary = QLabel("Selected components: 0")
     selection_summary.setWordWrap(True)
@@ -2010,7 +2039,7 @@ def component_operations_widget(
         " font-weight: 600;"
         "}"
     )
-    analysis_layout.addWidget(selection_summary)
+    screening_layout.addWidget(selection_summary)
 
     results_help = QLabel(
         "Results — click a column heading to sort; double-click a row to "
@@ -2081,7 +2110,16 @@ def component_operations_widget(
         training_tiles=[],
         training_pair=None,
         closed=False,
+        screening_source=None,
+        selection_cache={},
+        selection_history=[],
+        previous_selection=frozenset(),
+        restoring_selection=True,
+        undoing_selection=False,
+        screening_rejected=0,
     )
+    from . import _screening as screening
+    selection_overlay = screening.SelectionOverlay(viewer)
     picker_timer = QTimer(container)
     picker_timer.setSingleShot(True)
     picker_timer.setInterval(200)
@@ -2135,6 +2173,7 @@ def component_operations_widget(
             "show_overlay": bool(display_grid_check.isChecked()),
         }
         layer.metadata = metadata
+        full_source(layer).metadata['label_assistant_grid'] = dict(metadata['label_assistant_grid'])
 
     def _restore_grid_registration() -> None:
         layer = _target_layer()
@@ -2209,12 +2248,26 @@ def component_operations_widget(
             )
         )
         source_layer = _target_layer()
+        if source_layer is not state.screening_source:
+            state.screening_source = source_layer
+            saved = full_source(source_layer).metadata.get(screening.KEY, {}) if source_layer is not None else {}
+            if saved.get('destination'):
+                current_copy = saved['destination']
+                if not any(layer.name == current_copy for layer in _eligible_copy_targets(source_layer)):
+                    manual_copy_target_check.blockSignals(True)
+                    manual_copy_target_check.setChecked(True)
+                    manual_copy_target_check.blockSignals(False)
+                    copy_target_combo.setEditable(True)
         copy_target_combo.blockSignals(True)
         copy_target_combo.clear()
         for layer in _eligible_copy_targets(
             source_layer, manual=manual_copy_target_check.isChecked()
         ):
             copy_target_combo.addItem(layer.name, layer)
+        if source_layer is not None:
+            for name in _screening_state().get('groups', {}):
+                if copy_target_combo.findText(name) < 0 and name not in viewer.layers:
+                    copy_target_combo.addItem(name)
         if current_copy:
             idx = copy_target_combo.findText(current_copy)
             if idx >= 0:
@@ -2222,7 +2275,9 @@ def component_operations_widget(
             elif manual_copy_target_check.isChecked():
                 copy_target_combo.setEditText(current_copy)
         copy_target_combo.blockSignals(False)
-        if copy_target_combo.count()==0 and not manual_copy_target_check.isChecked():
+        has_destination = any(isinstance(copy_target_combo.itemData(i), napari.layers.Labels)
+                              for i in range(copy_target_combo.count()))
+        if not has_destination and not manual_copy_target_check.isChecked():
             copy_destination_hint.setText('No matching destination yet. Click Copy selected to prepare Curated, or choose a destination manually.')
         elif manual_copy_target_check.isChecked():
             copy_destination_hint.setText('Confirm the destination once; matching is automatic.'+(
@@ -2230,6 +2285,8 @@ def component_operations_widget(
                 if state.restore_copy_destination is not None else ' Originals are retained if a matching replacement is needed.'))
         else:
             copy_destination_hint.setText('Copies use matching image coordinates.')
+        _update_screening_hint()
+        _connect_group_editor()
 
     def _set_manual_copy_target(enabled: bool) -> None:
         copy_target_combo.setEditable(enabled)
@@ -2268,6 +2325,177 @@ def component_operations_widget(
         with suppress(KeyError):
             return viewer.layers[name]
         return None
+
+    def _group_name():
+        return copy_target_combo.currentText().strip() or 'Curated'
+
+    def _screening_state():
+        layer = _editable_target_layer()
+        if layer is None:
+            return {}
+        saved = full_source(layer).metadata.get(screening.KEY, {})
+        if not isinstance(saved, dict) or not isinstance(saved.get('groups', {}), dict):
+            return {}
+        return saved
+
+    def _write_screening(saved):
+        layer = _editable_target_layer()
+        if layer is not None:
+            for owner in (layer, full_source(layer)):
+                owner.metadata[screening.KEY] = saved
+
+    def _update_screening_hint():
+        saved = _screening_state().get('groups', {}).get(_group_name(), {})
+        count = len(saved.get('components', []))
+        stale = state.fast_index is not None and state.analyzed_revision != state.analysis_revision
+        busy = large_controller.busy
+        if stale:
+            screening_hint.setText('Source annotations changed. Find components to check pending selections before copying.')
+        elif state.screening_rejected:
+            suffix = '' if state.screening_rejected == 1 else 's'
+            screening_hint.setText(f'{state.screening_rejected} saved selection{suffix} changed or no longer match this scope. Reselect before copying.')
+        elif state.fast_index is None and count:
+            suffix = '' if count == 1 else 's'
+            screening_hint.setText(f'{count} saved selection{suffix} for {_group_name()}. Find components to check and restore.')
+        else:
+            screening_hint.setText('Cyan boxes = selected objects. Save workspace to keep pending picks.')
+        screening_hint.setToolTip('Grouping foreground objects does not verify surrounding background for training.')
+        undo_selection_button.setEnabled(bool(state.selection_history) and not busy)
+        clear_selection_button.setEnabled(bool(count or state.selected_component_ids) and not busy)
+        btn_copy.setEnabled(bool(state.fast_index is not None and state.selected_component_ids and not stale and not busy))
+        btn_copy.setToolTip('Wait for the current mask operation.' if busy else
+                            'Find components again after source edits.' if stale else
+                            'Select objects to copy into the chosen group; source values are preserved.')
+        new_group_button.setEnabled(_editable_target_layer() is not None and not busy)
+        for control in (copy_target_combo, manual_copy_target_check, component_table,
+                        page_spin, click_select_check, append_click_select_check):
+            control.setEnabled(not busy)
+
+    def _selection_updated(*, force=False):
+        ids = frozenset(state.selected_component_ids)
+        if state.fast_index is not None and state.analyzed_revision != state.analysis_revision:
+            selection_overlay.hide()
+            _update_screening_hint()
+            return
+        if state.fast_index is not None and not state.restoring_selection and (force or ids != state.previous_selection):
+            state.screening_rejected = 0
+            if not state.undoing_selection and ids != state.previous_selection:
+                state.selection_history.append(state.previous_selection)
+                state.selection_history[:] = state.selection_history[-20:]
+            state.previous_selection = ids
+            for component_id in ids:
+                if component_id not in state.selection_cache:
+                    state.selection_cache[component_id] = screening.describe(state.fast_index, component_id)
+            layer = _target_layer()
+            saved = dict(_screening_state())
+            groups = dict(saved.get('groups', {}))
+            groups[_group_name()] = dict(
+                context=screening.context(_analysis_data(layer).shape, _analysis_geometry(layer)),
+                components=[state.selection_cache[value] for value in sorted(ids)],
+            )
+            saved.update(version=1, destination=_group_name(), groups=groups)
+            _write_screening(saved)
+        records = [state.fast_index.records[value] for value in sorted(ids)] if state.fast_index is not None else []
+        if records:
+            selection_overlay.update(records, _analysis_geometry(_target_layer()), workflow_tabs.currentIndex() == 1)
+        else:
+            selection_overlay.hide()
+        _update_screening_hint()
+
+    def _restore_pending_selection():
+        state.restoring_selection = True
+        state.selection_history.clear()
+        layer = _target_layer()
+        saved = _screening_state().get('groups', {}).get(_group_name(), {})
+        rejected = 0
+        if state.fast_index is not None and saved:
+            state.selected_component_ids, rejected = screening.restore(
+                state.fast_index, saved,
+                screening.context(_analysis_data(layer).shape, _analysis_geometry(layer)),
+                state.selection_cache,
+            )
+        else:
+            state.selected_component_ids = set()
+        state.previous_selection = frozenset(state.selected_component_ids)
+        state.screening_rejected = rejected
+        _sync_table_selection_from_state()
+        state.restoring_selection = False
+        return rejected
+
+    def _group_changed(_text=None):
+        if state.closed:
+            return
+        if large_controller.busy:
+            raise ValueError('Wait for the current mask operation before switching groups.')
+        name = _group_name()
+        if name not in viewer.layers and not manual_copy_target_check.isChecked():
+            manual_copy_target_check.setChecked(True)
+            copy_target_combo.setEditText(name)
+        saved = dict(_screening_state())
+        groups = dict(saved.get('groups', {}))
+        if _group_name() not in groups and state.fast_index is not None and state.selected_component_ids:
+            layer = _target_layer()
+            groups[_group_name()] = dict(
+                context=screening.context(_analysis_data(layer).shape, _analysis_geometry(layer)),
+                components=[state.selection_cache[value] for value in sorted(state.selected_component_ids)],
+            )
+        saved['groups'] = groups
+        saved.update(version=1, destination=_group_name())
+        _write_screening(saved)
+        _restore_pending_selection()
+
+    def _new_group():
+        if _editable_target_layer() is None:
+            raise ValueError('Choose a source Labels layer before creating a group.')
+        name, accepted = QInputDialog.getText(container, 'New feature group', 'Destination Labels layer name:')
+        if not accepted or not name.strip():
+            return
+        name = name.strip()
+        if name == _target_layer().name:
+            raise ValueError('Use a different name from the source mask.')
+        # Keep a just-picked batch when naming its destination for the first time.
+        pending = _screening_state().get('groups', {}).get(_group_name())
+        saved = dict(_screening_state())
+        groups = dict(saved.get('groups', {}))
+        if name not in groups:
+            groups[name] = pending or dict(context={}, components=[])
+        saved.update(version=1, groups=groups)
+        _write_screening(saved)
+        manual_copy_target_check.setChecked(True)
+        copy_target_combo.setEditText(name)
+        _group_changed()
+        return True
+
+    def _clear_selection():
+        if large_controller.busy:
+            raise ValueError('Wait for the current mask operation before changing its selection.')
+        if state.fast_index is None or state.analyzed_revision != state.analysis_revision:
+            saved = dict(_screening_state())
+            groups = dict(saved.get('groups', {}))
+            groups.pop(_group_name(), None)
+            saved['groups'] = groups
+            _write_screening(saved)
+            state.screening_rejected = 0
+        state.selected_component_ids = set()
+        _sync_table_selection_from_state()
+        if state.fast_index is not None:
+            _selection_updated(force=True)
+
+    def _undo_selection():
+        if large_controller.busy:
+            raise ValueError('Wait for the current mask operation before changing its selection.')
+        if state.selection_history:
+            state.selected_component_ids = set(state.selection_history.pop())
+            state.undoing_selection = True
+            try:
+                _sync_table_selection_from_state()
+            finally:
+                state.undoing_selection = False
+
+    def _copy_completed():
+        if clear_after_copy_check.isChecked():
+            _clear_selection()
+        _update_screening_hint()
 
     def _set_status(message: str) -> None:
         viewer.status = message
@@ -2333,6 +2561,9 @@ def component_operations_widget(
         layer = _target_layer()
         if layer is None:
             raise ValueError("Select a Labels layer before showing the grid.")
+        # The visible managed layer is a crop or a 1x1 overview placeholder.
+        # Review addresses always belong to the full mask, independently of zoom.
+        layer = full_source(layer)
         shape = _supported_2d_mask_shape(getattr(layer, "data", None))
         if shape is None:
             raise ValueError("The selected layer is not a supported 2D Labels layer.")
@@ -2364,8 +2595,8 @@ def component_operations_widget(
         grid_metadata[INTERNAL_LAYER_ROLE_KEY] = "grid_overlay"
         grid_metadata["source_layer_name"] = layer.name
         grid_layer.metadata = grid_metadata
-        grid_layer.scale = np.asarray(layer.scale)[-2:]
-        grid_layer.translate = np.asarray(layer.translate)[-2:]
+        for attribute in ('scale', 'translate', 'rotate', 'shear', 'affine'):
+            setattr(grid_layer, attribute, getattr(layer, attribute))
 
     def _canvas_viewport_size() -> tuple[float, float]:
         canvas = viewer.window._qt_viewer.canvas
@@ -2381,6 +2612,7 @@ def component_operations_widget(
         layer = _target_layer()
         if layer is None:
             return
+        layer = full_source(layer)
         shape = _supported_2d_mask_shape(getattr(layer, "data", None))
         if shape is None:
             return
@@ -2389,9 +2621,9 @@ def component_operations_widget(
         if center.size < 2:
             return
         scale = np.asarray(layer.scale, dtype=float).ravel()[-2:]
-        translate = np.asarray(layer.translate, dtype=float).ravel()[-2:]
-        center_y = (float(center[-2]) - float(translate[-2])) / float(scale[-2])
-        center_x = (float(center[-1]) - float(translate[-1])) / float(scale[-1])
+        from ._coordinates import mask_world_affine
+        transform = mask_world_affine(layer)
+        center_y, center_x = np.linalg.solve(transform[:2,:2], center[-2:]-transform[:2,2])
         label_layout = build_visible_grid_label_layout(
             shape,
             int(grid_y_spin.value()),
@@ -2425,8 +2657,8 @@ def component_operations_widget(
         label_metadata[INTERNAL_LAYER_ROLE_KEY] = "grid_labels"
         label_metadata["source_layer_name"] = layer.name
         label_layer.metadata = label_metadata
-        label_layer.scale = scale
-        label_layer.translate = translate
+        for attribute in ('scale', 'translate', 'rotate', 'shear', 'affine'):
+            setattr(label_layer, attribute, getattr(layer, attribute))
         label_layer.opacity = float(label_layout.opacity)
         label_layer.visible = True
 
@@ -2457,6 +2689,7 @@ def component_operations_widget(
         ids = _selected_component_ids()
         if not ids:
             selection_summary.setText("Selected components: 0")
+            _selection_updated()
             return
         preview = ", ".join(str(component_id) for component_id in ids[:8])
         if len(ids) > 8:
@@ -2464,6 +2697,7 @@ def component_operations_widget(
         selection_summary.setText(
             f"Selected components: {len(ids)} | IDs: {preview}"
         )
+        _selection_updated()
 
     def _sync_table_selection_from_state() -> None:
         state.syncing_table_selection = True
@@ -2542,6 +2776,11 @@ def component_operations_widget(
         _render_component_page()
 
     def _invalidate_analysis(message: str | None = None) -> None:
+        state.restoring_selection = True
+        state.selection_cache.clear()
+        state.selection_history.clear()
+        state.previous_selection = frozenset()
+        state.screening_rejected = 0
         old_index = state.fast_index
         state.analyzed_layer_name = None
         state.fast_index = None
@@ -2601,6 +2840,7 @@ def component_operations_widget(
             f"full {index.shape[0]:,} x {index.shape[1]:,} Labels layer. "
             "Tile seams were joined; results are paged."
         )
+        _restore_pending_selection()
 
     large_controller = LargeComponentController(
         progress=analysis_progress,
@@ -2677,7 +2917,10 @@ def component_operations_widget(
         image = reviewed_area_widget.image_combo.currentData()
         pair = (image, layer)
         if state.training_pair is None or any(a is not b for a, b in zip(pair, state.training_pair)):
-            state.training_tiles.clear()
+            from ._tile_progress import KEY as TILE_KEY
+            saved = full_source(layer).metadata.get(TILE_KEY, {}) if layer is not None else {}
+            image_id = image.metadata.get('label_assistant_review', {}).get('id') if image is not None else None
+            state.training_tiles = [tuple(rect) for rect in saved.get('pending', [])] if image_id and saved.get('image_id') == image_id else []
             state.training_pair = pair
             state.confirmation_stamp = None
         tile_selection_summary.setText(
@@ -2725,6 +2968,7 @@ def component_operations_widget(
                 reviewed_area_widget.mark(1, current_tile=True, review_bounds=rect)
             count = len(state.training_tiles)
             state.training_tiles.clear()
+            _store_pending_tiles()
             _set_status(f'{count} edited tiles confirmed for training: annotated foreground and checked background. Save the workspace to preserve this selection.')
         elif reviewed_area_widget.confirm_current_tile():
             _set_status('Edited tile confirmed for training: annotated foreground and checked background. Save the workspace to preserve this selection.')
@@ -2732,6 +2976,29 @@ def component_operations_widget(
 
     def _clear_training_tiles():
         state.training_tiles.clear()
+        _store_pending_tiles()
+        _update_confirmation_controls()
+
+    def _store_pending_tiles():
+        from ._tile_progress import KEY as TILE_KEY
+        layer = _editable_target_layer()
+        image = reviewed_area_widget.image_combo.currentData()
+        if layer is not None and image is not None:
+            from ._reviewed_regions import identity
+            saved = dict(full_source(layer).metadata.get(TILE_KEY, {}))
+            saved.update(image_id=identity(image), shape=list(full_data(layer).shape),
+                         grid=[grid_y_spin.value(), grid_x_spin.value()],
+                         pending=[list(rect) for rect in state.training_tiles])
+            for owner in (layer, full_source(layer)):
+                owner.metadata[TILE_KEY] = saved
+            journal = getattr(viewer, '_label_assistant_progress_journal', None)
+            if journal is not None:
+                journal.schedule()
+
+    def _set_pending_tiles(rectangles):
+        state.training_pair = (reviewed_area_widget.image_combo.currentData(), _editable_target_layer())
+        state.training_tiles = [tuple(rect) for rect in rectangles]
+        _store_pending_tiles()
         _update_confirmation_controls()
 
     def _select_training_tile(_source, event):
@@ -2752,6 +3019,7 @@ def component_operations_widget(
                 state.training_tiles.clear()
             if rect not in state.training_tiles:
                 state.training_tiles.append(rect)
+            _store_pending_tiles()
             _update_confirmation_controls()
             _set_status('Checked tile selected. Click Confirm selected tiles for training to approve its objects and background.')
         _run_safely(select)
@@ -2815,6 +3083,7 @@ def component_operations_widget(
             large_controller.start(source, layer.name, layer=layer)
             analysis_scope_combo.setEnabled(False)
             large_controller.worker.finished.connect(lambda: analysis_scope_combo.setEnabled(True) if not state.closed else None)
+            large_controller.worker.finished.connect(lambda: _update_screening_hint() if not state.closed else None)
             return
         _invalidate_analysis()
         use_grid = bool(assign_grid_check.isChecked())
@@ -2841,6 +3110,7 @@ def component_operations_widget(
             _set_status(
                 f"Analyzed {len(fast_index.records)} connected component(s) in {layer.name} ({scope})."
             )
+        _restore_pending_selection()
 
     def _load_analysis_area():
         if large_controller.busy:
@@ -3065,6 +3335,8 @@ def component_operations_widget(
         index=state.fast_index
         if source_layer is None or not ids:
             raise ValueError("Select component rows to copy.")
+        if state.analyzed_revision != state.analysis_revision:
+            raise ValueError('Source annotations changed. Find components again before copying.')
         if state.analyzed_layer_name != source_layer.name or state.fast_index is None:
             raise ValueError(
                 "Component table is stale. Click Analyze before copying."
@@ -3077,6 +3349,11 @@ def component_operations_widget(
         from .workspace.service import _ensure_no_training, _ensure_no_library_scan
         _ensure_no_training(viewer)
         _ensure_no_library_scan(viewer)
+        if target_layer is not None and target_layer.name != copy_target_combo.currentText():
+            copy_target_combo.blockSignals(True)
+            copy_target_combo.setCurrentText(target_layer.name)
+            copy_target_combo.blockSignals(False)
+        _selection_updated(force=True)
         if _whole_bounded_analysis(source_layer):
             from . import _copy_destination as destination
             if state.analyzed_revision != state.analysis_revision:
@@ -3107,6 +3384,10 @@ def component_operations_widget(
                 destination.refresh_destination(target_layer)
                 state.last_copy_target_name = target_layer.name
                 _set_status(message or f'Copied {count:,} selected pixels at full-image coordinates.')
+                if message is None:
+                    _copy_completed()
+                else:
+                    _update_screening_hint()
             large_controller.copy_regions(destination.copy_work(source,index,ids,target_layer,offset),
                 source_layer,target_layer,copy_write,copy_done)
             return
@@ -3160,6 +3441,8 @@ def component_operations_widget(
                     state.last_copy_target_name=target_layer.name
                     _set_status(note+(message or f'Copied {count:,} pixels from {source_layer.name} to {target_layer.name} at original image coordinates.'))
                     _refresh_copy_targets()
+                    if message is None:
+                        _copy_completed()
                 def write(slices,mask,values,placement,preserving):
                     if preserving and not mask.any():
                         return (0,f'Matching {target_layer.name}: checking existing mask chunks…')
@@ -3195,6 +3478,7 @@ def component_operations_widget(
                     f"from {source_layer.name} to {target_layer.name}."
                 )
                 _refresh_targets()
+                _copy_completed()
 
             large_controller.edit_components(
                 index=index,
@@ -3220,6 +3504,7 @@ def component_operations_widget(
             f"to {target_layer.name}. Source layer remains active."
         )
         _refresh_targets()
+        _copy_completed()
 
     def _restore_copy_destination():
         if state.restore_copy_destination is None:
@@ -3241,6 +3526,14 @@ def component_operations_widget(
             return
         menu = QMenu(component_table)
         copy_menu = menu.addMenu("Copy selected to")
+        new_action = copy_menu.addAction('New group…')
+        def new_and_copy():
+            def apply():
+                if _new_group():
+                    _copy_selected_to_layer(_copy_target_layer())
+            _run_safely(apply)
+        new_action.triggered.connect(new_and_copy)
+        copy_menu.addSeparator()
         targets = _eligible_copy_targets(source_layer,manual=manual_copy_target_check.isChecked())
         if not targets:
             action = copy_menu.addAction("Prepare matching Curated and copy")
@@ -3295,6 +3588,9 @@ def component_operations_widget(
                 or workflow_tabs.currentIndex() != 1 or not click_select_check.isChecked()
                 or reviewed_area_widget.mouse_review_check.isChecked()):
             return
+        if large_controller.busy:
+            _set_status('Wait for the current mask operation before changing its selection.')
+            return
         layer = _target_layer()
         if layer is None:
             return
@@ -3320,7 +3616,10 @@ def component_operations_widget(
             _set_status('No component at this point. Click inside an annotated object; use Confirm edited tile for training to approve the checked area.')
             return
         if append_click_select_check.isChecked():
-            state.selected_component_ids.add(component_id)
+            if component_id in state.selected_component_ids:
+                state.selected_component_ids.remove(component_id)
+            else:
+                state.selected_component_ids.add(component_id)
         else:
             state.selected_component_ids = {component_id}
         if isinstance(fast_index, LargeComponentIndex) and component_id in fast_index.records:
@@ -3338,7 +3637,7 @@ def component_operations_widget(
         )
         if append_click_select_check.isChecked():
             _set_status(
-                f"Added component {component_id}{location} from canvas click. "
+                f"{'Added' if component_id in state.selected_component_ids else 'Removed'} component {component_id}{location} from canvas click. "
                 f"{selection_summary.text()}"
             )
         else:
@@ -3402,6 +3701,8 @@ def component_operations_widget(
         if entry is not None and entry.manager.loading and _whole_bounded_analysis(layer):
             return
         state.analysis_revision += 1
+        selection_overlay.hide()
+        _update_screening_hint()
         if click_select_check.isChecked() and workflow_tabs.currentIndex() == 1:
             picker_timer.start()
 
@@ -3441,12 +3742,16 @@ def component_operations_widget(
             grid_tiles._local_editing.follow.resume_from_review()
         _sync_mouse_callback()
         _update_confirmation_controls()
+        _selection_updated()
 
     def _run_safely(fn) -> None:
         try:
             fn()
         except Exception as e:
             _set_status(str(e))
+        finally:
+            if not state.closed:
+                _update_screening_hint()
 
     def _on_target_changed() -> None:
         if large_controller.edit_active:
@@ -3576,6 +3881,7 @@ def component_operations_widget(
 
     def _cleanup_callbacks(*_args) -> None:
         state.closed = True
+        selection_overlay.close()
         picker_timer.stop()
         _restore_picker_modes()
         _watch_analysis_layer(None)
@@ -3635,6 +3941,16 @@ def component_operations_widget(
     btn_copy.clicked.connect(
         lambda: _run_safely(lambda: _copy_selected_to_layer(_copy_target_layer()))
     )
+    new_group_button.clicked.connect(lambda: _run_safely(_new_group))
+    clear_selection_button.clicked.connect(lambda: _run_safely(_clear_selection))
+    undo_selection_button.clicked.connect(lambda: _run_safely(_undo_selection))
+    copy_target_combo.activated.connect(lambda _index: _run_safely(_group_changed))
+    def _connect_group_editor():
+        editor = copy_target_combo.lineEdit()
+        if editor is not None and not getattr(editor, '_screening_connected', False):
+            editor.editingFinished.connect(lambda: _run_safely(_group_changed))
+            editor._screening_connected = True
+    manual_copy_target_check.toggled.connect(lambda _checked: _connect_group_editor())
     btn_remove_small.clicked.connect(lambda: _run_safely(_remove_small_components))
     small_component_size_spin.valueChanged.connect(lambda _value: _update_selection_summary())
     btn_copy.setToolTip("Copy all currently selected rows to the chosen target layer.")
@@ -3710,9 +4026,20 @@ def component_operations_widget(
     container._tile_append_check = tile_append_check
     container._tile_selection_summary = tile_selection_summary
     container._clear_training_tiles_button = clear_tiles_button
+    container._pending_training_tiles = lambda: list(state.training_tiles)
+    reviewed_area_widget.batch_widget.selected_regions = container._pending_training_tiles
+    container._set_pending_training_tiles = _set_pending_tiles
     container._local_editing_controls = grid_tiles._local_editing
     container._confirmation_hint = confirmation_hint
     container._copy_button = btn_copy
+    container._screening_group = screening_group
+    container._screening_hint = screening_hint
+    container._new_group_button = new_group_button
+    container._undo_selection_button = undo_selection_button
+    container._clear_selection_button = clear_selection_button
+    container._clear_after_copy_check = clear_after_copy_check
+    container._selection_overlay = selection_overlay
+    container._switch_screening_group = _group_changed
     container._delete_button = btn_delete
     container._undo_delete_button = btn_undo_delete
     container._remove_small_button = btn_remove_small
@@ -3736,5 +4063,6 @@ def component_operations_widget(
         viewer, container, _refresh_and_sync
     )
     _refresh_targets()
+    _connect_group_editor()
     dynamic_edit_controller.sync()
     return container

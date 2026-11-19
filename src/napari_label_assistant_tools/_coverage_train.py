@@ -49,6 +49,7 @@ class IndexedPatches:
     sources: list = field(default_factory=list)
     source_info: list[dict] = field(default_factory=list)
     multilabel: bool = False
+    training_selection: dict = field(default_factory=dict)
 
     def indices(self, split):
         return [i for i, item in enumerate(self.locations) if item['split'] == split]
@@ -382,13 +383,14 @@ def masked_binary_loss(torch, logits, truth, valid):
     return segmentation_loss(torch, logits, truth, valid)
 
 
-def _validate(torch, network, dataset, device, cancel, *, step, total):
+def _validate(torch, network, dataset, device, cancel, *, step, total, evaluation_only=False):
     network.eval()
     tp = fp = fn = 0
     if dataset.class_names:
         tp, fp, fn = (np.zeros(len(dataset.class_names), dtype=np.int64) for _ in range(3))
     losses = []
     ids = dataset.indices('validation')
+    trial = dataset.validation.get('evaluation', {}).get('mode') == 'trial'
     with torch.no_grad():
         for done, index in enumerate(ids, start=1):
             _check_cancel(cancel)
@@ -421,7 +423,9 @@ def _validate(torch, network, dataset, device, cancel, *, step, total):
                 fp += int((prediction & ~truth & valid).sum())
                 fn += int((~prediction & truth & valid).sum())
             if done == len(ids) or done % max(1, len(ids) // 100) == 0:
-                yield QuickTrainProgress(step, total, f'Validating reserved regions: {done:,}/{len(ids):,} patches.')
+                label = 'Trial validation' if trial else 'Validating reserved regions'
+                yield QuickTrainProgress(done if evaluation_only else step, len(ids) if evaluation_only else total,
+                                         f'{label}: {done:,}/{len(ids):,} patches.')
     return {'loss': float(np.mean(losses)), **metrics_from_counts(tp, fp, fn)}
 
 
@@ -453,6 +457,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
     started = monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
     train_count = len(dataset.indices('training'))
+    trial = dataset.validation.get('evaluation', {}).get('mode') == 'trial'
     patches_per_epoch = train_count + (int(np.ceil(train_count * extra_targets)) if extra_targets else 0)
     steps_per_epoch = (patches_per_epoch + config.batch_size - 1) // config.batch_size
     total, step = epochs * steps_per_epoch, 0
@@ -497,7 +502,8 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
                 if step % max(1, steps_per_epoch // 200) == 0 or start + config.batch_size >= len(order):
                     yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs} · coverage {len(visited):,}/{train_count:,} training patches ({len(visited)/train_count:.0%}) · step {step:,}/{total:,} · batch training loss {float(loss.detach()):.3f}.')
             if validation_enabled:
-                yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs}: validating all reserved patches…')
+                label = 'trial validation on selected reserved patches' if trial else 'validating all reserved patches'
+                yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs}: {label}…')
                 metrics = yield from _validate(torch, network, dataset, device, cancel, step=step, total=total)
                 checkpoints.append({'epoch': epoch, 'step': step, 'unique_patches': len(visited),
                     'learning_rate': optimizer.param_groups[0]['lr'], 'training_loss_last_batch': float(loss.detach()), 'validation': dict(metrics)})
@@ -505,7 +511,8 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
                     best_score, best_metrics, retained_epoch = metrics['dice'], metrics, epoch
                     best_state = {key: value.detach().cpu().clone() for key, value in network.state_dict().items()}
                 loss_summary = f" · validation loss {metrics['loss']:.4f}" if 'loss' in metrics else ''
-                yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs} complete · coverage 100% · validation Dice {metrics["dice"]:.1%} · IoU {metrics["iou"]:.1%}{loss_summary}.', metrics=dict(metrics), epoch=epoch, training_loss_last_batch=float(loss.detach()), training_step=step)
+                label = 'trial validation' if trial else 'validation'
+                yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs} complete · coverage 100% · {label} Dice {metrics["dice"]:.1%} · IoU {metrics["iou"]:.1%}{loss_summary}.', metrics=dict(metrics), epoch=epoch, training_loss_last_batch=float(loss.detach()), training_step=step, series='Trial validation' if trial else None)
             else:
                 retained_epoch = epoch
                 best_state = {key: value.detach().cpu().clone() for key, value in network.state_dict().items()}
@@ -535,6 +542,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             'started_at_utc': started_at, 'finished_at_utc': datetime.now(timezone.utc).isoformat(),
             'duration_seconds': monotonic() - started, 'config': {**asdict(config), 'class_names': list(config.class_names)},
             'dataset_snapshot_id': dataset_snapshot(dataset, source_info)['id'], 'library_versions': library_versions(), 'epochs': epoch, 'max_epochs': epochs,
+            'training_selection': deepcopy(dataset.training_selection or {'mode': 'all'}),
             'plateau_control': {'enabled': bool(plateau_enabled and validation_enabled), 'requested': plateau_enabled, 'reduce_patience': reduce_patience,
                 'stop_patience': stop_patience, 'factor': lr_factor, 'min_delta': min_delta},
             'learning_rate_events': lr_events, 'stop_reason': stop_reason,
@@ -550,6 +558,50 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
         if network is not None:
             network.cpu()
         if device == 'cpu':
+            torch.set_num_threads(old_threads)
+
+
+def evaluate_full_validation(model, dataset, *, device='auto', source_info=None, cancel=None):
+    """Evaluate fixed weights on the complete reserved pool, without training."""
+    from ._patch_subset import check_validation_supervision
+    from ._model_comparison import dataset_snapshot
+    if dataset.validation.get('method') == 'kfold':
+        raise ValueError('Full validation requires a prepared spatial/image holdout dataset.')
+    if dataset.validation.get('evaluation', {}).get('mode') == 'trial':
+        raise ValueError('Use the full prepared validation pool, not a trial subset.')
+    if dataset.validation_seen_before:
+        raise ValueError('This model has trained in the reserved validation regions. Prepare independent validation regions.')
+    if ((model.crop_pixels, model.config.input_pixels) != (dataset.crop_pixels, dataset.input_pixels) or
+            model.config.class_names != tuple(dataset.class_names) or model.config.multilabel != dataset.multilabel):
+        raise ValueError('Prepare patches matching the loaded model input size, source patch size, and classes/channels.')
+    check_validation_supervision(dataset)
+    _check_cancel(cancel)
+    torch = _torch()
+    actual_device = _device(torch, device)
+    old_threads = torch.get_num_threads()
+    network = model.network
+    was_training = network.training
+    started = monotonic()
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        if actual_device == 'cpu':
+            torch.set_num_threads(min(old_threads, 4))
+        network.to(actual_device)
+        metrics = yield from _validate(torch, network, dataset, actual_device, cancel,
+                                       step=0, total=1, evaluation_only=True)
+        _check_cancel(cancel)
+        rows = [p for p in dataset.locations if p['split'] == 'validation']
+        snapshot = dataset_snapshot(replace(dataset, locations=rows), source_info)
+        return dict(scope='full_reserved_validation', metrics=dict(metrics), patches=len(rows),
+                    positive_patches=sum(p['contains_foreground'] for p in rows),
+                    started_at_utc=started_at, finished_at_utc=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=monotonic() - started, device=actual_device,
+                    dataset_snapshot_id=snapshot['id'], validation=deepcopy(dataset.validation),
+                    locations=deepcopy(rows), source=deepcopy(source_info or {}),
+                    training_steps=model.training_steps)
+    finally:
+        network.cpu().train(was_training)
+        if actual_device == 'cpu':
             torch.set_num_threads(old_threads)
 
 

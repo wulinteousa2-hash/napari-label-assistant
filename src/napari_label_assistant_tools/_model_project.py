@@ -115,15 +115,40 @@ def remember_model(viewer, model, *, task_id=None, path=None, select=True, name=
     return row
 
 
+def record_model_evaluation(viewer, model, evaluation):
+    """Save evaluation provenance on the same run, without inventing training steps."""
+    state = project(viewer)
+    identifier = model.identity.get('model_id')
+    row = next((r for r in state['models'] if r['id'] == identifier), None)
+    revision = (state.get('current_checkpoint') if state.get('current_model') == identifier else None)
+    revision = revision or (row['revision'] if row else None)
+    result = {**deepcopy(evaluation), 'id': uuid4().hex, 'checkpoint_revision': revision}
+    if not model.history:
+        model.history.append({'mode': 'evaluation_only'})
+    model.history[-1].setdefault('evaluations', []).append(result)
+    if row is not None:
+        if revision == row['revision']:
+            row['history'] = [history_summary(h) for h in model.history]
+            row['saved_revision'] = None
+        for run in row.get('runs', []):
+            if run['revision'] == revision:
+                run.update(history=history_summary(model.history[-1]), saved_revision=None)
+    notify_project(viewer)
+    return result
+
+
 def save_project(viewer, manifest, data_root, complete_package):
     from ._quick_train import save_model
+    from ._model_naming import checkpoint_filename, available_checkpoint_path
+    from ._model_files import copy_checkpoint_bundle
     widget = getattr(viewer, "_label_assistant_training_widget", None)
     if widget is not None:
         project(viewer)["settings"] = widget.project_settings()
     state = deepcopy(project(viewer))
     runtime = getattr(viewer, RUNTIME)
     folder = data_root / "models"
-    def persist(entry, identifier, model):
+    def persist(entry, row, model):
+        identifier = row["id"]
         revision = entry.get("revision", "")
         if not isinstance(identifier, str) or not identifier.isalnum() or not isinstance(revision, str) or not revision.isalnum():
             raise ValueError("Invalid model identifier or checkpoint revision in project.")
@@ -135,24 +160,13 @@ def save_project(viewer, manifest, data_root, complete_package):
                 if model is None:
                     raise ValueError("Cannot save updated model: checkpoint weights are unavailable.")
                 folder.mkdir(parents=True, exist_ok=True)
-                destination = folder / f"{identifier}-{revision}.pt"
+                destination = available_checkpoint_path(folder, checkpoint_filename(row, entry))
                 save_model(model, destination)
                 source = destination
             elif complete_package and not owned:
-                import shutil
-                folder.mkdir(parents=True, exist_ok=True)
-                destination = folder / f"{identifier}-{revision}.pt"
-                if source.resolve() != destination.resolve():
-                    for suffix in ('.pt', '.history.json', '.learning.svg', '.loss.svg', '.metrics.csv'):
-                        item = source.with_suffix(suffix)
-                        if item.is_file():
-                            temporary = destination.with_suffix(suffix + '.' + uuid4().hex + '.tmp')
-                            try:
-                                shutil.copy2(item, temporary)
-                                os.replace(temporary, destination.with_suffix(suffix))
-                            finally:
-                                temporary.unlink(missing_ok=True)
-                source = destination
+                # Saved names (including older UUID names) remain stable on Save As.
+                filename = source.name if source.suffix.lower() == ".pt" else checkpoint_filename(row, entry)
+                source = Path(copy_checkpoint_bundle(source, folder, identifier, revision, filename))
             entry["saved_revision"] = revision
         elif source is None:
             raise ValueError("Model has no saved checkpoint.")
@@ -163,12 +177,12 @@ def save_project(viewer, manifest, data_root, complete_package):
 
     for row in state["models"]:
         identifier = row["id"]
-        persist(row, identifier, runtime.get(identifier))
+        persist(row, row, runtime.get(identifier))
         for run in row.get("runs", []):
             if run["revision"] == row["revision"]:
                 run.update(checkpoint=row["checkpoint"], saved_revision=row["saved_revision"])
             else:
-                persist(run, identifier, runtime.get(identifier + ":" + run["revision"]))
+                persist(run, row, runtime.get(identifier + ":" + run["revision"]))
     reports_folder = data_root / "comparisons"
     for report in state["comparisons"]:
         identifier = report.get("id", "")
@@ -243,7 +257,10 @@ def resolve_references(state, manifest):
 def history_summary(record):
     """Keep manifests small; full coordinates and curves remain in checkpoints."""
     result = {key: deepcopy(value) for key, value in record.items()
-              if key not in ("locations", "checkpoints", "cross_validation_report", "validation_blocks")}
+              if key not in ("locations", "checkpoints", "cross_validation_report", "validation_blocks", "evaluations")}
+    if 'evaluations' in record:
+        result['evaluations'] = [deepcopy({k: v for k, v in evaluation.items() if k != 'locations'})
+                                 for evaluation in record['evaluations']]
     if "validation" in result:
         result["validation"] = {key: value for key, value in result["validation"].items()
                                 if key not in ("folds", "validation_blocks")}

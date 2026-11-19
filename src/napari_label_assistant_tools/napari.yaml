@@ -4,6 +4,12 @@ visibility: public
 
 contributions:
   commands:
+    - id: napari-label-assistant.simple_curation
+      title: "Label Curation — Simple"
+      python_name: napari_label_assistant_tools._label_assistant:open_simple_curation
+    - id: napari-label-assistant.advanced_curation
+      title: "Label Curation — Advanced"
+      python_name: napari_label_assistant_tools._label_assistant:open_advanced_curation
     - id: napari-label-assistant.label_assistant
       title: "Label Curation"
       python_name: napari_label_assistant_tools._label_assistant:label_assistant_widget
@@ -31,7 +37,9 @@ contributions:
       - submenu: napari-label-assistant.main
         when: "True"
     napari-label-assistant.main:
-      - command: napari-label-assistant.label_assistant
+      - command: napari-label-assistant.simple_curation
+        when: "True"
+      - command: napari-label-assistant.advanced_curation
         when: "True"
       - command: napari-label-assistant.quick_train
         when: "True"

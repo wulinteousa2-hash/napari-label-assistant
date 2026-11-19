@@ -190,6 +190,42 @@ def test_stale_reads_and_read_failure_retain_buffers(editor, qtbot, monkeypatch)
     assert entry.layer.data is buffer and entry.bounds == bounds
 
 
+@pytest.mark.parametrize('select_overview', [True, False])
+def test_zooming_in_restores_only_selected_overviews(editor, qtbot, tmp_path, select_overview):
+    from napari_label_assistant_tools import _label_pyramid as pyramid
+    from napari_label_assistant_tools.workspace.service import _remember_layer_storage
+    viewer, manager, controls, _ = editor
+    root = zarr.open_group(str(tmp_path / 'overview.ome.zarr'), mode='w')
+    names = []
+    for i, shape in enumerate(pyramid.level_shapes((100000, 100000))):
+        root.create_array(f's{i}', shape=shape, chunks=(256, 256), dtype='uint32')
+        names.append(f's{i}')
+    root.attrs[pyramid.KEY] = dict(method=pyramid.METHOD, complete=True, dirty_regions=[], datasets=names)
+    entry = manager.entries[0]
+    entry.source.data = root['s0']
+    _remember_layer_storage(entry.source, dict(path=tmp_path / 'overview.ome.zarr', array_path='s0'))
+    entry.refresh_overview()
+    overview = entry.overview
+    assert overview is not None
+    controls.auto_follow.setChecked(True)
+    ready(controls, qtbot)
+    entry.layer.mode = 'paint'
+    viewer.camera.zoom = .001
+    qtbot.waitUntil(lambda: controls.follow.state == 'overview', timeout=10000)
+    selected = overview if select_overview else viewer.add_image(np.zeros((16, 16)))
+    viewer.layers.selection.active = selected
+    viewer.camera.zoom = 2
+    ready(controls, qtbot)
+    assert entry.layer.editable
+    assert viewer.layers.selection.active is (entry.layer if select_overview else selected)
+    assert str(entry.layer.mode) == 'paint'
+    if select_overview:
+        entry.layer.brush_size = 1
+        entry.layer.paint((20, 20), 17)
+        manager.flush()
+        assert root['s0'][entry.bounds[0].start + 20, entry.bounds[1].start + 20] == 17
+
+
 def test_conflicting_writer_pauses_without_losing_edits(editor, qtbot):
     viewer, manager, controls, array = editor
     controls.auto_follow.setChecked(True)

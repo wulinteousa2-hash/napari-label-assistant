@@ -99,7 +99,7 @@ class WorkspaceManagerWidget(QWidget):
         self.optimize_images_check.setToolTip(
             "Create multiscale copies of large images for smoother zooming and navigation. "
             "Applies to single-scale 2D images larger than 32,768 pixels on either axis. "
-            "Existing pyramids are preserved. Reopen the workspace to use new optimized copies. "
+            "Existing pyramids are preserved. New optimized copies are activated after saving. "
             "This option can be combined with Include all data (portable)."
         )
         self.optimize_images_note = QLabel(
@@ -409,8 +409,8 @@ class WorkspaceManagerWidget(QWidget):
         def _success(result) -> str:
             optimized = int(result.get("optimized_images", 0))
             detail = (
-                f" Prepared {optimized} image(s) for multiscale viewing; "
-                "reopen the workspace to use them."
+                f" Multiscale viewing is active for {optimized} image(s); "
+                "no reopening is needed."
                 if optimized
                 else ""
             )
@@ -418,6 +418,8 @@ class WorkspaceManagerWidget(QWidget):
             saved_path = result.get("path")
             if result.get("complete_package"):
                 detail += " Portable workspace saved. Keep the workspace file and data folder together."
+            if result.get('progress_warning'):
+                detail += f" Tile progress recovery warning: {result['progress_warning']}"
             return f"Workspace saved at {datetime.now():%H:%M:%S}: {saved_layers} layer(s) to {saved_path}." + detail
 
         try:
@@ -515,6 +517,8 @@ class WorkspaceManagerWidget(QWidget):
             f"{len(result['restored_layers']) + len(result['skipped_layers'])} layers from "
             f"{result['path']}. "
             f"Unavailable: {len(result['skipped_layers'])} layer(s)."
+            + (' Tile progress: ' + '; '.join(result['progress_warnings'])
+               if result.get('progress_warnings') else '')
         )
         if result["skipped_layers"]:
             details = "\n".join(f"{item['name']}: {item['reason']}" for item in result["skipped_layers"])
@@ -594,6 +598,7 @@ class WorkspaceManagerWidget(QWidget):
 
     def _disassociate_workspace(self) -> None:
         self.workspace_path = None
+        self.viewer._label_assistant_progress_manifest = None
         self.viewer._label_assistant_missing_workspace_layers = []
         self.viewer._label_assistant_missing_workspace_records = []
         self.viewer._label_assistant_workspace_storage_state = None
@@ -604,8 +609,9 @@ class WorkspaceManagerWidget(QWidget):
         notify_project(self.viewer)
 
     def _has_project_layer(self) -> bool:
+        ids = getattr(self.viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, self._project_layer_ids)
         return any(
-            id(layer) in self._project_layer_ids
+            id(layer) in ids
             for layer in list(getattr(self.viewer, "layers", ()))
         )
 
@@ -622,6 +628,11 @@ class WorkspaceManagerWidget(QWidget):
         ):
             return
         previous = self.workspace_path
+        journal = getattr(self.viewer, '_label_assistant_progress_journal', None)
+        if journal is not None:
+            # Viewer.close() clears layers before the window-close event.
+            # Flush the already captured metadata while its workspace is known.
+            journal.flush()
         self._disassociate_workspace()
         self._refresh_current_label()
         self._set_status(
@@ -647,7 +658,8 @@ class WorkspaceManagerWidget(QWidget):
         portable = bool(self.storage_mode_combo.currentData())
         self.settings.setValue(COMPLETE_PACKAGE_KEY, portable)
         self.package_note.setText(
-            "Copy all images and masks. Keep the workspace file and data folder together."
+            "Copy all images and masks; reuse data already in this package. "
+            "Keep the workspace file and data folder together."
             if portable else
             "Keep saves lightweight. Linked source files must remain accessible."
         )

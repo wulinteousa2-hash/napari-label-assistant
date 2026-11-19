@@ -527,14 +527,17 @@ class ModelLibraryWidget(QWidget):
         return selected[0]
 
     def _copy_into_workspace(self):
-        from ._model_files import workspace_locations, copy_checkpoint_bundle
+        from ._model_files import workspace_locations, copy_checkpoint_bundle, entry_for
+        from ._model_naming import checkpoint_filename
         row = self._file_selection()
         manifest, folder = workspace_locations(self.viewer)
         if manifest is None or not manifest.is_file():
             raise ValueError("Save or open the workspace before copying model files into it.")
         if row["file_status"] != "Linked externally":
             raise ValueError("Select a saved external checkpoint. Save unsaved weights or locate a missing file first.")
-        self._start_file_operation(copy_checkpoint_bundle, row, "Copied checkpoint and available reports into the workspace", row["checkpoint"], folder, row["model_id"], row["revision"])
+        model, entry = entry_for(self.viewer, row)
+        filename = checkpoint_filename(model, entry)
+        self._start_file_operation(copy_checkpoint_bundle, row, "Copied checkpoint and available reports into the workspace", row["checkpoint"], folder, row["model_id"], row["revision"], filename)
 
     def _locate_missing_file(self):
         from copy import deepcopy

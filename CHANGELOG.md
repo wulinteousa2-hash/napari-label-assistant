@@ -5,6 +5,57 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-11-19
+
+### Added
+
+- Simple and Advanced modes share one annotation, review, workspace, and training
+  state. Simple mode groups Workspace, Annotate & Review, and Progress & Dataset
+  with compact controls and expandable tools.
+- Save pending tile selections and review metadata in the existing workspace's
+  progress journal. Show approval/save progress, support review revocation and
+  undo, and keep selected tiles visible with strong yellow outlines.
+- Organize annotation work into named batches with stable IDs, review-event dates,
+  membership revisions, finish/reopen controls, and training-run references.
+- Preserve unique batch colors after approval. Show the active batch, all batches,
+  or hide batch history; dim earlier batches and flag stale approvals with red
+  crosses. Coordinate overlays stay independent of training selection and pixels.
+- Prepare individual batches or cumulative reviewed data. Retain earlier model
+  holdout regions during continuation, including unsampled quick-trial blocks.
+- Select a reproducible percentage or count of model-training patches. Optional
+  Quick trial validation samples only from reserved validation regions, recording
+  both subset choices in training provenance.
+- Offer larger custom U-Net widths and display parameter/weight-size estimates.
+  Continue training retains the loaded checkpoint architecture and weights.
+- Save model checkpoints with readable automatic names including model/source,
+  architecture, width, input size, round, and batch where applicable. Preserve
+  checkpoint and JSON training-history associations.
+- Add component-screening shortcuts and workflow diagrams/documentation.
+
+### Fixed
+
+- Build review grids and addresses from full-source mask dimensions/registration
+  instead of overview placeholders or camera-follow crops. Select and approve
+  review tiles directly while viewing large-mask overviews.
+- Activate saved workspace storage for subsequent linked saves without requiring
+  an application restart. Preserve managed mask identities and bounded editing.
+- Safely handle layer removal and mask-overview lifecycle during external-plugin
+  operations; keep successfully approved review coverage visible.
+- Preserve prepared datasets when selecting compatible model configurations or
+  checkpoints; reassess validation exposure when loading weights.
+- Keep active-batch reviewed-region preparation available without rebuilding
+  unrelated pending object selections. Unknown pixels retain existing validity.
+
+### Compatibility
+
+- Python 3.11+, napari 0.9.1+, workspace format version 2, existing annotation
+  stores, and binary/multiclass/multilabel checkpoints remain supported.
+- Existing workspaces retain cumulative preparation unless a batch is explicitly
+  selected for training. Earlier review dates and historical pixels are not
+  reconstructed. Batch colors describe membership, not complete training use.
+- This major version marks the accumulated workflow/UI changes. PyPI publication
+  remains separate from this GitHub source update.
+
 ## [6.4.0] - 2026-11-08
 
 ### Changed

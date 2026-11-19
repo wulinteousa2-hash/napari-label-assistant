@@ -50,6 +50,72 @@ continue a model. Detailed metrics/history expand on demand. Edit & Confirm keep
 the cell selection and mask correction tools; Mask Analysis & Cleanup keeps component sorting,
 copying, and deletion. Switching pages preserves the selected cell and annotations.
 
+## Annotation batches
+
+Simple **3. Progress & Dataset**, Advanced **Labels → Local Editing → Confirm
+tiles for dataset**, and **Training → Dataset** show the same batch buttons.
+The active button is highlighted. **+ New batch** creates the next numbered,
+empty workset and selects that named batch in the **Training** dropdown. New approvals join
+that workset, with UTC review-event timestamps. Batch creation, selection, and
+training never automatically approve annotation pixels.
+
+Existing confirmed-region membership is retained as Batch 1 when first initializing
+batches. Its earlier approval dates are not reconstructed, and it is not presented
+as an exact historical training-dataset snapshot. Workspaces without batch metadata
+retain cumulative preparation. The first explicit new batch on an unreviewed image
+is Batch 1; the next batch after existing review work is Batch 2.
+
+Click a button to highlight its regions and make it active for subsequent
+annotation approvals. This leaves the explicit **Training: Batch N** selection
+unchanged, so viewing history does not invalidate a prepared dataset. Changing
+training selection or its membership invalidates prepared data; selecting another
+annotation batch clears pending tile selections. Global review coverage is separate and counts each region
+once. Right-click a button to add selected, already-reviewed regions; remove regions
+from membership without revoking global review; rename; finish/reopen; or inspect
+its dated review actions and model-run references. Finished batches remain available
+for training, but must be reopened before adding approvals. Grid-size changes do
+not move stored coordinates; counts describe member regions rather than a newly
+resized grid. Current review validity still controls supervised pixels.
+
+**Training: all reviewed annotations** restores the cumulative annotation sources.
+**Training: Batch N** clips existing supervision to that batch's member coordinates,
+including for multiple pairs and independent channels. Each image/Labels pair owns
+its selection; configure all included pairs/channels deliberately. Unknown pixels
+retain their existing validity masks. A reviewed-region batch can be prepared
+without rebuilding unrelated pending component selections; those pending selections
+are excluded from that run. Cumulative preparation retains its existing library
+update requirements. No global connected-component analysis is introduced by batch
+selection.
+
+Each batch has a persistent color and a matching button marker. **Show: Active
+batch**, **Show: All batches**, and **Show: Hide** only affect display. Approval
+updates the colored overlay automatically. In All batches, earlier batches have
+dim outlines and lighter fill. Overlap fragments belong visually to the active
+batch first, then the most recent earlier batch, preventing blended identities.
+Yellow remains reserved for pending selections. A red × marks any member region
+that is no longer fully reviewed; its border retains its batch color. These
+coordinate overlays do not allocate image-sized masks or change training validity.
+Colors, display preference, and the independent training selection persist in
+workspace metadata; older batches receive stable fallback colors without altering
+historical approval dates. Colors indicate membership, not that every patch was
+used in training or that historical annotation pixels were frozen.
+
+After training Batch 1, save the checkpoint. Create Batch 2, review additional
+regions, prepare Batch 2, select the saved model, and click **Continue training**.
+This retains the model architecture and weights, including width 64. Training data
+comes from the selected batch; older examples are included only through an explicit
+selection or the cumulative scope. Earlier validation coordinates remain held out
+when preparing batches for the loaded model. If a batch cannot supply independent
+training and validation targets/background, preparation explains what is missing.
+Loading a model after preparation reassesses the reserved regions before continuation.
+
+Training histories record batch IDs, names, membership revisions, and selected
+coordinates in addition to the actual model patches used. A trained batch is not
+automatically marked fully used: percentage sampling may visit only some patches.
+Historical runs are not retroactively assigned to imported batches. Source pixels
+are shared, not frozen historical copies; annotation changes still require review
+and re-preparation. Exact restoration of old annotation pixels is a separate capability.
+
 ## Optional model dependencies
 
 Install SMP in the environment running napari with
@@ -59,6 +125,20 @@ napari from the same environment before training. See
 for commands and how to distinguish missing SMP from a broken dependency import.
 
 ## Confirmed tiles and saved object selections
+
+**Label Curation — Simple** provides a compact route: edit with automatic camera
+follow, approve the current review tile or select several checked tiles in Review
+mode, then **Prepare Dataset → Open Training**. Selected yellow tiles remain
+pending until approved. Approval includes both annotated foreground and verified
+background. Subsequent painting requires re-review. Tools can clear pending
+selection, revoke approval, or undo the last review action without changing mask
+values. The Advanced presentation retains all existing source, channel, and
+training settings; switching presentations shares the same controllers.
+
+Review-tile size determines approval boundaries. The edit-buffer size controls
+memory usage, and the training crop size controls model inputs; these sizes need
+not match. Tile-progress recovery becomes available after the first workspace
+save, while full workspace Save remains necessary for new layers and other settings.
 
 These annotation workflows apply to **This image** mode. For several images,
 open **Advanced source options → Source mode → Multiple images → Manage pairs…**. Select pairs,
@@ -75,7 +155,8 @@ single-pair workflow continues to reserve spatial regions within its image.
 
 Keep **Partial — confirmed tiles** when Curated contains only some targets.
 Zero pixels may contain missing objects, so they must not automatically become
-background. Partial mode uses **All patches (recommended)**.
+background. Partial mode uses **All / selected training patches** and supports
+percentage/count trial subsets while preserving its supervision-validity masks.
 
 Whole-mask Labels overviews use derived OME-Zarr resolution levels for display.
 Dataset indexing and supervision always read full-resolution `s0`, including
@@ -245,7 +326,8 @@ unavailable there.
 
 ## Coverage training
 
-**All patches (recommended)** is the coverage workflow for large images.
+**All / selected training patches** (formerly **All patches**) is the coverage
+workflow for large images. **All** remains the default training amount.
 
 - **Source patch size** is the area read from the original image.
 - **Model input size** is the resolution fed into the model after resizing.
@@ -255,12 +337,57 @@ unavailable there.
 - The gallery contains representative examples. It is not the whole training
   dataset. The dataset summary reports total patches, train/validation counts,
   and reviewed area as a percentage of the image.
-- Each **epoch** visits every eligible training patch in shuffled order. The
+- Each **epoch** visits every selected training patch in shuffled order. The
   **batch size** is the number of patches processed in one model update.
 - **Additional target patches** adds repeat visits to patches containing targets;
-  these visits supplement, rather than replace, coverage of the full training set.
+  these visits supplement, rather than replace, coverage of the chosen training set.
 - Validation uses reserved spatial blocks and does not update model weights.
   Patch reads, loss, and validation exclude image-edge padding and unknown pixels.
+
+### Quick trials from confirmed annotations
+
+In **Dataset → Training patch selection**, choose **All**, **Percentage**, or
+**Number of training patches** after preparing the index. These are model patches,
+not review-grid tiles. A 10% budget over 1,225 eligible training patches uses 123
+unique training patches. Counts larger than the available pool use all available
+training patches. The summary reports the actual number and target-containing
+count; Train reports additional target repeats separately.
+
+Subset selection happens after the spatial/image-group split and never selects
+validation patches for training. By default, every reserved validation patch is
+evaluated each epoch. Enable **Quick trial — smaller validation set** to reduce
+that work too. If training was set to All, enabling Quick trial switches it to the
+training percentage setting. Existing percentage/count choices are retained.
+Set **Validation percentage** independently (default 10%). For example, a pool of
+5,257 training and 1,813 validation patches uses 526 training and 182 validation
+patches when both percentages are 10%.
+
+The validation sample stays fixed across epochs, training percentages, and training
+subset seeds. It follows **Validation → Split seed** and spreads samples across
+reserved spatial/image groups, with proportional foreground/background sampling.
+Small subsets must still supply the required foreground/background and class/channel
+coverage; otherwise the controls explain what is missing. Training and validation
+selection uses metadata only and reuses the prepared index; initial preparation
+still indexes all eligible patches. Changing **Subset seed** chooses different
+training coordinates without changing validation or rescanning annotations.
+
+Quick-trial metrics are labeled **Trial validation** in the UI, curves, model library,
+and CSV reports. They select the trial checkpoint and are approximate subset scores.
+After training, select **Train → Validation → Evaluate full validation set** to
+evaluate the retained weights once on the complete reserved pool. This makes no
+optimizer updates and does not reselect weights. Full-validation metrics and their
+dataset provenance are stored separately from trial checkpoint-selection scores.
+Save the workspace or export the model afterward to preserve that evaluation.
+Full validation is still held-out validation, not an independent test-image score.
+
+Approvals, foreground-only object selections, and channel-specific unknown pixels
+remain unchanged. Patch previews and canvas split overlays use the chosen subset.
+Workspace settings store both budgets and their seeds. Existing workspaces without
+Quick trial settings default to full validation. Completed model histories record
+the budgets, available/selected counts, and actual selected coordinates; training
+footprints are recorded only for patches used in training. Choosing **All** restores
+the full eligible pool. K-fold validation and final all-reviewed training use their
+existing full-index workflows; trial-budget controls are disabled for k-fold.
 
 To protect partial annotations when downsampling, a model pixel is supervised
 only if every source pixel contributing to it is reviewed. If reviewed pixels
@@ -274,16 +401,72 @@ seed changes patch order without requiring reindexing. Apply annotation correcti
 and index again when the image, ground truth, reviewed mask, or patch size changes.
 The same source and patch size retain reserved validation blocks within the panel;
 coverage models save those block assignments and restore them when loaded with a
-matching image name, image dimensions, and patch size. Loading a model requires
-preparing the dataset again. Known sampled-training regions from the same image
+matching image name, image dimensions, and patch size. Loading a model can reuse a compatible prepared dataset; otherwise prepare
+the dataset again. Known sampled-training regions from the same image
 name are excluded when selecting new validation blocks. If no independent reviewed
 target blocks remain, review new regions or start a new model.
 
 The panel calculates updates per epoch and total updates before training.
 Progress reports epochs, unique training patches visited, model updates, and
 validation progress. The checkpoint with the best validation Dice is retained.
-Continuation can retain the starting weights if no epoch improves validation.
+Continuation retains the starting weights if every evaluated epoch scores lower;
+ties retain the latest evaluated weights.
 A continuation round uses a fresh optimizer. Cancel preserves the previous model.
+
+## Continue training an existing model
+
+**Continue training** improves the model currently in memory, including one
+loaded from a `.pt` checkpoint exported by this plugin. **Train new model**
+creates another model using the selected architecture and initialization; it
+does not start from the current model's trained weights.
+
+1. Train a model or load its checkpoint in **Models**.
+2. Select its biological task and keep its class/channel definitions compatible.
+   Continue reuses the current model's architecture automatically.
+3. In **Dataset**, prepare the dataset if it is missing or outdated. A compatible
+   prepared dataset can be reused. **Show patch preview** is optional.
+4. Set **Learning rate** in **Advanced**, then open **Train** and click
+   **Continue training**.
+5. Save the model or workspace again to persist the completed round.
+
+Continue starts with the existing weights but creates a **new AdamW optimizer**.
+It does not resume the old optimizer's internal state. A smaller learning rate,
+such as `0.0001`, is an optional fine-tuning setting, not a required value or a
+guarantee of improvement.
+
+At the beginning of a continuation round, the starting model is evaluated on
+the current validation data. After further training, the weights with the best
+validation Dice in that round are retained. If every evaluated checkpoint is
+worse, the starting weights are kept. A tie keeps the latest evaluated weights.
+Cancel discards the unfinished round and preserves the previous model and its
+completed history. Completed-round and total optimizer-update counts still
+increase when a round finishes, even if the starting weights win.
+
+In **Sample patches** mode, increasing crop count or changing the sampling seed
+can select different training locations. The coverage workflow visits every
+chosen training patch each epoch; its trial budget can select a subset of the
+eligible pool. Training longer on a fixed sample does not expand its
+spatial coverage. Retaining representative earlier examples in later rounds can
+help reduce forgetting.
+
+Compatible single-image All-patches preparation reuses reserved spatial blocks;
+changing annotations requires preparation again but does not necessarily move
+those blocks. Multiple-image datasets keep entire image/specimen groups together.
+Compare round scores only when validation regions, targets, and preprocessing
+are equivalent. All-patches continuation is blocked when the plugin detects that
+the model already trained in the selected holdout; choose independent validation
+regions or train a new model. Spatial k-fold evaluation starts fresh models and
+does not support Continue training.
+
+Saving writes completed history inside the `.pt` checkpoint and also exports
+`model.history.json` beside `model.pt`. Each completed round records timestamps,
+duration, source information, settings, learning rate, and patch locations/counts.
+Sampled training records metrics at evaluation steps and a `retained_step`;
+All-patches training records epoch evaluations and a `retained_epoch`. These are
+periodic evaluation records, not a log of every optimizer update. Loading and
+continuing appends another completed round; saving to another path carries the
+history forward. Supported older plugin checkpoints remain loadable, but missing
+historical rounds cannot be reconstructed.
 
 ## Saving and reviewing the model
 
@@ -323,8 +506,9 @@ Partial annotations require coverage training with a reviewed-region mask.
    applied first. Bounded editing creates a sparse review mask automatically;
    legacy full-layer editing asks for a storage location. Green outlines show reviewed areas.
 5. In Training choose **Partial — confirmed tiles**. This automatically
-   uses **All patches (recommended)**; sampled-patch training is available only
-   for complete annotations. The associated
+   uses **All / selected training patches**. The separate legacy **Sample patches**
+   workflow remains available only for complete annotations; use **Training patch
+   selection** for trials with partial annotations. The associated
    **Curated** ground truth and **Reviewed regions** coverage are selected
    automatically. Click **Prepare dataset**, then train. Patch preview is optional.
 

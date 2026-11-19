@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, replace
 from importlib.util import find_spec
 
 _REGISTERED_PROVIDERS = {}
+CUSTOM_UNET_WIDTHS = (4, 8, 12, 16, 32, 64)
 
 def register_model_provider(name, builder, *, validator=None):
     """Register trusted Python code: builder(spec, initialize=bool) -> nn.Module."""
@@ -32,8 +33,8 @@ class ModelSpec:
             raise ValueError("Unsupported preprocessing.")
         if self.provider in ("custom", "standard") and (self.architecture != "unet" or self.initialization != "random"):
             raise ValueError("Built-in U-Nets use random initialization.")
-        if self.provider == "custom" and self.width not in (4, 8, 12, 16):
-            raise ValueError("Custom U-Net width must be 4, 8, 12 or 16.")
+        if self.provider == "custom" and self.width not in CUSTOM_UNET_WIDTHS:
+            raise ValueError("Custom U-Net width must be 4, 8, 12, 16, 32 or 64.")
         if self.provider == "standard" and self.width not in (16, 32, 64):
             raise ValueError("Standard U-Net width must be 16, 32 or 64.")
         if self.provider == "smp" and self.architecture not in ("unet", "unetplusplus", "deeplabv3plus"):
@@ -52,6 +53,19 @@ class ModelSpec:
 
     def to_dict(self):
         return asdict(self)
+
+
+def custom_unet_parameter_count(width, output_channels=1):
+    """Count trainable parameters without importing torch or allocating weights."""
+    ModelSpec(width=width, output_channels=output_channels).validate()
+    widths = [width * 2**i for i in range(5)]
+    # Each block has two biased 3x3 convolutions and two affine GroupNorms.
+    def block(cin, cout):
+        return 9 * cin * cout + 9 * cout * cout + 6 * cout
+
+    down = sum(block(1 if i == 0 else widths[i - 1], w) for i, w in enumerate(widths))
+    up = sum(block(widths[i + 1] + widths[i], widths[i]) for i in range(3, -1, -1))
+    return down + up + (widths[0] + 1) * output_channels
 
 
 def spec_for(config):

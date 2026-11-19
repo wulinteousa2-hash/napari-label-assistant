@@ -24,6 +24,8 @@ def dataset_snapshot(dataset, source=None):
         snapshot['multilabel'] = True
     if dataset.source_info:
         snapshot["sources"] = deepcopy(dataset.source_info)
+    if getattr(dataset, 'training_selection', None):
+        snapshot['training_selection'] = deepcopy(dataset.training_selection)
     snapshot["id"] = sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return snapshot
 
@@ -49,6 +51,8 @@ def compare_models(dataset, config, specs, *, cancel=None, source_info=None, **s
               "started_at_utc": datetime.now(timezone.utc).isoformat(),
               "dataset": dataset_snapshot(dataset, source_info), "settings": deepcopy(settings), "results": [],
               "note": "Shared indexed patches and spatial splits; fresh weights for every candidate and fold. Validation-selected scores are not independent test scores."}
+    if dataset.validation.get('evaluation', {}).get('mode') == 'trial':
+        report['note'] += ' Trial validation uses a fixed subset of the reserved validation pool; evaluate retained weights on the full pool before accepting a model.'
     models = []
     kfold = dataset.validation.get("method") == "kfold"
     for number, candidate in enumerate(configs, 1):
@@ -65,7 +69,8 @@ def compare_models(dataset, config, specs, *, cancel=None, source_info=None, **s
             yield QuickTrainProgress(int((number-1+fraction)*1000), len(configs)*1000,
                 f"Candidate {number}/{len(configs)} · {update.message}", metrics=update.metrics,
                 epoch=update.epoch, fold=update.fold, training_loss_last_batch=update.training_loss_last_batch,
-                training_step=update.training_step, series=f"Candidate {number}" + (f" / Fold {update.fold}" if update.fold else ""))
+                training_step=update.training_step, series=f"Candidate {number}" + (f" / Fold {update.fold}" if update.fold else "") +
+                (' · Trial validation' if dataset.validation.get('evaluation', {}).get('mode') == 'trial' else ''))
         candidate_models = result.models if kfold else [result]
         row = {"spec": candidate.model_spec, "model_indices": list(range(len(models), len(models)+len(candidate_models))),
                "parameters": sum(p.numel() for p in candidate_models[0].network.parameters()),
@@ -86,12 +91,16 @@ def export_comparison(report, path):
     with open(path, "w", encoding="utf-8", newline="") as handle:
         fields = ["comparison_id", "dataset_id", "provider", "architecture", "encoder", "initialization", "parameters", "seconds"]
         fields += [f"{metric}_{stat}" for metric in ("dice", "iou", "precision", "recall", "loss") for stat in ("mean", "std")]
+        fields += ['validation_scope', 'validation_patches']
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for result in report["results"]:
             row = {"comparison_id": report["id"], "dataset_id": report["dataset"]["id"],
                    **{key: result["spec"][key] for key in ("provider", "architecture", "encoder", "initialization")},
                    "parameters": result["parameters"], "seconds": result["seconds"]}
+            evaluation = result.get('validation', {}).get('evaluation', {})
+            row.update(validation_scope=evaluation.get('mode', result.get('validation', {}).get('method', 'recorded')),
+                       validation_patches=evaluation.get('selected_patches', ''))
             for metric, values in result["metrics"].items():
                 for stat, value in values.items():
                     if f"{metric}_{stat}" in fields:

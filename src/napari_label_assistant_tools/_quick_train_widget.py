@@ -27,6 +27,7 @@ from ._quick_train import (
 
 
 from ._coverage_train import IndexedPatches, index_patches, index_pairs, preview_index, train_indexed, train_kfold, train_final
+from ._patch_subset import select_training_patches, select_trial_validation
 
 
 class QuickTrainWorkerError(Exception):
@@ -55,6 +56,7 @@ class QuickTrainWidget(QWidget):
         self.cross_validation = None
         self._validation_preview_layer = None
         self.prepared = None
+        self._patch_subset_cache = None
         self._prepared_signature = None
         self._dataset_outdated = False
         self._generation = 0
@@ -125,7 +127,7 @@ class QuickTrainWidget(QWidget):
             "all target objects there have been annotated; accepted objects alone are not complete ground truth."
         )
         self.workflow_combo = QComboBox()
-        self.workflow_combo.addItem("All patches (recommended)", "coverage")
+        self.workflow_combo.addItem("All / selected training patches", "coverage")
         self.workflow_combo.addItem("Sample patches", "sampled")
         self.annotation_combo = QComboBox()
         self.annotation_combo.addItem("Partial — confirmed tiles", "partial")
@@ -240,6 +242,45 @@ class QuickTrainWidget(QWidget):
             label.setWordWrap(True)
             overview_layout.addWidget(label)
         layout.addWidget(overview)
+        from ._annotation_batch_widget import AnnotationBatchWidget
+        self.batch_widget = AnnotationBatchWidget(viewer, self)
+        layout.addWidget(self.batch_widget)
+        self.patch_selection_group = QGroupBox('Training patch selection')
+        self.patch_selection_form = QFormLayout(self.patch_selection_group)
+        self.patch_selection_mode = QComboBox()
+        for text, value in (('All eligible training patches', 'all'), ('Percentage of training patches', 'percentage'),
+                            ('Number of training patches', 'count')):
+            self.patch_selection_mode.addItem(text, value)
+        self.patch_percentage_spin = QDoubleSpinBox()
+        self.patch_percentage_spin.setRange(.1, 100)
+        self.patch_percentage_spin.setDecimals(1)
+        self.patch_percentage_spin.setValue(10)
+        self.patch_percentage_spin.setSuffix(' %')
+        self.patch_count_spin = QSpinBox()
+        self.patch_count_spin.setRange(1, 1000000000)
+        self.patch_count_spin.setValue(100)
+        self.patch_count_spin.setToolTip('Unique training patches in the fixed trial subset. Extra target-patch visits are configured separately in Train.')
+        self.patch_subset_seed = QSpinBox()
+        self.patch_subset_seed.setRange(0, 1000000)
+        self.patch_subset_seed.setValue(42)
+        self.patch_subset_seed.setToolTip('Choose a reproducible training subset. Changing this seed never changes the reserved validation patches.')
+        for title, control in (('Use', self.patch_selection_mode), ('Percentage', self.patch_percentage_spin),
+                               ('Patch count', self.patch_count_spin), ('Subset seed', self.patch_subset_seed)):
+            self.patch_selection_form.addRow(title, control)
+        self.quick_trial_check = QCheckBox('Quick trial — smaller validation set')
+        self.quick_trial_check.setToolTip('Use a fixed sample of the existing reserved validation pool. The spatial split stays unchanged. Evaluate the full validation set before accepting a model.')
+        self.trial_validation_percentage = QDoubleSpinBox()
+        self.trial_validation_percentage.setRange(.1, 100)
+        self.trial_validation_percentage.setDecimals(1)
+        self.trial_validation_percentage.setValue(10)
+        self.trial_validation_percentage.setSuffix(' %')
+        self.trial_validation_percentage.setToolTip('Percentage of reserved validation patches. The sample is fixed across epochs and training-subset changes; it follows Validation → Split seed.')
+        self.patch_selection_form.addRow(self.quick_trial_check)
+        self.patch_selection_form.addRow('Validation percentage', self.trial_validation_percentage)
+        self.patch_selection_summary = QLabel()
+        self.patch_selection_summary.setWordWrap(True)
+        self.patch_selection_form.addRow(self.patch_selection_summary)
+        layout.addWidget(self.patch_selection_group)
         self.training_tile_actions = QGroupBox('Confirmed tiles for dataset')
         tile_layout = QVBoxLayout(self.training_tile_actions)
         self.edit_confirm_button = QPushButton('Edit && confirm tiles…')
@@ -397,6 +438,9 @@ class QuickTrainWidget(QWidget):
         self.preview_validation_button = QPushButton("Preview validation regions on canvas")
         self.preview_validation_button.clicked.connect(lambda: self._safe(self._preview_validation))
         validation_form.addRow(self.preview_validation_button)
+        self.full_validation_button = QPushButton('Evaluate full validation set')
+        self.full_validation_button.clicked.connect(lambda: self._safe(self._start_full_validation))
+        validation_form.addRow(self.full_validation_button)
         from ._learning_chart import LearningChart
         self.learning_chart = LearningChart()
         self.chart_mode_combo = QComboBox()
@@ -617,6 +661,11 @@ class QuickTrainWidget(QWidget):
         self.models_panel.output_mode.currentIndexChanged.connect(self._output_mode_changed)
         for control in (self.epochs_spin, self.batch_spin, self.extra_targets_spin):
             control.valueChanged.connect(self._update_workload)
+        self.patch_selection_mode.currentIndexChanged.connect(self._patch_selection_changed)
+        self.quick_trial_check.toggled.connect(self._quick_trial_changed)
+        self.trial_validation_percentage.valueChanged.connect(self._patch_selection_changed)
+        for control in (self.patch_percentage_spin, self.patch_count_spin, self.patch_subset_seed):
+            control.valueChanged.connect(self._patch_selection_changed)
         self.workflow_combo.currentIndexChanged.connect(self._workflow_changed)
         self.annotation_combo.currentIndexChanged.connect(self._annotation_changed)
         self.reviewed_combo.currentIndexChanged.connect(self._sources_changed)
@@ -636,11 +685,65 @@ class QuickTrainWidget(QWidget):
         settings = project(self.viewer).get("settings")
         if settings:
             self.restore_project_settings(settings)
+        from ._annotation_batches import events as batch_events
+        self._batch_events = batch_events(viewer)
+        self._batch_events.changed.connect(self._batches_changed)
+
+    def _batch_pairs(self):
+        from ._annotation_batches import _id
+        if self._is_multilabel():
+            identifiers = {(row['image_id'], item.get('target_id')) for row in self.channel_assignments if row.get('included')
+                           for item in row.get('channels', {}).values() if item.get('coverage') != 'unknown'}
+        elif self._multiple_pairs():
+            identifiers = {(row['image_id'], row.get('truth_id')) for row in self.dataset_pairs if row.get('included')}
+        else:
+            return [(self.image_combo.currentData(), self.truth_combo.currentData())]
+        by_id = {_id(layer): layer for layer in self.viewer.layers if _id(layer)}
+        return [(by_id.get(i), by_id.get(t)) for i,t in sorted(identifiers, key=str)]
+
+    def _batch_signatures(self):
+        from ._annotation_batches import signature
+        result = []
+        for i,t in self._batch_pairs():
+            if i is not None and t is not None:
+                try:
+                    value = signature(i,t)
+                except ValueError as error:
+                    value = ('invalid batch', str(error))
+                result.append((id(i),id(t),value))
+        return tuple(result)
+
+    def _batch_contexts(self):
+        from ._annotation_batches import selection
+        return [selection(i,t) for i,t in self._batch_pairs() if i is not None and t is not None]
+
+    def batch_preparation_error(self):
+        from ._annotation_batches import preparation_error
+        for image,truth in self._batch_pairs():
+            error = preparation_error(image, truth)
+            if error:
+                return error
+        return ''
+
+    def _batches_changed(self, *_args):
+        if self.closed:
+            return
+        if self.prepared is not None and self._prepared_signature != self._signature():
+            self._invalidate_crops()
+        else:
+            self._update_controls()
+
+    def _protect_batch_holdouts(self, dataset):
+        if self.model is not None and dataset.validation.get('method') != 'kfold' and any(c['scope'] == 'active' for c in self._batch_contexts()):
+            from ._annotation_batches import protect_validation, _id
+            image = self.image_combo.currentData()
+            dataset = protect_validation(dataset, self.model, image_id=_id(image), image_name=image.name if image is not None else '')
+        return dataset
 
     def project_settings(self):
-        combo_names = ("workflow_combo", "annotation_combo", "crop_combo", "resolution_combo", "device_combo", "validation_method_combo", "dataset_source_mode")
-        spin_names = ("samples_spin", "steps_spin", "seed_spin", "epochs_spin", "batch_spin", "extra_targets_spin", "learning_rate_spin", "holdout_spin", "fold_spin", "validation_seed_spin", "contrast_spin", "brightness_spin", "reduce_patience_spin", "stop_patience_spin", "lr_factor_spin", "min_delta_spin")
-        check_names = ("rotation_check", "flip_check", "intensity_check", "plateau_group")
+        combo_names = ("workflow_combo", "annotation_combo", "crop_combo", "resolution_combo", "device_combo", "validation_method_combo", "dataset_source_mode", "patch_selection_mode")
+        spin_names = ("samples_spin", "steps_spin", "seed_spin", "epochs_spin", "batch_spin", "extra_targets_spin", "learning_rate_spin", "holdout_spin", "fold_spin", "validation_seed_spin", "contrast_spin", "brightness_spin", "reduce_patience_spin", "stop_patience_spin", "lr_factor_spin", "min_delta_spin", "patch_percentage_spin", "patch_count_spin", "patch_subset_seed", "trial_validation_percentage")
+        check_names = ("rotation_check", "flip_check", "intensity_check", "plateau_group", "quick_trial_check")
         from ._model_project import layer_id
         return {"combos": {name: getattr(self,name).currentData() for name in combo_names},
                 "values": {name: getattr(self,name).value() for name in spin_names},
@@ -654,6 +757,7 @@ class QuickTrainWidget(QWidget):
                 "comparison_candidates": self.models_panel.candidates}
 
     def restore_project_settings(self, settings):
+        self.quick_trial_check.setChecked(bool(settings.get('checks', {}).get('quick_trial_check', False)))
         self.dataset_pairs = list(settings.get('dataset_pairs', []))
         self.channel_assignments = list(settings.get('channel_assignments', []))
         combos = settings.get("combos", {})
@@ -1058,6 +1162,7 @@ class QuickTrainWidget(QWidget):
         self._dataset_outdated = self._dataset_outdated or was_prepared
         self._overview_dataset = None
         self.prepared = None
+        self._patch_subset_cache = None
         self._prepared_signature = None
         if was_prepared:
             self.crop_summary_label.setText("Sources or patch settings changed. Prepare the dataset again before training.")
@@ -1072,6 +1177,8 @@ class QuickTrainWidget(QWidget):
 
     def _update_controls(self):
         busy = self.worker is not None
+        self.batch_widget.set_context(self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_area_widget)
+        self.batch_widget.set_busy(busy)
         for control in (
             self.select_training_tiles_button, self.confirm_training_tiles_button,
             self.validation_method_combo, self.holdout_spin, self.fold_spin, self.validation_seed_spin,
@@ -1101,6 +1208,13 @@ class QuickTrainWidget(QWidget):
         kfold = self.validation_method_combo.currentData() == "kfold" and self.workflow_combo.currentData() == "coverage"
         self.continue_button.setEnabled(not busy and self.prepared is not None and self.model is not None and not seen_holdout and not kfold)
         self._update_validation_controls(busy)
+        compatible = (isinstance(self.prepared, IndexedPatches) and self.model is not None and
+                      (getattr(self.model, 'crop_pixels', None), self.model.config.input_pixels) == (self.prepared.crop_pixels, self.prepared.input_pixels) and
+                      tuple(self.model.config.class_names) == tuple(self.prepared.class_names) and
+                      self.model.config.multilabel == self.prepared.multilabel)
+        self.full_validation_button.setEnabled(not busy and compatible and not seen_holdout and not kfold)
+        self.full_validation_button.setToolTip('Evaluate fixed model weights on every reserved patch; no training or checkpoint reselection.'
+            if compatible and not seen_holdout and not kfold else 'Prepare a matching spatial/image holdout dataset and load a model. Reserved validation regions must be independent of its training.')
         self.export_csv_button.setEnabled(bool(self.learning_chart.points))
         self.continuation_note.setText("The current model has already trained in the reserved validation regions. Review new regions for independent validation, or train a new model." if seen_holdout and self.model is not None else "")
         self.continuation_note.setVisible(seen_holdout and self.model is not None)
@@ -1142,7 +1256,22 @@ class QuickTrainWidget(QWidget):
         self.train_button.setToolTip(reason)
         self.predict_button.setToolTip(predict_reason)
         self.continue_button.setToolTip("Continue training requires spatial holdout instead of k-fold validation." if kfold else self.continuation_note.text() if seen_holdout else "Prepare a dataset and train or load a model first." if self.prepared is None or self.model is None else reason)
+        subset_error = self._update_patch_selection_controls()
+        if subset_error and isinstance(self.prepared, IndexedPatches):
+            self.train_button.setEnabled(False)
+            self.continue_button.setEnabled(False)
+            self.patch_preview_button.setEnabled(False)
+            self.train_button.setToolTip(subset_error)
+            self.continue_button.setToolTip(subset_error)
+            self.readiness_label.setText(subset_error + '\n' + predict_reason)
         self.cancel_button.setEnabled(busy)
+        batch_error = self.batch_preparation_error()
+        self.prepare_button.setToolTip(batch_error or 'Prepare the selected annotation scope. Patch reads stay bounded; preview is optional.')
+        if batch_error:
+            self.prepare_button.setEnabled(False)
+            self.prepare_button.setToolTip(batch_error)
+            if self.prepared is None:
+                self.readiness_label.setText(batch_error + '\n' + predict_reason)
         self.training_selection_panel.setEnabled(not busy)
         self.selection_toggle.setEnabled(not busy)
         self.progress.setVisible(busy)
@@ -1183,6 +1312,9 @@ class QuickTrainWidget(QWidget):
         self._status(update.message)
         if update.metrics is not None and update.epoch is not None:
             self.learning_chart.add_point(update.epoch, update.metrics, update.fold, update.training_step if update.training_step is not None else update.completed, update.training_loss_last_batch, "step" if self.workflow_combo.currentData() == "sampled" else "epoch", series=update.series)
+            if update.series and 'Trial validation' in update.series:
+                evaluation = self._selected_training_dataset().validation.get('evaluation', {})
+                self.learning_chart.points[-1].update(validation_scope='trial', validation_patches=evaluation.get('selected_patches', ''))
             self.export_csv_button.setEnabled(True)
             loss = update.metrics.get('loss')
             prefix = (update.series + " · ") if update.series else (f"Fold {update.fold} · " if update.fold else "")
@@ -1213,6 +1345,9 @@ class QuickTrainWidget(QWidget):
         if not self.closed:
             self._update_controls()
             self.refresh_layers()
+            shell = getattr(self.viewer, '_label_assistant_curation_widget', None)
+            if shell is not None and hasattr(shell, 'simple') and not shell.simple.closed:
+                shell.simple.refresh_status()
 
     def _cancel(self):
         if self.cancel_event is not None:
@@ -1258,7 +1393,7 @@ class QuickTrainWidget(QWidget):
                 self.crop_combo.currentData(), self.resolution_combo.currentData(),
                 self.samples_spin.value() if self.workflow_combo.currentData() == "sampled" else None,
                 self.seed_spin.value() if self.workflow_combo.currentData() == "sampled" else None, self.workflow_combo.currentData(),
-                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value(), self.models_panel.class_names_edit.text(), self.dataset_source_mode.currentData(), json.dumps(self.dataset_pairs, sort_keys=True) if self._multiple_pairs() else None, self._is_multilabel(), json.dumps(self.channel_assignments, sort_keys=True) if self._is_multilabel() else None)
+                self.annotation_combo.currentData(), id(self.reviewed_combo.currentData()), library_signature, self.validation_method_combo.currentData(), self.holdout_spin.value(), self.fold_spin.value(), self.validation_seed_spin.value(), self.models_panel.class_names_edit.text(), self.dataset_source_mode.currentData(), json.dumps(self.dataset_pairs, sort_keys=True) if self._multiple_pairs() else None, self._is_multilabel(), json.dumps(self.channel_assignments, sort_keys=True) if self._is_multilabel() else None, self._batch_signatures())
 
     def _validation_changed(self, *_args):
         self._coverage_splits.clear()
@@ -1298,7 +1433,7 @@ class QuickTrainWidget(QWidget):
         else:
             validation = len(dataset.indices('validation'))
             unit = 'image/specimen groups' if dataset.sources else 'spatial groups'
-            self.validation_summary.setText(f"{groups} {unit} · {len(dataset.indices('training')):,} training / {validation:,} validation patches ({validation/len(dataset.locations):.1%} actual holdout). Group sizes can change the requested ratio.")
+            self.validation_summary.setText(f"Eligible pool: {groups} {unit} · {len(dataset.indices('training')):,} training / {validation:,} validation patches ({validation/len(dataset.locations):.1%} actual holdout). Group sizes can change the requested ratio.")
 
     def _cross_validation_done(self, result):
         self.cross_validation = result
@@ -1324,7 +1459,7 @@ class QuickTrainWidget(QWidget):
     def _preview_validation(self):
         if not isinstance(self.prepared, IndexedPatches):
             raise ValueError("Prepare the dataset first to index spatial assignments.")
-        dataset = self.prepared
+        dataset = self._selected_training_dataset()
         image = self._layer(self.image_combo)
         canvas_width, canvas_height = self.viewer.window._qt_viewer.canvas.size
         center = np.asarray(self.viewer.camera.center[-2:])
@@ -1395,6 +1530,76 @@ class QuickTrainWidget(QWidget):
         write_metrics_csv(points, destination / "validation-metrics.csv")
         return destination
 
+    def _selected_training_dataset(self):
+        dataset = self.prepared
+        if not isinstance(dataset, IndexedPatches) or self.validation_method_combo.currentData() == 'kfold':
+            return dataset
+        key = (id(dataset), dataset.validation_seen_before, self.patch_selection_mode.currentData(),
+               self.patch_percentage_spin.value(), self.patch_count_spin.value(), self.patch_subset_seed.value(),
+               self.quick_trial_check.isChecked(), self.trial_validation_percentage.value(), self.validation_seed_spin.value())
+        cached = self._patch_subset_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        selected = select_training_patches(dataset, mode=key[2], percentage=key[3], count=key[4], seed=key[5])
+        if key[6]:
+            selected = select_trial_validation(selected, percentage=key[7], seed=key[8])
+        self._patch_subset_cache = (key, selected)
+        return selected
+
+    def _quick_trial_changed(self, checked):
+        if checked and self.patch_selection_mode.currentData() == 'all':
+            self.patch_selection_mode.setCurrentIndex(self.patch_selection_mode.findData('percentage'))
+        self._patch_selection_changed()
+
+    def _patch_selection_changed(self, *_args):
+        self._patch_subset_cache = None
+        if self._validation_preview_layer is not None:
+            self._validation_preview_layer.visible = False
+        if self._gallery_return_view is not None:
+            self._return_to_image()
+        self._update_workload()
+        self._update_controls()
+
+    def _update_patch_selection_controls(self):
+        coverage = self.workflow_combo.currentData() == 'coverage'
+        kfold = self.validation_method_combo.currentData() == 'kfold'
+        mode = self.patch_selection_mode.currentData()
+        self.patch_selection_group.setVisible(coverage)
+        for control, visible in ((self.patch_percentage_spin, mode == 'percentage'),
+                                 (self.patch_count_spin, mode == 'count'),
+                                 (self.patch_subset_seed, mode != 'all')):
+            control.setVisible(visible)
+            self.patch_selection_form.labelForField(control).setVisible(visible)
+        for control in (self.patch_selection_mode, self.patch_percentage_spin, self.patch_count_spin, self.patch_subset_seed):
+            control.setEnabled(coverage and not kfold and self.worker is None)
+        self.quick_trial_check.setEnabled(coverage and not kfold and self.worker is None)
+        self.trial_validation_percentage.setVisible(self.quick_trial_check.isChecked())
+        self.patch_selection_form.labelForField(self.trial_validation_percentage).setVisible(self.quick_trial_check.isChecked())
+        self.trial_validation_percentage.setEnabled(coverage and not kfold and self.worker is None)
+        if kfold:
+            self.patch_selection_summary.setText('K-fold and final training use the full index. Trial subsets are available with spatial/image holdout.')
+            return None
+        if not isinstance(self.prepared, IndexedPatches):
+            self.patch_selection_summary.setText('Prepare the dataset to count eligible patches. Confirmed review tiles remain approved.')
+            return None
+        try:
+            selected = self._selected_training_dataset()
+        except ValueError as error:
+            self.patch_selection_summary.setText(str(error))
+            return str(error)
+        available = len(self.prepared.indices('training'))
+        rows = [p for p in selected.locations if p['split'] == 'training']
+        trial = selected.validation.get('evaluation', {})
+        validation_text = (f"Trial validation: {trial['selected_patches']:,} / {trial['available_patches']:,} reserved patches "
+                           f"({trial['positive_patches']:,} with targets; {trial['spatial_groups']:,} spatial/image groups). "
+                           'Fixed each epoch. Evaluate the full set before accepting the model.'
+                           if trial.get('mode') == 'trial' else
+                           f"Validation: {len(selected.indices('validation')):,} reserved patches unchanged.")
+        self.patch_selection_summary.setText(
+            f"Using {len(rows):,} / {available:,} training patches ({sum(p['contains_foreground'] for p in rows):,} with targets).\n"
+            + validation_text + '\n' + ('The same training subset is reused each epoch.' if mode != 'all' else 'All eligible training patches are used.'))
+        return None
+
     def _update_workload(self, *_args):
         coverage = self.workflow_combo.currentData() == "coverage"
         self.workload_label.setVisible(coverage)
@@ -1403,13 +1608,19 @@ class QuickTrainWidget(QWidget):
         if not isinstance(self.prepared, IndexedPatches):
             self.workload_label.setText("Index the dataset to calculate updates per epoch.")
             return
-        count = len(self.prepared.indices('training'))
+        try:
+            selected = self._selected_training_dataset()
+        except ValueError as error:
+            self.workload_label.setText(str(error))
+            return
+        count = len(selected.indices('training'))
         extra = int(np.ceil(count * self.extra_targets_spin.value() / 100))
         updates = (count + extra + self.batch_spin.value() - 1) // self.batch_spin.value()
+        label = 'trial validation' if selected.validation.get('evaluation', {}).get('mode') == 'trial' else 'reserved validation'
         self.workload_label.setText(
-            f"Per epoch: {count:,} unique patches + {extra:,} target repeats = {updates:,} updates. "
+            f"Per epoch: {count:,} selected patches + {extra:,} target repeats = {updates:,} updates. "
             f"Maximum: {self.epochs_spin.value()} epochs, {updates * self.epochs_spin.value():,} updates, "
-            "plus validation after each epoch."
+            f"plus {len(selected.indices('validation')):,} {label} patches after each epoch."
         )
 
     def _annotation_changed(self, *_args):
@@ -1436,17 +1647,17 @@ class QuickTrainWidget(QWidget):
             form.labelForField(control).setVisible(visible)
         self.prepare_button.setText("Prepare dataset")
         self.prepare_button.setToolTip(
-            "Scan the mask in bounded patches and store a coordinate index. Training streams every eligible patch; the gallery shows only representative examples."
+            "Index eligible patches in bounded memory. Choose all patches or a trial subset in Training patch selection; validation remains reserved."
             if coverage else "Prepare a fixed crop sample for a quick experiment. Training reuses this sample."
         )
         self.validation_note.setText(
-            "Each epoch visits every eligible training patch. Separate spatial blocks are reserved for validation. The gallery is a sample, not the complete dataset."
+            "Each epoch visits the selected training patches. Separate spatial blocks are reserved for validation; trial sampling never moves them into training."
             if coverage else "Train on a fixed crop sample; separate spatial blocks are held out for validation."
         )
         if multiple:
-            self.validation_note.setText('Each epoch visits every eligible training patch across selected pairs. Whole image/specimen groups are held out for validation.')
+            self.validation_note.setText('Choose all eligible training patches or a fixed trial subset across selected pairs. Whole image/specimen groups remain held out for validation.')
             if self._is_multilabel():
-                self.validation_note.setText('Independent target channels use All patches. One image reserves spatial groups; several images reserve whole image/specimen groups.')
+                self.validation_note.setText('Independent target channels support all training patches or a fixed trial subset. Spatial/image validation groups remain reserved.')
         self.workflow_combo.setToolTip(self.validation_note.text())
         self._invalidate_crops()
         self.crop_summary_label.setText(
@@ -1463,6 +1674,7 @@ class QuickTrainWidget(QWidget):
         if not hasattr(self, "annotation_sources_label"):
             return
         lines, eligible, objects, needs_review = [], False, 0, 0
+        active_truths = {truth for _,truth,scope in self._batch_signatures() if scope[0] == 'active'}
         rows = []
         by_id = {layer_id(layer): layer for layer in self.viewer.layers
                  if isinstance(layer, (napari.layers.Image, napari.layers.Labels)) and not is_internal_layer(layer)} if self._multiple_pairs() else {}
@@ -1484,12 +1696,18 @@ class QuickTrainWidget(QWidget):
             rows.append((image.name if image is not None else "Choose an image", self.annotation_combo.currentData(), truth if image is not None else None, self.reviewed_combo.currentData()))
         for name, coverage, truth, mask in rows:
             included = changed = 0
+            skipped_pending = False
             if truth is not None and coverage == 'partial':
                 try:
                     library = library_for(truth)
                     if library is not None:
                         _, included, changed = library.counts()
-                        needs_review += int(bool(included and library.state()['pending']))
+                        pending = library.state()['pending']
+                        skipped_pending = bool(pending and id(truth) in active_truths)
+                        if skipped_pending:
+                            included = changed = 0
+                        else:
+                            needs_review += int(bool(included and pending))
                 except Exception:
                     needs_review += 1
             objects += included
@@ -1511,9 +1729,10 @@ class QuickTrainWidget(QWidget):
             eligible |= bool(areas) or external
             detail = "external coverage mask; measured on preparation" if external else f"{count:,} confirmed tiles available"
             legacy = f" · {included:,} saved object selections" if included else ''
-            lines.append(f"{name}: {detail}{legacy}" + (f" · {changed:,} objects need review" if changed else ""))
+            lines.append(f"{name}: {detail}{legacy}" + (f" · {changed:,} objects need review" if changed else "") +
+                         (' · pending object selections excluded from this batch' if skipped_pending else ''))
         visible_lines = lines[:4] + ([f"{len(lines) - 4:,} more sources; see Manage pairs / channels."] if len(lines) > 4 else [])
-        self.annotation_sources_label.setText("Annotation sources\n" + "\n".join(visible_lines))
+        self.annotation_sources_label.setText(('Global annotation sources\n' if active_truths else 'Annotation sources\n') + "\n".join(visible_lines))
         self.annotation_sources_label.setToolTip("\n".join(lines))
         dataset = self.prepared
         self.annotation_combo.setItemText(self.annotation_combo.findData('partial'),
@@ -1533,7 +1752,7 @@ class QuickTrainWidget(QWidget):
                     valid = sum(p['channel_reviewed_pixels'][channel] for p in dataset.locations)
                     detail += f"\n{name}: {fg:,} foreground · {valid - fg:,} background (independent validity)"
             self.supervision_label.setText(detail)
-            self.dataset_state_label.setText(f"Prepared · {len(dataset.indices('training')):,} training patches · {len(dataset.indices('validation')):,} validation patches")
+            self.dataset_state_label.setText(f"Prepared pool · {len(dataset.indices('training')):,} training patches · {len(dataset.indices('validation')):,} validation patches")
             self._overview_dataset = dataset
             self._overview_supervision = self.supervision_label.text()
             self._overview_state = self.dataset_state_label.text()
@@ -1552,6 +1771,9 @@ class QuickTrainWidget(QWidget):
                 "Update the component library after edits before preparation." if needs_review else
                 "Ready to prepare" if eligible else
                 "Foreground only — confirm reviewed tiles in Edit & Confirm before preparation." if objects else "No confirmed tiles yet — use Edit & Confirm.")
+            error = self.batch_preparation_error()
+            if error:
+                self.dataset_state_label.setText(error)
 
     def _update_annotation_note(self):
         partial = self.annotation_combo.currentData() == "partial"
@@ -1653,7 +1875,10 @@ class QuickTrainWidget(QWidget):
         return regions
 
     def _partition_key(self, image, config):
-        return (id(image), tuple(array_2d(image.data).shape), config.crop_pixels)
+        from ._annotation_batches import signature
+        key = (id(image), tuple(array_2d(image.data).shape), config.crop_pixels)
+        scope = signature(image, self.truth_combo.currentData())
+        return key + scope if scope[0] == 'active' else key
 
     @staticmethod
     def _index_task(image, truth, config, *, reviewed, validation_blocks, prior_training_regions=(), cancel, validation_fraction=0.25, split_seed=42, validation_method="holdout", folds=5):
@@ -1684,6 +1909,9 @@ class QuickTrainWidget(QWidget):
         config = self._config()
         partial = self.annotation_combo.currentData() == "partial"
         coverage = self.workflow_combo.currentData() == "coverage"
+        from ._annotation_batches import restrict_supervision, selection
+        if selection(image, truth)['scope'] == 'active' and not coverage:
+            raise ValueError('Annotation batches use All / selected training patches. Switch to that workflow before preparing this batch.')
         if partial and not coverage:
             raise ValueError("Partial annotations require coverage training with a reviewed-region mask.")
         if partial and self.reviewed_combo.currentData() is None:
@@ -1706,12 +1934,16 @@ class QuickTrainWidget(QWidget):
             if library is not None and library.counts()[1] == 0:
                 library = None
             if library is not None and library.state()["pending"]:
-                raise ValueError("Update the component library in Manage Training Selection after editing annotations.")
+                if selection(image, truth)['scope'] == 'active':
+                    library = None  # Confirmed batch regions need no global component reindex.
+                else:
+                    raise ValueError("Update the component library in Manage Training Selection after editing annotations.")
             invalid = reviewed_layer.metadata.get(KEY, {}).get("invalid_regions", []) if reviewed_layer else []
             review_state = reviewed_layer.metadata.get(KEY, {}) if reviewed_layer is not None else {}
             known_areas = review_state.get("areas") if review_state.get("role") == "reviewed_regions" else None
             reviewed_data = TrainingSupervision(truth_data, reviewed_data, library=library,
                                                 invalid_regions=invalid, reviewed_areas=known_areas)
+        reviewed_data = restrict_supervision(self.viewer, image, truth, reviewed_data)
         if reviewed_data is not None and tuple(reviewed_data.shape) != tuple(image_data.shape):
             raise ValueError("Reviewed-region mask must match the image and ground-truth shape.")
         signature, generation = self._signature(), self._generation
@@ -1757,6 +1989,7 @@ class QuickTrainWidget(QWidget):
         from ._dataset_pairs import resolve_pairs
         from ._component_library import library_for, TrainingSupervision
         from ._reviewed_regions import KEY
+        from ._annotation_batches import selection, restrict_supervision
         resolved = resolve_pairs(self.viewer, self.dataset_pairs)
         config = self._config()
         pairs = []
@@ -1765,15 +1998,20 @@ class QuickTrainWidget(QWidget):
             if row['coverage'] == 'partial':
                 library = library_for(truth)
                 if library is not None and library.state()['pending']:
-                    raise ValueError(f'{image.name}: update the component library after editing labels.')
+                    if selection(image, truth)['scope'] == 'active':
+                        library = None
+                    else:
+                        raise ValueError(f'{image.name}: update the component library after editing labels.')
                 state = mask.metadata.get(KEY, {})
                 reviewed = TrainingSupervision(array_2d(full_data(truth)), array_2d(full_data(mask)), library=library,
                                                invalid_regions=state.get('invalid_regions', []),
                                                reviewed_areas=state.get('areas'))
+            reviewed = restrict_supervision(self.viewer, image, truth, reviewed)
             info = dict(image_id=row['image_id'], ground_truth_id=row['truth_id'],
                         reviewed_id=row.get('reviewed_id') if mask is not None else None,
                         image_layer=image.name, ground_truth_layer=truth.name,
                         coverage=row['coverage'], split_group=row['split_group'])
+            info['annotation_batch'] = selection(image, truth)
             if reviewed is not None and getattr(reviewed, 'library', None) is not None:
                 info['component_library'] = dict(source_id=reviewed.snapshot['source_id'],
                                                  revision=reviewed.snapshot['revision'], selected_ids=list(reviewed.selected))
@@ -1785,6 +2023,7 @@ class QuickTrainWidget(QWidget):
             if generation != self._generation or signature != self._signature():
                 self._status('A dataset source changed; prepare the pairs again.')
                 return
+            dataset = self._protect_batch_holdouts(dataset)
             self.prepared = dataset
             self._prepared_signature = signature
             summary = dataset.summary()
@@ -1819,10 +2058,13 @@ class QuickTrainWidget(QWidget):
                     channel_info.append(dict(name=name, coverage='unknown'))
                 else:
                     assignment, layer, mask = target
-                    reviewed = self._channel_supervision(layer, mask) if assignment['coverage'] == 'partial' else None
+                    from ._annotation_batches import restrict_supervision, selection
+                    reviewed = self._channel_supervision(layer, mask, ignore_pending=selection(image, layer)['scope'] == 'active') if assignment['coverage'] == 'partial' else None
+                    reviewed = restrict_supervision(self.viewer, image, layer, reviewed)
                     channels.append(dict(data=array_2d(full_data(layer)), reviewed=reviewed,
                                          foreground_mode=assignment.get('foreground_mode', 'binary')))
                     info = dict(name=name, **assignment)
+                    info['annotation_batch'] = selection(image, layer)
                     if reviewed is not None and reviewed.library is not None:
                         info['component_library'] = dict(source_id=reviewed.snapshot['source_id'], revision=reviewed.snapshot['revision'], selected_ids=list(reviewed.selected))
                     channel_info.append(info)
@@ -1834,6 +2076,7 @@ class QuickTrainWidget(QWidget):
             if generation != self._generation or signature != self._signature():
                 self._status('Channel annotations changed; prepare again.')
                 return
+            dataset = self._protect_batch_holdouts(dataset)
             self.prepared, self._prepared_signature = dataset, signature
             self.crop_summary_label.setText(f"{len(pairs)} images · {len(config.class_names)} independent channels · {len(dataset.locations):,} patches\nTraining: {len(dataset.indices('training')):,} · Validation: {len(dataset.indices('validation')):,}. Unknown channel pixels are ignored.")
             self._status('Multilabel dataset ready. Overlapping target masks stay independent during training.')
@@ -1850,12 +2093,15 @@ class QuickTrainWidget(QWidget):
             raise
 
     @staticmethod
-    def _channel_supervision(layer, mask):
+    def _channel_supervision(layer, mask, *, ignore_pending=False):
         from ._component_library import TrainingSupervision, library_for
         from ._reviewed_regions import KEY
         library = library_for(layer)
         if library is not None and library.state()['pending']:
-            raise ValueError(f"{layer.name}: update the component library after edits.")
+            if ignore_pending:
+                library = None
+            else:
+                raise ValueError(f"{layer.name}: update the component library after edits.")
         state = mask.metadata.get(KEY, {})
         return TrainingSupervision(array_2d(full_data(layer)), array_2d(full_data(mask)), library=library,
             invalid_regions=state.get('invalid_regions', []),
@@ -1865,7 +2111,7 @@ class QuickTrainWidget(QWidget):
         if generation != self._generation or signature != self._signature() or not all(any(layer is item for item in self.viewer.layers) for layer in (image, truth)):
             self._status("Source changed during indexing. Prepare again.")
             return
-        dataset = result
+        dataset = self._protect_batch_holdouts(result)
         self.prepared = dataset
         self._prepared_signature = signature
         self._coverage_splits[partition_key] = [b['id'] for b in dataset.blocks if b['split'] == 'validation']
@@ -1874,12 +2120,13 @@ class QuickTrainWidget(QWidget):
             f"Indexed {len(dataset.locations):,} patches · supervised area {dataset.reviewed_pixels / dataset.total_pixels:.1%} of image\n"
             f"Training: {summary['training']['total']:,} patches ({summary['training']['positive']:,} with targets)\n"
             f"Validation: {summary['validation']['total']:,} patches in reserved spatial blocks\n"
-            "Optional patch preview shows representative examples. Training uses the entire index."
+            "Training patch selection controls the amount used. The optional preview shows representative selected patches."
         )
         self._update_annotation_note()
         self._update_validation_controls(False)
         self.validation_results_label.setText("Dataset indexed. Validation metrics will appear after the first evaluated epoch.")
-        self._status("Dataset ready. Train now or inspect the optional patch preview. Every training patch is visited each epoch; validation regions are excluded from training.")
+        self._update_workload()
+        self._status("Dataset ready. Choose all training patches or a trial subset, then train. Reserved validation patches remain excluded from training.")
 
     def _preparation_done(self, result, image, truth, signature, generation):
         if generation != self._generation or not all(any(layer is item for item in self.viewer.layers) for layer in (image, truth)):
@@ -1907,6 +2154,7 @@ class QuickTrainWidget(QWidget):
         if self.prepared is None or self._signature() != self._prepared_signature:
             raise ValueError("Prepare the dataset before opening its patch preview.")
         image, truth = self._layer(self.image_combo), self._layer(self.truth_combo)
+        selected = self._selected_training_dataset()
         generation = self._generation
         self._lock_sources()
         def done(result):
@@ -1916,7 +2164,7 @@ class QuickTrainWidget(QWidget):
             atlas, validity = result
             self._show_crop_grid(atlas, image, truth, validity=validity)
             self._status("Patch preview: a separate contact sheet beside the image. Cyan frames are training; orange frames are validation. Double-click a tile to locate its source, or Return to image.")
-        self._start_worker(self._patch_preview_task, done, self.prepared)
+        self._start_worker(self._patch_preview_task, done, selected)
 
     def _return_to_image(self):
         for layer in self._crop_preview_layers:
@@ -2031,11 +2279,19 @@ class QuickTrainWidget(QWidget):
         if continue_training and isinstance(self.prepared, IndexedPatches) and self.prepared.validation_seen_before:
             raise ValueError("Review new regions for independent validation, or train a new model.")
         task_info = self.models_panel.bind_sources()
+        task_info['annotation_batches'] = self._batch_contexts()
         model_task = getattr(self.model, "identity", {}).get("task_id") if self.model is not None else None
         if continue_training and model_task and model_task != task_info["task_id"]:
             raise ValueError("The selected model belongs to another biological task. Select its task before continuing.")
         self._status("Continuing the current model on the prepared dataset." if continue_training else "Training a new model on the prepared dataset.")
         if isinstance(self.prepared, IndexedPatches):
+            selected = self.prepared if final_training else self._selected_training_dataset()
+            evaluation = selected.validation.get('evaluation', {})
+            if evaluation.get('mode') == 'trial':
+                self.validation_results_label.setText(
+                    f"Quick trial: {len(selected.indices('training')):,} training patches; "
+                    f"trial validation {evaluation['selected_patches']:,} / {evaluation['available_patches']:,} reserved patches each epoch.")
+                self._status(self.validation_results_label.text())
             self._lock_sources()
             generation = self._generation
             source_info = {**task_info, "image_layer": self._layer(self.image_combo).name,
@@ -2057,7 +2313,7 @@ class QuickTrainWidget(QWidget):
             extra = {"cross_validation_report": self.cross_validation.report} if final_training else ({"initial_model": self.model if continue_training else None} if not kfold else {})
             self._start_worker(function,
                 lambda result: done(result) if generation == self._generation else self._status("Annotations changed during training; previous model retained."),
-                self.prepared, self._training_config(continue_training), epochs=self.epochs_spin.value(),
+                selected, self._training_config(continue_training), epochs=self.epochs_spin.value(),
                 extra_targets=self.extra_targets_spin.value() / 100,
                 **extra,
                 learning_rate=self.learning_rate_spin.value(), source_info=source_info,
@@ -2076,6 +2332,7 @@ class QuickTrainWidget(QWidget):
         if not isinstance(self.prepared, IndexedPatches) or self._signature() != self._prepared_signature:
             raise ValueError("Prepare the coverage dataset before comparing models.")
         from ._model_comparison import compare_models
+        selected = self._selected_training_dataset()
         from ._model_providers import ModelSpec, provider_available
         specs = list(self.models_panel.candidates)
         if len(specs) < 2:
@@ -2084,6 +2341,7 @@ class QuickTrainWidget(QWidget):
             if not provider_available(spec["provider"]):
                 raise ValueError("Install the SMP optional dependency before running this comparison.")
         source_info = self.models_panel.bind_sources()
+        source_info['annotation_batches'] = self._batch_contexts()
         source_info.update(image_layer=self._layer(self.image_combo).name, ground_truth_layer=self._layer(self.truth_combo).name)
         if self.prepared.sources or self.prepared.multilabel:
             source_info.update(pairs=self.prepared.source_info, multilabel=self.prepared.multilabel, image_id=None, image_layer=f'{len(self.prepared.source_info)} annotated images', ground_truth_layer=None)
@@ -2093,7 +2351,7 @@ class QuickTrainWidget(QWidget):
         self._lock_sources()
         self._start_worker(compare_models,
             lambda result: self._comparison_done(result) if generation == self._generation else self._status("Dataset changed; comparison discarded."),
-            self.prepared, self._config(), specs, source_info=source_info,
+            selected, self._config(), specs, source_info=source_info,
             epochs=self.epochs_spin.value(), extra_targets=self.extra_targets_spin.value()/100,
             learning_rate=self.learning_rate_spin.value(), plateau_enabled=self.plateau_group.isChecked(),
             reduce_patience=self.reduce_patience_spin.value(), stop_patience=self.stop_patience_spin.value(),
@@ -2114,6 +2372,39 @@ class QuickTrainWidget(QWidget):
         self.validation_results_label.setText("Comparison complete. See Models for results; current model retained.")
         self._status("Comparison complete. Save workspace to keep candidate checkpoints and results.")
 
+    def _start_full_validation(self):
+        from ._coverage_train import evaluate_full_validation
+        from ._model_project import layer_id
+        if self.model is None or not isinstance(self.prepared, IndexedPatches):
+            raise ValueError('Prepare a matching dataset and load or train a model first.')
+        if self._signature() != self._prepared_signature:
+            raise ValueError('Dataset inputs changed. Prepare the dataset again.')
+        current, generation = self.model, self._generation
+        image, truth = self._layer(self.image_combo), self._layer(self.truth_combo)
+        source = dict(image_id=layer_id(image), ground_truth_id=layer_id(truth),
+                      image_layer=image.name, ground_truth_layer=truth.name,
+                      pairs=self.prepared.source_info, annotation_batches=self._batch_contexts())
+        self._lock_sources()
+        self._status('Evaluating fixed model weights on the complete reserved validation pool. No training updates.')
+        self._start_worker(evaluate_full_validation,
+            lambda result: self._full_validation_done(result, current, generation),
+            current, self.prepared, device=self.device_combo.currentData(), source_info=source)
+
+    def _full_validation_done(self, result, model, generation):
+        if self.model is not model or self._generation != generation:
+            self._status('Model or annotations changed during evaluation; result discarded.')
+            return
+        from ._model_project import record_model_evaluation
+        record_model_evaluation(self.viewer, model, result)
+        self.models_panel.refresh()
+        self._show_metrics()
+        metrics = result['metrics']
+        self.validation_results_label.setText(
+            f"Full validation · {result['patches']:,} patches: Dice {metrics['dice']:.1%} · "
+            f"IoU {metrics['iou']:.1%} · loss {metrics['loss']:.4f}. Fixed retained weights; no training updates.")
+        self.model_state_label.setText('Full validation recorded in memory — Save workspace or export the model to keep this evaluation.')
+        self._status('Full validation complete. Trial checkpoint-selection scores remain separate. Save workspace or export the model to keep the evaluation.')
+
     def _training_done(self, model, register=True):
         self.model = model
         from ._reviewed_regions import record_training_usage
@@ -2128,9 +2419,16 @@ class QuickTrainWidget(QWidget):
         self.model_state_label.setText("Model updated in memory — Save workspace or Export current model to keep these weights.")
         self._show_metrics()
         if model.metrics:
-            text = f"Retained checkpoint: Dice {model.metrics.get('dice',0):.1%} · IoU {model.metrics.get('iou',0):.1%}"
+            trial = bool(model.history and model.history[-1].get('validation', {}).get('evaluation', {}).get('mode') == 'trial')
+            label = 'Retained checkpoint · Trial validation' if trial else 'Retained checkpoint'
+            text = f"{label}: Dice {model.metrics.get('dice',0):.1%} · IoU {model.metrics.get('iou',0):.1%}"
             if 'loss' in model.metrics:
                 text += f" · validation loss {model.metrics['loss']:.4f}"
+            evaluations = model.history[-1].get('evaluations', []) if model.history else []
+            if evaluations:
+                full = evaluations[-1]
+                text += (f"\nFull validation: Dice {full['metrics']['dice']:.1%} · IoU {full['metrics']['iou']:.1%} · "
+                         f"{full['patches']:,} patches; fixed retained weights.")
             self.validation_results_label.setText(text)
         else:
             self.validation_results_label.setText("Final model trained on all reviewed patches. Historical fold results are retained; these weights have no holdout score.")
@@ -2148,6 +2446,11 @@ class QuickTrainWidget(QWidget):
             report = self.model.history[-1].get('cross_validation_report', {}) if self.model.history else {}
             if report.get('aggregate'):
                 self.metrics_label.setText(self.metrics_label.text() + "\nPrior fold evaluation: " + " · ".join(f"{key.title()} {report['aggregate'][key]['mean']:.1%} ± {report['aggregate'][key]['std']:.1%}" for key in ('dice','iou')))
+            evaluations = self.model.history[-1].get('evaluations', []) if self.model.history else []
+            if evaluations:
+                full = evaluations[-1]
+                self.metrics_label.setText(self.metrics_label.text() +
+                    f"\nFull validation: Dice {full['metrics']['dice']:.1%} · IoU {full['metrics']['iou']:.1%} · {full['patches']:,} patches.")
             return
         self.metrics_label.setText(
             f"Training: {self.model.training_rounds} rounds · {self.model.training_steps} total steps\n"
@@ -2156,6 +2459,18 @@ class QuickTrainWidget(QWidget):
             f"Source patch: {self.model.crop_pixels} × {self.model.crop_pixels} px. "
             "These scores do not measure accuracy on a new image."
         )
+        trial = self.model.history[-1].get('validation', {}).get('evaluation', {}) if self.model.history else {}
+        if trial.get('mode') == 'trial':
+            self.metrics_label.setText(self.metrics_label.text().replace('Validation:', 'Trial validation:') +
+                f"\nTrial validation: {trial['selected_patches']:,} / {trial['available_patches']:,} reserved patches · seed {trial['seed']}. "
+                'These scores selected the checkpoint; they are not full-validation scores.')
+        evaluations = self.model.history[-1].get('evaluations', []) if self.model.history else []
+        if evaluations:
+            full = evaluations[-1]
+            values = full['metrics']
+            self.metrics_label.setText(self.metrics_label.text() +
+                f"\nFull validation: Dice {values['dice']:.1%} · IoU {values['iou']:.1%} · "
+                f"{full['patches']:,} patches · fixed retained weights. This is held-out validation, not an independent test set.")
         if self.model.config.class_names:
             self.metrics_label.setText(self.metrics_label.text() + ('\nMultilabel: macro-average over independent channels.' if self.model.config.multilabel else "\nMulticlass: macro-average over foreground classes; background excluded.") +
                 "\n" + " · ".join(f"{name}: IoU {metrics.get(f'class_{i}_iou', 0):.1%}, Dice {metrics.get(f'class_{i}_dice', 0):.1%}" for i, name in enumerate(self.model.config.class_names, 1)))
@@ -2164,6 +2479,11 @@ class QuickTrainWidget(QWidget):
             self.metrics_label.setText(self.metrics_label.text() +
                 f"\nCoverage: {history['epochs']} complete epoch(s). Retained checkpoint: " +
                 (f"epoch {history['retained_epoch']}" if history['retained_epoch'] else "starting model"))
+            selection = history.get('training_selection', {})
+            if selection.get('mode') in ('percentage', 'count'):
+                self.metrics_label.setText(self.metrics_label.text() +
+                    f"\nTraining subset: {selection['selected_training_patches']:,} / "
+                    f"{selection['available_training_patches']:,} patches · seed {selection['seed']}.")
             if history.get('stop_reason'):
                 self.metrics_label.setText(self.metrics_label.text() + "\nEarly stop: " + history['stop_reason'])
             if history.get('learning_rate_events'):
@@ -2248,7 +2568,20 @@ class QuickTrainWidget(QWidget):
     def _save(self):
         if self.model is None:
             raise ValueError("Train or load a model first.")
-        path, _ = QFileDialog.getSaveFileName(self, "Save trained model", "model.pt", "Model checkpoint (*.pt)")
+        from dataclasses import asdict
+        from ._model_project import project
+        from ._model_providers import spec_for
+        from ._model_naming import checkpoint_filename
+        state = project(self.viewer)
+        identifier = self.model.identity.get("model_id")
+        record = next((row for row in state["models"] if row["id"] == identifier), None)
+        if record is None:
+            record = {"spec": spec_for(self.model.config).to_dict(), "config": asdict(self.model.config),
+                      "history": self.model.history}
+        revision = state.get("current_checkpoint") if state.get("current_model") == identifier else None
+        entry = next((run for run in record.get("runs", []) if run["revision"] == revision), record)
+        filename = checkpoint_filename(record, entry)
+        path, _ = QFileDialog.getSaveFileName(self, "Save trained model", filename, "Model checkpoint (*.pt)")
         if path:
             self._start_worker(self._save_task, lambda _result: self._model_saved(path), self.model, path)
 
@@ -2329,15 +2662,31 @@ class QuickTrainWidget(QWidget):
                 image = self.image_combo.currentData()
                 if image is not None and history.get('source', {}).get('image_layer') == image.name and history.get('source', {}).get('image_shape') == list(array_2d(image.data).shape):
                     key = (id(image), tuple(array_2d(image.data).shape), history['config']['crop_pixels'])
+                    from ._annotation_batches import selection
+                    current = selection(image, self.truth_combo.currentData())
+                    if current['scope'] == 'active' and any(b.get('id') == current['id'] and b.get('revision') == current['revision']
+                            for b in history.get('source', {}).get('annotation_batches', [])):
+                        key += ('active', current['id'], current['revision'])
                     self._coverage_splits[key] = history['validation_blocks']
                 break
         if reuse_prepared and isinstance(prepared, IndexedPatches):
+            batched = any(c['scope'] == 'active' for c in self._batch_contexts())
+            try:
+                if batched:
+                    from dataclasses import replace
+                    prepared = replace(prepared, validation_seen_before=False)
+                prepared = self._protect_batch_holdouts(prepared)
+            except ValueError:
+                self._invalidate_crops()
+                raise
+            self.prepared = prepared
+            self._patch_subset_cache = None
             # Reassess this checkpoint against the current holdout. A loaded
             # model may have trained on regions reserved by another model.
             size = prepared.crop_pixels
             held_out = {(p['y0'] // size, p['x0'] // size)
                         for p in prepared.locations if p['split'] == 'validation'}
-            seen = False
+            seen = prepared.validation_seen_before if batched else False
             for region in self._previous_sampled_training(image):
                 y0, x0 = max(0, region['y0']), max(0, region['x0'])
                 y1 = min(prepared.image.shape[0], region['y0'] + region['size'])
@@ -2372,6 +2721,7 @@ class QuickTrainWidget(QWidget):
         review = components._reviewed_area_widget
         library = components.component_library_widget
         self.reviewed_area_widget = review
+        self.batch_widget.selected_regions = components._pending_training_tiles
         self.component_library_widget = library
         _, height, width, _ = review.grid_config
         for spin, original in ((self.review_tile_height, height), (self.review_tile_width, width)):
@@ -2518,6 +2868,9 @@ class QuickTrainWidget(QWidget):
         if self.closed:
             return
         self.closed = True
+        self.batch_widget.shutdown()
+        with suppress(Exception):
+            self._batch_events.changed.disconnect(self._batches_changed)
         if getattr(self.viewer, "_label_assistant_training_widget", None) is self:
             self.viewer._label_assistant_training_widget = None
         if self.component_library_widget is not None:

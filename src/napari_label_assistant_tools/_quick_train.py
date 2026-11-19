@@ -76,7 +76,7 @@ class QuickTrainConfig:
                 any(not isinstance(name, str) or not name.strip() or name.strip().lower() == "background" for name in self.class_names) or
                 len({name.strip().lower() for name in self.class_names}) != len(self.class_names)):
             raise ValueError("Use 2–254 unique foreground class names for multiclass, or 1–254 channel names for multilabel. Background is implicit.")
-        from ._model_providers import spec_for
+        from ._model_providers import CUSTOM_UNET_WIDTHS, spec_for
         spec_for(self).validate()
         if spec_for(self).provider == "smp" and self.input_pixels % 32:
             raise ValueError("SMP input size must be a multiple of 32.")
@@ -92,7 +92,7 @@ class QuickTrainConfig:
             raise ValueError("Batch size must be between 1 and 128.")
         if not 0 <= self.contrast_jitter <= 0.5 or not 0 <= self.brightness_jitter <= 0.25:
             raise ValueError("Contrast variation must be 0–0.5 and brightness variation 0–0.25.")
-        if self.base_channels not in (4, 8, 12, 16):
+        if self.base_channels not in CUSTOM_UNET_WIDTHS:
             raise ValueError("Unsupported U-Net channel width.")
         if self.device not in ("auto", "cpu", "cuda"):
             raise ValueError("Choose Automatic, CPU, or CUDA.")

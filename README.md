@@ -13,7 +13,100 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-## Version 6.4.0: Clear tile confirmation and whole-mask analysis
+![Plugin purpose: curate and review masks, then measure or optionally train models](docs/purpose-flowchart.png)
+
+[Open the editable purpose flowchart](docs/purpose-flowchart.svg).
+
+See the [system design map](docs/system-design.md) for the architecture,
+source-module responsibilities, and data flow
+([PNG](docs/system-design.png) · [editable SVG](docs/system-design.svg)).
+
+## Simple annotation workflow
+
+Open **Plugins → napari-label-assistant → Label Curation — Simple** for a
+compact tile workflow. **Label Curation — Advanced** opens the same dock with
+all existing controls. Switching modes preserves masks and pending selections.
+
+1. **Workspace:** open a project, or save a new one once to establish durable
+   mask storage and tile-progress recovery.
+2. **Annotate & Review:** choose an aligned image and mask, set the review-tile
+   size, and paint or erase in **Edit** mode. Camera follow loads bounded
+   full-resolution areas when zoomed in; zooming out provides a read-only overview.
+   **Reviewed & Next** approves the current tile and visits the next unreviewed
+   tile. Approve only after checking every target and the remaining background.
+3. To select several checked tiles, choose **Review — select tiles** and click
+   their grid cells. Click again to deselect, then **Approve selected tiles**.
+   Approved coverage remains visible in color. Yellow selection alone does not
+   approve annotations. **Skip** visits the next unreviewed tile without changing
+   pending selections. Return to **Edit** to paint.
+4. **Progress & Dataset:** inspect coverage, prepare the dataset, and open Training.
+   Preparation reuses existing training settings; patch size remains independent
+   of review-tile size and the camera-follow edit buffer.
+   **Training amount…** opens the percentage/count controls for quick trials.
+
+**Annotation batch buttons** live in Simple **3. Progress & Dataset**, Advanced
+**Labels → Local Editing → Confirm tiles for dataset**, and **Training → Dataset**.
+They share batch settings per image/mask pair. Click **+ New batch** before starting
+the next annotation stage: the new batch starts empty and is selected for training.
+Subsequent approvals join it. Batch buttons select
+the active batch for annotation and viewing; they leave the training dropdown
+unchanged. Choose **Training: Batch N** explicitly for preparation, or
+**Training: all reviewed annotations** for cumulative data.
+Global reviewed coverage keeps increasing independently of batch membership.
+Each batch keeps its own color, matching its button marker. **Show: Active batch /
+All batches / Hide** controls the coordinate overlay independently of training.
+Approved regions keep their colors automatically; earlier batches are dimmed in
+All batches, with active-batch priority at overlaps. Yellow marks pending tiles;
+a red × flags batch regions that need review again after edits or revocation.
+Right-click a button to add existing reviewed selections, remove membership,
+rename, finish/reopen, or inspect dated review actions and recorded training use.
+An empty batch disables preparation. Existing review coverage is retained as
+Batch 1 when batches are first initialized; missing historical approval dates
+remain unknown. Existing workspaces retain cumulative training by default.
+
+To continue a model with new annotations, create the next batch, review its
+regions, prepare that batch, select the saved model, and choose **Continue
+training**. Earlier holdout regions remain reserved, and batch selection/version
+is recorded with the training run. Membership is stored as coordinates without
+copying the full image/mask. Historical runs retain their input fingerprints and
+coordinates; batches do not freeze old annotation pixel values.
+
+Pending selections use a light yellow fill and a border kept approximately three
+screen pixels wide, so selected tiles remain noticeable when zooming out.
+Tile selection saves show a busy indicator and a saved/error status. Approval,
+revocation, and review undo show the actual completed tile count; stopping a batch
+retains its partial count rather than displaying full completion.
+
+Collapsed **Tools** includes clearing pending selection, revoking selected/current
+or all reviewed areas for the chosen image/mask pair, and undoing the last review
+action. Painting invalidates affected approval and review undo; recorded past
+training use remains visible. Existing comparison, composition, component screening,
+and workspace options remain accessible in Advanced.
+
+After the first workspace save, pending selections and review metadata are
+recorded automatically in a small `tile-progress.json` inside the workspace data
+folder. Mask pixels use the existing bounded write/recovery mechanism. This is
+tile-progress recovery, not a replacement for **Save**: save added layers, models,
+and other project settings normally. Recovery is tied to the saved manifest and
+matching source stores; incompatible records are reported and left unapplied.
+Keep the JSON project and its data folder together. Existing workspaces remain
+compatible; editing alone never confirms background.
+
+## Version 7.0.0: Simple curation and annotation batches
+
+- Choose Simple or Advanced mode, sharing the same annotations and review state.
+- Edit bounded mask areas and approve review tiles from the Simple workflow.
+  Recover pending selections and tile progress after reopening a saved workspace.
+- Organize reviewed regions into named batches with persistent colors, review
+  history, and independent display and training selections.
+- Prepare all eligible training patches or a reproducible percentage/count subset.
+  Quick trials can also sample validation while retaining reserved holdout regions.
+- Configure wider U-Nets, retain existing checkpoint architectures when continuing,
+  and save models with readable automatic filenames and training provenance.
+- Preserve existing workspace and checkpoint compatibility, with bounded operations
+  for large disk-backed masks. See [release notes](CHANGELOG.md#700---2026-11-19).
+
+### Earlier: tile confirmation and whole-mask analysis (6.4.0)
 
 - **Edit & Confirm:** retain camera-follow painting, bounded edit crops, undo/redo,
   and save/load. Confirm fully reviewed tiles, including objects and checked
@@ -129,9 +222,10 @@ the complete workflow.
 
 ## Model Library and workspace file management
 
-The plugin menu now provides three separate panels:
+The plugin menu provides:
 
-- **Label Curation** — edit, review, and organize segmentation labels.
+- **Label Curation — Simple / Advanced** — two presentations of one shared
+  annotation dock, for tile review or the full editing and analysis controls.
 - **Model Training** (formerly Quick Train) — prepare datasets, configure models,
   train, validate, and predict.
 - **Model Library** — organize models and checkpoints, document training runs,
@@ -416,8 +510,8 @@ without SAM3 Assistant.
 - A normal save writes a small `.label-assistant.json` manifest.
 - **Optimize large images** optionally creates a local, chunked
   multiscale OME-Zarr pyramid for single-scale images larger than 32,768
-  pixels on either axis. The original file remains unchanged; reopen the
-  workspace after the first optimized save to use the pyramid. Leave the
+  pixels on either axis. The original file remains unchanged; the saved
+  pyramid is activated automatically after a successful save. Leave the
   option off to keep lightweight links to the original image files.
 - New in-memory Labels layers are persisted once as writable, chunked
   OME-Zarr data beside the manifest. Later saves reuse the same store instead
@@ -429,6 +523,11 @@ without SAM3 Assistant.
   plugins are no longer needed. It also supports fileless and multiscale images
   and can be combined with image optimization. Allow time and disk space for
   copying full datasets.
+- Saved image copies become the live data source after the save succeeds;
+  no close/reopen is needed before using **Link to source data** for fast
+  follow-up saves. Repeated saves to the same portable package also reuse its
+  existing image stores. **Save As** to a different destination still creates
+  independent mask copies, and includes image copies when portable mode is on.
 - With **Link to source data** selected, **Save As** to a new destination creates writable mask copies beside the
   new manifest, including masks opened read-only from shared mounts. Images
   remain linked; keep the shared mount available when reopening locally.
@@ -471,12 +570,33 @@ Layer selectors update automatically when layers are opened, added, removed,
 or renamed. **Refresh layers** remains beside the shared Labels-layer selector
 as an always-visible fallback; it is no longer buried among component actions.
 
-Mask Analysis & Cleanup's **Copy destination** lists other Labels layers with the same 2D
+Mask Analysis & Cleanup's **Screen & Group Objects** keeps the group destination
+beside **Copy selected**. Enable **Select components from canvas** and **Keep
+earlier component selections**, then click objects belonging to a human-defined
+group, such as Remak bundles. Objects may have different source label values.
+Cyan selection boxes identify the pending objects without changing their pixels;
+click a selected object again to deselect it, or use **Undo selection** and
+**Clear selection**. **+ New** names a destination; its Labels layer is created
+when objects are copied. Right-click selected rows → **Copy selected to → New
+group…** names a group and copies the selection. Copies retain source values and
+image coordinates. Enable **Clear selection after successful copy** for batches;
+cancellation and failed copies retain the pending selection.
+
+Workspace Save preserves pending selections separately for each source and group.
+After reopening, **Find components** checks and restores matching objects. Source
+values, bounds, pixel footprints, and analysis coordinates must still match;
+changed objects require reselection. Use the same analysis scope when restoring
+an editable-area selection. Grouping foreground objects does not approve the
+surrounding background for training. The component index is still built on demand;
+large whole-mask searches remain chunked and cancellable, and can take time.
+
+The **Group / destination** selector lists other Labels layers with the same 2D
 shape and matching spatial transform as the selected source, preferring **Curated**.
 Review/coverage masks and preserved originals are available only through manual
 selection, so they are not accidentally chosen as an annotation destination.
 
-Enable **Choose destination manually** to select any Labels layer or type a new
+Under **Advanced: grid addresses and destination matching**, enable **Choose
+destination manually** to select any Labels layer or type a new
 name. The first copy to an existing manual destination shows both layer names
 and dimensions, with **Copy** and **Cancel**. Cancel changes no layers or pixels;
 repeated copies to the confirmed destination do not keep prompting.
@@ -592,10 +712,16 @@ training, prediction, or model loading is requested; other tools work without it
    **Foreground classes** empty for binary training, or define semantic classes
    and use their numeric IDs consistently in every included Labels layer.
 3. Return to **1. Dataset** and click **Prepare dataset**. The default
-   **All patches** workflow indexes eligible patches and streams them during
+   **All / selected training patches** workflow indexes eligible patches and streams them during
    training. Set source patch and model input sizes in **5. Advanced**;
    defaults are 512 × 512 pixels. Preparation locks included annotations,
    supports cancellation, and does not open a gallery automatically.
+   Under **Training patch selection**, keep **All**, choose a **Percentage**, or
+   enter a **Patch count**. This samples the smaller model patches across approved
+   regions; it does not revoke review tiles. For example, 10% of 1,225 training
+   patches selects 123. The subset seed makes selection reproducible, and changing
+   the budget reuses the prepared index. Foreground/background patches are sampled
+   proportionally; invalid subsets report which supervision is missing.
 4. Optionally click **Show patch preview**. Cyan frames mark training patches
    and orange frames mark validation. Double-click a tile to locate it in its
    source image. **Return to image** hides the read-only gallery. Single-pair
@@ -603,13 +729,31 @@ training, prediction, or model loading is requested; other tools work without it
    image/specimen groups. Review the indexed counts and validation settings.
    **Sample patches** remains available for complete single-pair annotations;
    its crop count applies to a fixed sample rather than full coverage.
-5. In **3. Train**, choose epochs for **All patches** or steps for **Sample
+5. In **3. Train**, choose epochs for **All / selected training patches** or steps for **Sample
    patches**, then click **Train new model**. Device selection is in Advanced;
    Automatic falls back to CPU when CUDA is unavailable or lacks memory.
    Changed source pixels, pair selections, class definitions, patch sizes, or
    validation settings require preparation again. Inspect validation Dice, IoU,
    precision, and recall; multiclass models also show per-class results.
    These validation-selected scores are not independent test-set accuracy.
+
+Training subsets reuse the same chosen patches every epoch. By default, all reserved
+validation patches are evaluated. For faster experiments, enable **Quick trial —
+smaller validation set** and choose **Validation percentage** (default 10%). With
+10% of each pool, 5,257 training / 1,813 validation patches become 526 / 182.
+The validation sample stays fixed across epochs and training-subset changes,
+preserves the spatial/image split, and must retain required target/background and
+class/channel supervision. Scores are labeled **Trial validation**.
+
+After a trial, use **Train → Validation → Evaluate full validation set** to evaluate
+the retained weights on every reserved patch without training or reselecting weights.
+Full-validation results are saved separately from trial scores; save the workspace
+or export the model afterward. Change **Subset seed** to try different training
+patches, or return to **All** and turn Quick trial off for full training/validation.
+Source arrays remain disk-backed; selection stores coordinates rather than image
+copies, and initial preparation still indexes the eligible pool. Workspace settings
+and completed checkpoints record the selection and evaluation provenance. Spatial
+k-fold and final all-reviewed training retain their full-index behavior.
 6. In **4. Inference**, select a **Prediction image** and choose **Current area**,
    **Entire image**, or **Drawn box**. Current area predicts one crop; the other
    modes blend overlapping tiles with progress and cancellation. Each run adds a
@@ -683,6 +827,20 @@ workspace using stable layer IDs, so renaming layers does not break the pairing.
 Missing layers are reported for repair in Manage pairs. **Review selected pair**
 opens the normal review controls when needed; those controls stay collapsed in
 multiple-pair mode. Training history records every included source.
+
+#### Continue training and history
+
+Use **Continue training** to improve the current or loaded model. It starts from
+that model's weights with a fresh optimizer. **Train new model** creates a model
+using the selected initialization instead.
+
+Prepare the dataset if needed; patch preview is optional. Set **Learning rate**
+in **Advanced**, then continue from **Train**. The best validation weights are
+retained, and cancellation preserves the previous model. Save again after a
+completed round to persist its weights and history.
+
+See [continuation and training history](docs/TRAINING.md#continue-training-an-existing-model)
+for validation restrictions, sampling, and the exported `.history.json` file.
 
 ### Grid registration and QC traceability
 
@@ -826,7 +984,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (6.4.0):
+Install the current GitHub version (7.0.0):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"
@@ -863,33 +1021,3 @@ pytest
 ## License
 
 Distributed under the terms of the MIT license.
-
-### Continue training a large-image model
-
-After training or loading a saved `.pt` model, prepare and review crops, then
-click **Continue training** to fine-tune its existing weights.
-**Train new model** starts a new model. Each round uses a new AdamW optimizer;
-this is weight fine-tuning rather than exact optimizer-state resumption.
-Use a lower **Learning rate**, for example `0.0001`, for cautious fine-tuning.
-The model with the best validation Dice is retained, including the starting
-model if every checkpoint scores worse. Ties retain the latest checkpoint. Cancellation preserves the current model.
-
-In **Sample patches** mode, increase crop count or change the sampling seed to
-inspect different training locations. **All patches** visits every eligible
-training patch each epoch. Spatial holdouts stay fixed for compatible single-pair
-settings; multiple-pair holdouts keep entire image/specimen groups together.
-Changing context, labels, or source changes the validation setup; scores from
-such rounds are not directly comparable and may include previously trained areas.
-Keep representative earlier examples in later rounds to reduce forgetting.
-Training longer on one small crop set alone does not provide wider image coverage.
-Round and total-step counts are saved with the model; save again after continuing.
-
-Each saved model also stores its completed training history inside the `.pt`
-checkpoint and exports a readable JSON file beside it: `model.pt` →
-`model.history.json`. Each round records UTC timestamps, duration, source-layer
-names, settings, learning rate, crop coordinates/counts, loss and validation
-metrics at evaluation steps, and which step's weights were retained.
-Loading and continuing a model appends to its history; saving to another path
-carries that history forward. Older checkpoints remain loadable, with no
-reconstructed history for rounds that were not recorded. Canceled rounds do
-not alter the current model or its completed-round history.

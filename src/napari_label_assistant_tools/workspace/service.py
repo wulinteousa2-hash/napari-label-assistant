@@ -104,6 +104,8 @@ def save_workspace(
     Otherwise existing Zarr-backed layers remain external references. In-memory Labels
     layers are written chunk-by-chunk into a sibling durable-data directory and
     rebound to the writable Zarr array so later saves do not copy mask pixels.
+    Saved image copies are activated after the manifest commits; subsequent
+    saves reuse them without reopening the workspace.
     """
 
     _ensure_no_training(viewer)
@@ -122,6 +124,7 @@ def save_workspace(
     path.parent.mkdir(parents=True, exist_ok=True)
     data_root = workspace_data_root(path)
     label_bindings: list[tuple[Any, Any, dict[str, Any]]] = []
+    image_bindings: list[tuple[Any, list, dict[str, Any]]] = []
     library_bindings: list[tuple[Any, dict[str, Any]]] = []
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
@@ -143,6 +146,7 @@ def save_workspace(
                 copy_labels=copy_labels or bool(getattr(layer, '_label_assistant_mask_temporary', False)),
                 complete_package=complete_package,
                 label_bindings=label_bindings,
+                image_bindings=image_bindings,
                 library_bindings=library_bindings,
                 progress=progress,
                 xy_chunk=int(xy_chunk),
@@ -231,6 +235,8 @@ def save_workspace(
             layer._label_assistant_mask_temporary = False
         finally:
             layer._label_assistant_library_rebinding = False
+    for layer, levels, reference in image_bindings:
+        _activate_saved_image(viewer, layer, levels, reference)
     from .._component_library import KEY as LIBRARY_KEY
     for layer, state in library_bindings:
         layer.metadata = {**layer.metadata, LIBRARY_KEY: state}
@@ -247,6 +253,13 @@ def save_workspace(
     from .._model_files import associate_workspace
     from .._model_project import notify_project
     associate_workspace(viewer, path)
+    from .._tile_progress import write_progress
+    viewer._label_assistant_progress_manifest = str(path.resolve())
+    progress_warning = None
+    try:
+        write_progress(viewer, path, reset=True)
+    except Exception as error:
+        progress_warning = str(error)
     notify_project(viewer)
     return {
         "storage_state": storage_state,
@@ -261,6 +274,7 @@ def save_workspace(
         "skipped_layers": skipped,
         "data_root": str(data_root),
         "complete_package": complete_package,
+        "progress_warning": progress_warning,
     }
 
 
@@ -344,6 +358,13 @@ def load_workspace(
 
         if progress is not None:
             progress(total, total, "Restoring viewer state…")
+        progress_warnings = []
+        from .._tile_progress import restore_progress
+        try:
+            recovered = restore_progress(viewer, path)
+            restored.extend(name for name in recovered if name not in restored)
+        except Exception as error:
+            progress_warnings.append(str(error))
         _restore_viewer_state(viewer, payload)
         from .._mask_tiles import manager_for
         manager = manager_for(viewer)
@@ -377,6 +398,7 @@ def load_workspace(
         "restored_layers": restored,
         "skipped_layers": skipped,
         "imported_legacy": bool(payload.get("imported_from")),
+        "progress_warnings": progress_warnings,
     }
 
 
@@ -558,6 +580,7 @@ def _serialize_layer(
     copy_labels: bool = False,
     complete_package: bool = False,
     label_bindings: list | None = None,
+    image_bindings: list | None = None,
     library_bindings: list | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     data_root: Path,
@@ -625,7 +648,16 @@ def _serialize_layer(
         return record
 
     if layer_type == "Image":
-        if complete_package:
+        reference = _zarr_reference(layer)
+        needs_optimization = (
+            (reference is None or not reference.get('multiscale'))
+            and optimize_large_images and _needs_image_pyramid(layer)
+        )
+        if complete_package and (
+            reference is None
+            or not Path(reference['path']).resolve().is_relative_to(data_root.resolve())
+            or needs_optimization
+        ):
             data_root.mkdir(parents=True, exist_ok=True)
             target = _new_image_path(data_root, layer_index, str(layer.name))
             if optimize_large_images and _needs_image_pyramid(layer):
@@ -644,14 +676,12 @@ def _serialize_layer(
             }
             if multiscale:
                 record["storage"].update(multiscale=True, datasets=[f"s{i}" for i in range(len(levels))])
+            reference = {**record['storage'], 'path': target}
+            if image_bindings is not None:
+                image_bindings.append((layer, levels, reference))
             record.update(_image_state(layer))
             return record
-        reference = _zarr_reference(layer)
-        if (
-            (reference is None or not reference.get("multiscale"))
-            and optimize_large_images
-            and _needs_image_pyramid(layer)
-        ):
+        if needs_optimization:
             data_root.mkdir(parents=True, exist_ok=True)
             target = _new_image_path(
                 data_root,
@@ -675,7 +705,8 @@ def _serialize_layer(
                 "multiscale": True,
                 "datasets": [f"s{level}" for level in range(len(levels))],
             }
-            _remember_layer_storage(layer, reference)
+            if image_bindings is not None:
+                image_bindings.append((layer, levels, reference))
         if reference is not None:
             record["storage"] = {
                 "kind": "zarr",
@@ -733,6 +764,47 @@ def _serialize_layer(
         return record
 
     return None
+
+
+def _activate_saved_image(viewer, layer, levels, reference):
+    """Adopt saved arrays after manifest commit, without reopening the session.
+
+    napari does not support changing an Image's multiscale mode through its
+    data setter. Use a replacement Image only for that transition, preserving
+    layer state/order/selection. Existing Labels and their editing state stay put.
+    """
+    multiscale = bool(reference.get('multiscale'))
+    data = levels if multiscale else levels[0]
+    if (bool(getattr(layer, 'multiscale', False)) == multiscale
+            or not hasattr(layer, 'as_layer_data_tuple')):
+        if not hasattr(layer, 'as_layer_data_tuple'):
+            layer.multiscale = multiscale
+        layer.data = data
+        _remember_layer_storage(layer, reference)
+        return layer
+
+    _, state, _ = layer.as_layer_data_tuple()
+    state = dict(state)
+    state['multiscale'] = multiscale
+    state['metadata'] = dict(state.get('metadata', {}))
+    replacement = type(layer)(data, **state)
+    _remember_layer_storage(replacement, reference)
+    position = viewer.layers.index(layer)
+    name = layer.name
+    selected = list(viewer.layers.selection)
+    active = viewer.layers.selection.active
+    viewer.layers.insert(position, replacement)
+    # Keep Workspace's active-project association while its image is replaced.
+    project_ids = getattr(viewer, '_label_assistant_workspace_layer_ids', None)
+    if project_ids is not None and id(layer) in project_ids:
+        project_ids.discard(id(layer))
+        project_ids.add(id(replacement))
+    viewer.layers.remove(layer)
+    replacement.name = name
+    viewer.layers.selection.clear()
+    viewer.layers.selection.update(replacement if item is layer else item for item in selected)
+    viewer.layers.selection.active = replacement if active is layer else active
+    return replacement
 
 
 def _restore_layer(viewer: Any, record: dict[str, Any], *, manifest_path: Path):
@@ -1198,6 +1270,9 @@ def _zarr_reference(layer: Any) -> dict[str, Any] | None:
         return None
     metadata = getattr(layer, "metadata", {}) or {}
     remembered = metadata.get(LABEL_ASSISTANT_STORAGE_METADATA_KEY) if isinstance(metadata, dict) else None
+    if (hasattr(layer, '_label_assistant_image_storage_data')
+            and layer.data is not layer._label_assistant_image_storage_data):
+        remembered = None  # Discover a new Zarr source instead of trusting old metadata.
     if isinstance(remembered, dict) and remembered.get("path"):
         reference = dict(remembered)
         reference["path"] = Path(str(remembered["path"])).expanduser()
@@ -1231,6 +1306,8 @@ def _remember_layer_storage(layer: Any, reference: dict[str, Any]) -> None:
         stored["multiscale"] = True
         stored["datasets"] = list(reference.get("datasets") or [])
     metadata[LABEL_ASSISTANT_STORAGE_METADATA_KEY] = stored
+    if type(layer).__name__ == 'Image':
+        layer._label_assistant_image_storage_data = layer.data
     try:
         layer.metadata = metadata
     except Exception:
@@ -1282,6 +1359,12 @@ def _common_record(layer: Any, layer_type: str) -> dict[str, Any]:
         )
     if isinstance(metadata, dict) and isinstance(metadata.get("label_assistant_review"), dict):
         record["label_assistant_review"] = _json_ready(metadata["label_assistant_review"])
+    if isinstance(metadata, dict) and isinstance(metadata.get("label_assistant_screening"), dict):
+        record["label_assistant_screening"] = _json_ready(metadata["label_assistant_screening"])
+    if isinstance(metadata, dict) and isinstance(metadata.get("label_assistant_tile_workflow"), dict):
+        record["label_assistant_tile_workflow"] = _json_ready(metadata["label_assistant_tile_workflow"])
+    if isinstance(metadata, dict) and isinstance(metadata.get('label_assistant_annotation_batches'), dict):
+        record['label_assistant_annotation_batches'] = _json_ready(metadata['label_assistant_annotation_batches'])
     return record
 
 
@@ -1337,6 +1420,15 @@ def _apply_common_state(layer: Any, record: dict[str, Any], *, manifest_path=Non
     review = record.get("label_assistant_review")
     if isinstance(review, dict):
         layer.metadata = {**getattr(layer, "metadata", {}), "label_assistant_review": dict(review)}
+    screening = record.get("label_assistant_screening")
+    if isinstance(screening, dict):
+        layer.metadata = {**getattr(layer, "metadata", {}), "label_assistant_screening": screening}
+    tile_workflow = record.get('label_assistant_tile_workflow')
+    if isinstance(tile_workflow, dict):
+        layer.metadata = {**getattr(layer, 'metadata', {}), 'label_assistant_tile_workflow': tile_workflow}
+    batches = record.get('label_assistant_annotation_batches')
+    if isinstance(batches, dict):
+        layer.metadata = {**getattr(layer, 'metadata', {}), 'label_assistant_annotation_batches': batches}
     from .._component_library import KEY as LIBRARY_KEY, ComponentLibrary
     library_state = record.get(LIBRARY_KEY)
     if isinstance(library_state, dict):

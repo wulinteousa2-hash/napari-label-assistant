@@ -48,6 +48,9 @@ def catalog(viewer):
             dataset = datasets.get(dataset_id, {})
             validation = history.get("validation", {})
             method = validation.get("method", "sampled holdout" if history.get("crop_summary") else "unknown")
+            evaluation = validation.get('evaluation', {})
+            if evaluation.get('mode') == 'trial':
+                method += f" · Trial validation ({evaluation['selected_patches']}/{evaluation['available_patches']})"
             checkpoint = run.get("checkpoint") or (model.get("checkpoint", "") if latest else "")
             loaded = model["id"] + ":" + run["revision"] in runtime or (latest and model["id"] in runtime)
             status = "In memory" if loaded else "Not saved"
@@ -156,6 +159,9 @@ def run_curve(viewer, row):
     points = history_points(history[-1:])
     for point in points:
         point["series"] = f"{row['model_name']} / run {row['run']} [{row['model_id'][:6]}]"
+        if point.get('validation_scope') in ('trial', 'full') and ('evaluations' in history[-1] or
+                history[-1].get('validation', {}).get('evaluation', {}).get('mode') == 'trial'):
+            point['series'] += ' · Trial validation' if point['validation_scope'] == 'trial' else ' · Full validation'
     return points
 
 

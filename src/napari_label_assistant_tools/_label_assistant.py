@@ -1,14 +1,7 @@
 from __future__ import annotations
 
 import napari
-from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QComboBox, QAbstractSpinBox, QCheckBox
-
-from ._widget import (
-    _LayerActivityIndicator,
-    component_operations_widget,
-)
-from ._workspace_widget import WorkspaceManagerWidget
-from ._quick_train_widget import QuickTrainWidget
+from qtpy.QtWidgets import QWidget
 
 
 def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
@@ -18,45 +11,28 @@ def label_assistant_widget(viewer=None, **kwargs) -> QWidget:
         if viewer is None:
             raise RuntimeError("No active napari viewer found.")
 
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    activity_header = _LayerActivityIndicator(page)
-    activity_header.set_context_tooltip(
-        "Edit, review, and organize segmentation labels. "
-        "Annotate full-resolution 2D images at 100,000 × 100,000-pixel scale "
-        "without cropping. Inspect and curate connected components, then use "
-        "reproducible grid addresses to report, correct, and re-review mask "
-        "regions."
-    )
-    layout.addWidget(activity_header)
-    tools = QTabWidget()
-    workspace = WorkspaceManagerWidget(napari_viewer=viewer)
-    tools.addTab(workspace, "Workspace")
-    components = component_operations_widget(viewer, activity_indicator=activity_header)
-    tools.addTab(components, "Labels")
-    training = QuickTrainWidget(viewer)
-    training.attach_annotation_widgets(components)
-    tools.addTab(training, "Training")
-    for panel in (components, training):
-        for control in panel.findChildren(QComboBox):
-            control.currentIndexChanged.connect(workspace.mark_changed)
-        for control in panel.findChildren(QAbstractSpinBox):
-            control.valueChanged.connect(workspace.mark_changed)
-        for control in panel.findChildren(QCheckBox):
-            control.toggled.connect(workspace.mark_changed)
-    tools.setTabToolTip(
-        0,
-        "Create, open, save, and transfer complete workspaces.",
-    )
-    tools.setTabToolTip(
-        1,
-        "Edit Labels and review connected components.",
-    )
-    tools.setTabToolTip(
-        2,
-        "Prepare and review crops, train or continue a U-Net, and preview predictions.",
-    )
-    layout.addWidget(tools)
-    page._activity_header = activity_header
-    page._tool_tabs = tools
+    from ._curation_shell import LabelAssistantWidget
+    page = getattr(viewer, '_label_assistant_curation_widget', None)
+    if page is None:
+        page = LabelAssistantWidget(viewer)
+        viewer._label_assistant_curation_widget = page
     return page
+
+
+def _open_mode(viewer, mode):
+    viewer = viewer or napari.current_viewer()
+    if viewer is None:
+        raise RuntimeError('No active napari viewer found.')
+    dock, widget = viewer.window.add_plugin_dock_widget('napari-label-assistant', 'Label Curation')
+    widget.set_mode(mode)
+    dock.show()
+    dock.raise_()
+    return widget
+
+
+def open_simple_curation():
+    _open_mode(None, 'simple')
+
+
+def open_advanced_curation():
+    _open_mode(None, 'advanced')

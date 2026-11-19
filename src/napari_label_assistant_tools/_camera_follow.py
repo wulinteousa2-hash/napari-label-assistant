@@ -394,10 +394,20 @@ class CameraFollowController(QObject):
                     entry.layer: self._modes.get(entry.layer, str(entry.layer.mode))
                     for entry in manager.entries
                 }
+                active = self.host.viewer.layers.selection.active
+                selected_overview = next(
+                    (entry for entry in manager.entries
+                     if entry.overview is not None and entry.overview is active),
+                    None,
+                )
                 backend.apply_follow(manager, window.origin, window.size, prepared)
                 for entry in manager.entries:
                     if entry.bounds is not None:
                         entry.layer.mode = modes[entry.layer]
+                # Hand the selected read-only overview back to its editable
+                # crop, while leaving unrelated layer selections alone.
+                if selected_overview is not None and selected_overview.layer.editable:
+                    self.host.viewer.layers.selection.active = selected_overview.layer
                 self._modes.clear()
             finally:
                 self.updating = False

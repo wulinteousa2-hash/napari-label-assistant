@@ -6,7 +6,8 @@ from qtpy.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QGroupBox, QCombo
     QLineEdit, QLabel, QPushButton, QHBoxLayout, QPlainTextEdit, QListWidget, QListWidgetItem, QFileDialog)
 from qtpy.QtCore import Qt
 from ._model_project import project, add_task, layer_id, remember_model, RUNTIME
-from ._model_providers import ModelSpec, provider_available, spec_for
+from ._model_providers import (CUSTOM_UNET_WIDTHS, ModelSpec, custom_unet_parameter_count,
+    provider_available, spec_for)
 
 class ModelsWidget(QWidget):
     def __init__(self, trainer):
@@ -65,12 +66,18 @@ class ModelsWidget(QWidget):
         self.encoder.setToolTip("Type another encoder supported by your installed SMP version.")
         self.initialization = QComboBox()
         self.width = QComboBox()
+        self.width.setToolTip("Wider models use more memory and computation; reduce batch size if needed. "
+                              "Changing width applies to new models. Continue training keeps the loaded model's architecture.")
         form.addRow("Model name",self.name)
         form.addRow("Provider",self.provider)
         form.addRow("Architecture",self.architecture)
         form.addRow("Encoder",self.encoder)
         form.addRow("Initialization",self.initialization)
         form.addRow("Channel width",self.width)
+        self.parameter_count = QLabel()
+        self.parameter_count.setWordWrap(True)
+        self.parameter_count.setToolTip("Weight storage assumes float32. Checkpoints also contain metadata; training memory is larger.")
+        form.addRow(self.parameter_count)
         self.availability = QLabel()
         self.availability.setWordWrap(True)
         form.addRow(self.availability)
@@ -131,6 +138,9 @@ class ModelsWidget(QWidget):
         layout.addWidget(group)
         layout.addStretch(1)
         self.provider.currentIndexChanged.connect(self._provider_changed)
+        self.width.currentIndexChanged.connect(self._update_parameter_count)
+        self.class_names_edit.textChanged.connect(self._update_parameter_count)
+        self.output_mode.currentIndexChanged.connect(self._update_parameter_count)
         self.task_combo.currentIndexChanged.connect(self._task_changed)
         self.models.currentIndexChanged.connect(self._model_changed)
         self.run_combo.currentIndexChanged.connect(self._details)
@@ -253,7 +263,7 @@ class ModelsWidget(QWidget):
         if provider=="smp":
             self.initialization.addItem("ImageNet pretrained encoder","imagenet")
         self.width.clear()
-        for width in (4,8,12,16) if provider=="custom" else (16,32,64):
+        for width in CUSTOM_UNET_WIDTHS if provider=="custom" else (16,32,64):
             self.width.addItem(str(width),width)
         self.width.setCurrentIndex(self.width.findData(8 if provider=="custom" else 32))
         self.encoder.setEnabled(provider=="smp")
@@ -262,8 +272,24 @@ class ModelsWidget(QWidget):
         self.width.setEnabled(provider!="smp")
         self.width.setVisible(provider!="smp")
         self.configuration_form.labelForField(self.width).setVisible(provider!="smp")
+        self._update_parameter_count()
         self.availability.setText("Install in the napari environment: python -m pip install segmentation-models-pytorch" if not provider_available(provider) else "Grayscale image → binary or semantic class segmentation, as defined by the task.")
         self.availability.setToolTip("Inputs use per-patch 1st–99th percentile normalization. SMP pretrained encoder weights are adapted to one input channel; saved checkpoints retain this preprocessing specification.")
+
+    def _update_parameter_count(self, *_args):
+        custom = self.provider.currentData() == "custom"
+        self.parameter_count.setVisible(custom)
+        self.parameter_count.clear()
+        width = self.width.currentData()
+        if not custom or width is None:
+            return
+        try:
+            names = self.class_names()
+        except ValueError:
+            return
+        outputs = len(names) if self.is_multilabel() else len(names) + 1 if names else 1
+        count = custom_unet_parameter_count(width, outputs)
+        self.parameter_count.setText(f"{count:,} parameters · {count * 4 / 1_000_000:.1f} MB weights (float32)")
 
     def spec(self):
         spec=ModelSpec(provider=self.provider.currentData(),architecture=self.architecture.currentData() or self.architecture.currentText().strip(),
@@ -362,6 +388,12 @@ class ModelsWidget(QWidget):
         if not provider_available(spec.provider):
             status+="; model provider unavailable"
         metrics=" · ".join(f"{k}: {v:.4f}" for k,v in (row.get("metrics",{}) if entry is row else entry.get("history",{}).get("retained_validation",{})).items())
+        score_history = (row.get('history') or [{}])[-1] if entry is row else entry.get('history', {})
+        if score_history.get('validation', {}).get('evaluation', {}).get('mode') == 'trial':
+            metrics = 'Trial validation: ' + metrics
+        if score_history.get('evaluations'):
+            full = score_history['evaluations'][-1]
+            metrics += f"\nFull validation: Dice {full['metrics']['dice']:.4f} · IoU {full['metrics']['iou']:.4f} · {full['patches']:,} patches"
         history=row.get("history",[])
         source=history[-1].get("source",{}) if history else {}
         text=f"{spec.label()}\n{status}\nParameters: {row.get('parameters',0):,}\nTraining rounds: {len(history)}\n{metrics}\nTarget: {source.get('target_definition','Not recorded')}\nCheckpoint: {entry.get('checkpoint','Not saved — workspace Save will save weights')}"

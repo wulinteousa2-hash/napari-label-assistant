@@ -97,7 +97,11 @@ def test_optimized_save_rebinds_real_napari_image_as_multiscale(
     load_workspace(restored_viewer, path)
     restored = restored_viewer.layers[0]
 
-    assert layer.multiscale is False
+    active_image = viewer.layers['reference']
+    assert active_image.multiscale is True
+    assert [tuple(level.shape) for level in active_image.data] == [
+        (7, 9), (4, 5), (2, 3), (1, 2),
+    ]
     assert restored.multiscale is True
     assert [tuple(level.shape) for level in restored.data] == [
         (7, 9),
@@ -105,6 +109,69 @@ def test_optimized_save_rebinds_real_napari_image_as_multiscale(
         (2, 3),
         (1, 2),
     ]
+
+
+def test_optimized_image_followup_save_reuses_data_without_reopen(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, 'LARGE_IMAGE_AXIS_THRESHOLD', 4)
+    monkeypatch.setattr(service, 'PYRAMID_SMALLEST_LEVEL', 2)
+    viewer = make_napari_viewer()
+    original = np.arange(63, dtype=np.uint8).reshape(7, 9)
+    viewer.add_image(original, name='reference')
+    mask = viewer.add_labels(np.ones((7, 9), dtype=np.uint32), name='SAM3 objects')
+    path = tmp_path / 'case.json'
+    service.save_workspace(viewer, path, optimize_large_images=True, xy_chunk=4)
+    def no_copy(*args, **kwargs):
+        raise AssertionError('Routine Save must reuse the saved image and mask stores')
+    monkeypatch.setattr(service, '_persist_image_pyramid_to_zarr', no_copy)
+    monkeypatch.setattr(service, '_persist_labels_to_zarr', no_copy)
+    service.save_workspace(viewer, path, optimize_large_images=True)
+    assert viewer.layers['SAM3 objects'] is mask
+    assert viewer.layers['reference'].multiscale
+
+
+def test_portable_image_can_link_immediately_without_reopening(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools.workspace import service
+    viewer = make_napari_viewer()
+    pixels = np.arange(64, dtype=np.uint8).reshape(8, 8)
+    image = viewer.add_image(pixels, name='fileless image')
+    path = tmp_path / 'case.json'
+    service.save_workspace(viewer, path, complete_package=True)
+    def no_copy(*args, **kwargs):
+        raise AssertionError('Saved images must not be copied again')
+    monkeypatch.setattr(service, '_persist_image_data_to_zarr', no_copy)
+    service.save_workspace(viewer, path)
+    assert viewer.layers['fileless image'] is image
+    np.testing.assert_array_equal(image.data[:], pixels)
+
+
+def test_image_activation_preserves_geometry_and_active_project(make_napari_viewer, tmp_path, monkeypatch):
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, 'LARGE_IMAGE_AXIS_THRESHOLD', 4)
+    monkeypatch.setattr(service, 'PYRAMID_SMALLEST_LEVEL', 2)
+    viewer = make_napari_viewer()
+    image = viewer.add_image(np.zeros((7, 9), dtype=np.uint8), name='reference',
+                             scale=(2, 3), translate=(10, 20), rotate=23,
+                             opacity=.6, gamma=.7,
+                             metadata={'label_assistant_review': {'id': 'image-id'}})
+    path = tmp_path / 'case.json'
+    setattr(viewer, VIEWER_WORKSPACE_PATH_ATTR, str(path))
+    setattr(viewer, VIEWER_WORKSPACE_LAYER_IDS_ATTR, {id(image)})
+    widget = WorkspaceManagerWidget(viewer, settings=_settings(tmp_path / 'settings.ini'))
+    points = [(0, 0), (6, 8)]
+    expected = [image.data_to_world(point) for point in points]
+    viewer.camera.center = (0, 300, 400)
+    viewer.camera.zoom = 3
+    service.save_workspace(viewer, path, optimize_large_images=True, xy_chunk=4)
+    adopted = viewer.layers['reference']
+    assert adopted is not image and adopted.multiscale
+    assert widget.workspace_path == path and widget._has_project_layer()
+    assert adopted.metadata['label_assistant_review']['id'] == 'image-id'
+    assert adopted.opacity == .6 and adopted.gamma == .7
+    np.testing.assert_allclose([adopted.data_to_world(point) for point in points], expected)
+    assert viewer.layers.selection.active is adopted
+    np.testing.assert_allclose(viewer.camera.center, (0, 300, 400))
+    assert viewer.camera.zoom == 3
 
 
 def test_save_as_requests_local_mask_copy(make_napari_viewer, tmp_path, monkeypatch):

@@ -65,7 +65,7 @@ class MaskEntry:
             visible=record.get('visible', True), opacity=record.get('opacity', .7),
             blending=record.get('blending', 'translucent'), metadata={})
         for key in ('spectral_assistant', 'quick_train', 'label_assistant_grid',
-                    'label_assistant_review', 'label_assistant_component_library'):
+                    'label_assistant_review', 'label_assistant_component_library', 'label_assistant_annotation_batches'):
             if key in record:
                 self.source.metadata[key] = deepcopy(record[key])
         from .workspace.service import _remember_layer_storage
@@ -223,11 +223,24 @@ class MaskEntry:
         self.overview.visible = bool(visible and self.manager.overview_enabled)
         self.overview.colormap = self.layer.colormap
 
-    def remove_overview(self):
-        if self.overview is not None:
-            if any(layer is self.overview for layer in self.manager.viewer.layers):
-                self.manager.viewer.layers.remove(self.overview)
-            self.overview = None
+    def remove_overview(self, *, defer=False):
+        overview, self.overview = self.overview, None
+        if overview is None:
+            return
+        viewer = self.manager.viewer
+        def remove():
+            if any(layer is overview for layer in viewer.layers):
+                viewer.layers.remove(overview)
+        if defer or self.manager._flushing_removal:
+            # napari may still hold this helper in remove_selected()'s snapshot,
+            # or be using precomputed indices for a slice deletion. Let that
+            # operation finish before removing any additional list items.
+            overview.visible = False
+            viewer.layers.selection.discard(overview)
+            from qtpy.QtCore import QTimer
+            QTimer.singleShot(0, remove)
+        else:
+            remove()
 
     def recover(self):
         root = self._recovery_dir()
@@ -340,6 +353,7 @@ class MaskTileManager:
         self.error = ''
         self.timer = None
         self._temporary_stores = []
+        self._flushing_removal = False
         from qtpy.QtCore import QTimer
         from qtpy.QtWidgets import QApplication
         if QApplication.instance() is not None:
@@ -348,6 +362,7 @@ class MaskTileManager:
             self.timer.setInterval(500)
             self.timer.timeout.connect(self._auto_flush)
         viewer.layers.events.removing.connect(self._removing)
+        viewer.layers.events.removed.connect(self._removed)
         viewer.layers.events.inserted.connect(self._inserted)
         if hasattr(viewer, 'mouse_double_click_callbacks'):
             viewer.mouse_double_click_callbacks.append(self.locate_from_overview)
@@ -459,11 +474,25 @@ class MaskTileManager:
         layer = self.viewer.layers[event.index]
         entry = getattr(layer, '_label_assistant_mask_entry', None)
         if entry is not None and entry in self.entries:
-            entry.flush()
-            entry.remove_overview()
-            self.entries.remove(entry)
-            if not self.entries:
-                self.dispose()
+            self._flushing_removal = True
+            try:
+                entry.flush()
+            finally:
+                self._flushing_removal = False
+
+    def _removed(self, event):
+        for entry in tuple(self.entries):
+            if event.value is entry.overview:
+                entry.overview = None
+            if event.value is entry.layer:
+                entry.remove_overview(defer=True)
+                self.entries.remove(entry)
+                entry.layer.events.data.disconnect(self.schedule_flush)
+                entry.layer.events.labels_update.disconnect(self.schedule_flush)
+                if self.track_stroke in entry.layer.mouse_drag_callbacks:
+                    entry.layer.mouse_drag_callbacks.remove(self.track_stroke)
+                if not self.entries:
+                    self.dispose()
 
     def dispose(self):
         self.overview_guard.close()
@@ -477,6 +506,7 @@ class MaskTileManager:
             except ValueError:
                 pass
         for emitter, callback in ((self.viewer.layers.events.removing,self._removing),
+                                  (self.viewer.layers.events.removed,self._removed),
                                   (self.viewer.layers.events.inserted,self._inserted)):
             try:
                 emitter.disconnect(callback)

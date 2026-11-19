@@ -2,16 +2,16 @@
 from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from uuid import uuid4
 import os
 import shutil
 import errno
+import json
 
 from ._model_project import project, notify_project, history_summary
+from ._model_naming import BUNDLE_SUFFIXES, available_checkpoint_path
 
 WORKSPACE_PATH = "_label_assistant_workspace_path"
 WORKSPACE_LAYERS = "_label_assistant_workspace_layer_ids"
-BUNDLE_SUFFIXES = (".pt", ".history.json", ".learning.svg", ".loss.svg", ".metrics.csv")
 
 
 def workspace_locations(viewer):
@@ -70,22 +70,20 @@ def update_reference(viewer, row, path, *, expected_state, expected_workspace):
     notify_project(viewer)
 
 
-def copy_checkpoint_bundle(source, models_folder, model_id, revision):
+def copy_checkpoint_bundle(source, models_folder, model_id, revision, filename=None):
     """Stage all companion files, then publish; never replace an existing bundle."""
     source = Path(source).expanduser().resolve()
     folder = Path(models_folder).expanduser().resolve()
     if not source.is_file():
         raise ValueError("The checkpoint is missing. Locate it before copying it into the workspace.")
-    if source.suffix.lower() != ".pt":
+    if source.suffix.lower() != ".pt" and filename is None:
         raise ValueError("Choose a plugin model checkpoint (*.pt).")
     if not model_id.isalnum() or not revision.isalnum():
         raise ValueError("Invalid model or checkpoint identifier.")
     if source.is_relative_to(folder):
         return str(source)
     folder.mkdir(parents=True, exist_ok=True)
-    destination = folder / f"{model_id}-{revision}.pt"
-    while any(destination.with_suffix(suffix).exists() for suffix in BUNDLE_SUFFIXES):
-        destination = folder / f"{model_id}-{revision}-{uuid4().hex[:12]}.pt"
+    destination = available_checkpoint_path(folder, filename or f"{model_id}-{revision}.pt")
     published = []
     try:
         with TemporaryDirectory(prefix=".checkpoint-copy-", dir=folder) as staging:
@@ -100,7 +98,15 @@ def copy_checkpoint_bundle(source, models_folder, model_id, revision):
                 after = original.stat()
                 if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                     raise ValueError("A model file changed during copying. Save training first, then retry.")
-                staged.append((temporary, destination.with_suffix(suffix)))
+                if suffix == ".history.json" and source.name != destination.name:
+                    try:
+                        history = json.loads(temporary.read_text(encoding="utf-8"))
+                    except (ValueError, UnicodeError):
+                        history = None
+                    if isinstance(history, dict) and "model_file" in history:
+                        history["model_file"] = destination.name
+                        temporary.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+                staged.append((temporary, destination if suffix == ".pt" else destination.with_suffix(suffix)))
             for temporary, target in staged:
                 # Hard-link publication fails rather than overwriting a file
                 # created by another writer after the destination check.

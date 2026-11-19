@@ -383,6 +383,93 @@ def test_complete_package_and_optimization_work_together(tmp_path, monkeypatch):
     assert restored.layers[0].multiscale is True
 
 
+@pytest.mark.parametrize('optimize', [False, True])
+def test_repeated_portable_save_reuses_owned_image_store(tmp_path, monkeypatch, optimize):
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, 'LARGE_IMAGE_AXIS_THRESHOLD', 4)
+    monkeypatch.setattr(service, 'PYRAMID_SMALLEST_LEVEL', 2)
+    image = Image(np.arange(64, dtype=np.uint8).reshape(8, 8))
+    viewer = FakeViewer([image])
+    path = tmp_path / 'project.json'
+    save_workspace(viewer, path, complete_package=True, optimize_large_images=optimize, xy_chunk=4)
+    before = json.loads(path.read_text())['layers'][0]['storage']
+    def no_copy(*args, **kwargs):
+        raise AssertionError('Unchanged owned image data must be reused')
+    monkeypatch.setattr(service, '_persist_image_data_to_zarr', no_copy)
+    monkeypatch.setattr(service, '_persist_image_pyramid_to_zarr', no_copy)
+    save_workspace(viewer, path, complete_package=True, optimize_large_images=optimize)
+    after = json.loads(path.read_text())['layers'][0]['storage']
+    assert after == before
+
+
+@pytest.mark.parametrize('portable', [False, True])
+def test_failed_image_save_keeps_live_data_and_references(tmp_path, monkeypatch, portable):
+    from napari_label_assistant_tools.workspace import service
+    monkeypatch.setattr(service, 'LARGE_IMAGE_AXIS_THRESHOLD', 4)
+    monkeypatch.setattr(service, 'PYRAMID_SMALLEST_LEVEL', 2)
+    image = Image(np.arange(64, dtype=np.uint8).reshape(8, 8))
+    original = image.data
+    def fail(*args):
+        raise PermissionError('Manifest write failed')
+    monkeypatch.setattr(service, '_atomic_write_json', fail)
+    with pytest.raises(PermissionError, match='Manifest'):
+        save_workspace(FakeViewer([image]), tmp_path / 'project.json',
+                       complete_package=portable, optimize_large_images=True, xy_chunk=4)
+    assert image.data is original
+    assert service.LABEL_ASSISTANT_STORAGE_METADATA_KEY not in image.metadata
+
+
+def test_replacing_packaged_image_data_is_saved_again(tmp_path):
+    from napari_label_assistant_tools.workspace import service
+    image = Image(np.zeros((8, 8), dtype=np.uint8))
+    viewer = FakeViewer([image])
+    path = tmp_path / 'project.json'
+    save_workspace(viewer, path, complete_package=True)
+    before = json.loads(path.read_text())['layers'][0]['storage']
+    image.data = np.full((8, 8), 7, dtype=np.uint8)
+    save_workspace(viewer, path, complete_package=True)
+    after = json.loads(path.read_text())['layers'][0]['storage']
+    assert before['path'] != after['path']
+    restored = FakeViewer()
+    load_workspace(restored, path)
+    np.testing.assert_array_equal(restored.layers[0].data[:], np.full((8, 8), 7))
+
+
+def test_replacing_saved_image_with_another_zarr_links_new_source(tmp_path):
+    zarr = pytest.importorskip('zarr')
+    image = Image(np.zeros((8, 8), dtype=np.uint8))
+    viewer = FakeViewer([image])
+    path = tmp_path / 'project.json'
+    save_workspace(viewer, path, complete_package=True)
+    replacement = zarr.open_array(str(tmp_path / 'replacement.zarr'), mode='w',
+                                  shape=(8, 8), chunks=(4, 4), dtype='uint8')
+    replacement[:] = 9
+    image.data = replacement
+    save_workspace(viewer, path)
+    storage = json.loads(path.read_text())['layers'][0]['storage']
+    assert storage['path'] == 'replacement.zarr'
+    restored = FakeViewer()
+    load_workspace(restored, path)
+    assert np.all(restored.layers[0].data[:] == 9)
+
+
+def test_portable_save_as_to_another_folder_still_copies_data(tmp_path):
+    image = Image(np.ones((8, 8), dtype=np.uint8))
+    mask = Labels(np.full((8, 8), 17, dtype=np.uint32))
+    viewer = FakeViewer([image, mask])
+    first = tmp_path / 'first' / 'project.json'
+    second = tmp_path / 'second' / 'project.json'
+    save_workspace(viewer, first, complete_package=True)
+    first_sources = [layer.data for layer in viewer.layers]
+    save_workspace(viewer, second, complete_package=True, copy_labels=True)
+    assert all(layer.data.store.root != source.store.root
+               for layer, source in zip(viewer.layers, first_sources))
+    restored = FakeViewer()
+    load_workspace(restored, second)
+    assert np.all(restored.layers[0].data[:] == 1)
+    assert np.all(restored.layers[1].data[:] == 17)
+
+
 def test_broken_zarr_reports_dependency_location(monkeypatch):
     import sys
     from napari_label_assistant_tools.workspace import service

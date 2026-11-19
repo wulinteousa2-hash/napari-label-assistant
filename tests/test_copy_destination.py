@@ -94,6 +94,18 @@ def test_matching_retains_large_overlap_in_bounded_background_work(make_napari_v
     assert source.editable and matched.editable
 
 
+def test_new_tiled_copy_destination_does_not_inherit_annotation_batches(make_napari_viewer,monkeypatch):
+    from napari_label_assistant_tools._annotation_batches import KEY
+    from napari_label_assistant_tools._mask_tiles import full_source
+    viewer = make_napari_viewer()
+    source = viewer.add_labels(np.ones((16,16),np.uint8),name='Candidates')
+    source.metadata[KEY] = {'version':1,'pairs':{'original-image':{'active_id':'original-batch'}}}
+    monkeypatch.setattr(destination,'MEMORY_LIMIT',1)
+    created, _, _ = destination.create_matching(viewer,source,None,'Curated')
+    assert KEY not in full_source(created).metadata
+    assert KEY in source.metadata
+
+
 def test_mixed_integer_types_do_not_round_existing_ids(make_napari_viewer,qtbot,monkeypatch):
     viewer=make_napari_viewer()
     pixels=np.zeros((12,14),np.int64);pixels[1:3,2:5]=7

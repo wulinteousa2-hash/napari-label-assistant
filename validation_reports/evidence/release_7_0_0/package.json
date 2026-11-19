@@ -1,0 +1,8 @@
+{
+  "wheel": "napari_label_assistant-7.0.0-py3-none-any.whl",
+  "version": "7.0.0",
+  "python_modules": 49,
+  "sha256": "771511bd1a894e50a5197430facb9c9746957e470b9c9696d69576fc80d66cd9",
+  "zip_integrity": "passed",
+  "manifest": "included"
+}

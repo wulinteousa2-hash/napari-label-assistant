@@ -1,0 +1,237 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1570" viewBox="0 0 1800 1570" role="img" aria-labelledby="title description">
+<title id="title">napari-label-assistant / System Design</title>
+<desc id="description">Implementation map of version 6.4.0: local annotation, full-resolution storage, curation, spatial review, optional training and inference, and workspace persistence. Twelve panels document the source modules and their boundaries.</desc>
+<defs><marker id="arrow-98d4b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#98d4b2"/></marker><marker id="arrow-94c8df" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#94c8df"/></marker><marker id="arrow-e9c35b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#e9c35b"/></marker><marker id="arrow-df9683" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#df9683"/></marker></defs>
+<rect width="1800" height="1570" fill="#171f1c"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="24" y="44" font-size="36" fill="#edf1e8" font-weight="700">napari-label-assistant / System Design</text>
+<text x="24" y="73" font-size="20" fill="#98d4b2">Full-resolution annotation · connected-component curation · spatial QC · optional local training</text>
+<text x="24" y="99" font-size="14" fill="#a9b7ad">Implementation map | v6.4.0 | source baseline c5c02e3 | 10 November 2026</text>
+<path d="M1120 96 H1160 V96" fill="none" stroke="#98d4b2" stroke-width="1.8" marker-end="url(#arrow-98d4b2)"/>
+<text x="1172" y="101" font-size="13" fill="#98d4b2">core workflow</text>
+<path d="M1310 96 H1350 V96" fill="none" stroke="#e9c35b" stroke-width="1.8" marker-end="url(#arrow-e9c35b)" stroke-dasharray="6 5"/>
+<text x="1362" y="101" font-size="13" fill="#e9c35b">optional model path</text>
+<text x="1585" y="101" font-size="13" fill="#df9683">red = boundary</text>
+<rect x="24" y="129" width="300" height="87" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="36" y="153" font-size="18" fill="#98d4b2" font-weight="700">1 Open workspace</text>
+<text x="36" y="177" font-size="14" fill="#dce2da">Images + candidate / curated masks</text>
+<text x="36" y="198" font-size="14" fill="#dce2da">Restore layers, sources and state</text>
+<rect x="358" y="129" width="316" height="87" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="370" y="153" font-size="18" fill="#98d4b2" font-weight="700">2 Edit and curate</text>
+<text x="370" y="177" font-size="14" fill="#dce2da">Bounded painting + component cleanup</text>
+<text x="370" y="198" font-size="14" fill="#dce2da">Full-resolution source coordinates</text>
+<rect x="708" y="129" width="316" height="87" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="720" y="153" font-size="18" fill="#98d4b2" font-weight="700">3 Review and confirm</text>
+<text x="720" y="177" font-size="14" fill="#dce2da">Grid addresses + exact tile approvals</text>
+<text x="720" y="198" font-size="14" fill="#dce2da">Objects and checked background</text>
+<rect x="1058" y="129" width="328" height="87" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="1070" y="153" font-size="18" fill="#e9c35b" font-weight="700">4 Optional model loop</text>
+<text x="1070" y="177" font-size="14" fill="#dce2da">Prepare → train → predict → review</text>
+<text x="1070" y="198" font-size="14" fill="#dce2da">Checkpoint + dataset provenance</text>
+<rect x="1420" y="129" width="356" height="87" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="1432" y="153" font-size="18" fill="#94c8df" font-weight="700">5 Save and resume</text>
+<text x="1432" y="177" font-size="14" fill="#dce2da">Manifest + image / mask / model assets</text>
+<text x="1432" y="198" font-size="14" fill="#dce2da">Reopen the same spatial workspace</text>
+<path d="M324 172 H358 V172" fill="none" stroke="#98d4b2" stroke-width="1.8" marker-end="url(#arrow-98d4b2)"/>
+<path d="M674 172 H708 V172" fill="none" stroke="#98d4b2" stroke-width="1.8" marker-end="url(#arrow-98d4b2)"/>
+<path d="M1024 172 H1058 V172" fill="none" stroke="#e9c35b" stroke-width="1.8" marker-end="url(#arrow-e9c35b)" stroke-dasharray="6 5"/>
+<path d="M1386 172 H1420 V172" fill="none" stroke="#94c8df" stroke-width="1.8" marker-end="url(#arrow-94c8df)"/>
+<path d="M866 216 V243 H1598 V216" fill="none" stroke="#98d4b2" stroke-width="1.6" marker-end="url(#arrow-98d4b2)"/>
+<text x="1040" y="265" font-size="14" fill="#98d4b2">Annotation and curation can save directly</text>
+<text x="24" y="287" font-size="16" fill="#98d4b2">Predictions return to editing and review; only approved annotation becomes training supervision.</text>
+<rect x="24" y="316" width="568" height="272" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="38" y="342" font-size="18" fill="#98d4b2" font-weight="700">A / CLIENT &amp; ANNOTATION WORKBENCH</text>
+<text x="38" y="364" font-size="12" fill="#a9b7ad">napari.yaml · _label_assistant.py · _widget.py</text>
+<rect x="38" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="49" y="403" font-size="17" fill="#98d4b2" font-weight="700">Label Curation</text>
+<text x="49" y="424" font-size="13" fill="#dce2da">Workspace / Labels / Training</text>
+<text x="49" y="444" font-size="13" fill="#dce2da">Shared napari viewer + layer events</text>
+<rect x="316" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="327" y="403" font-size="17" fill="#98d4b2" font-weight="700">Separate plugin panels</text>
+<text x="327" y="424" font-size="13" fill="#dce2da">Model Training / Model Library</text>
+<text x="327" y="444" font-size="13" fill="#dce2da">Shared project and checkpoint state</text>
+<text x="38" y="488" font-size="14" fill="#dce2da">Edit &amp; Confirm keeps painting and review in one panel.</text>
+<text x="38" y="508" font-size="14" fill="#dce2da">Mask Analysis &amp; Cleanup inspects and curates components.</text>
+<text x="38" y="528" font-size="14" fill="#dce2da">View &amp; Compare toggles candidate and curated layers.</text>
+<text x="38" y="548" font-size="14" fill="#dce2da">Label Tools provides repeatable mask operations.</text>
+<text x="38" y="568" font-size="14" fill="#dce2da">Qt panels coordinate actions on the live viewer.</text>
+<rect x="616" y="316" width="568" height="272" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="630" y="342" font-size="18" fill="#94c8df" font-weight="700">B / LARGE-IMAGE STORAGE &amp; DISPLAY</text>
+<text x="630" y="364" font-size="12" fill="#a9b7ad">_mask_tiles.py · _label_pyramid.py · _label_overview.py</text>
+<rect x="630" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="641" y="403" font-size="17" fill="#94c8df" font-weight="700">Full-resolution source</text>
+<text x="641" y="424" font-size="13" fill="#dce2da">Disk-backed Zarr masks / s0</text>
+<text x="641" y="444" font-size="13" fill="#dce2da">Full-source access for analysis</text>
+<rect x="908" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="919" y="403" font-size="17" fill="#94c8df" font-weight="700">Bounded viewer layers</text>
+<text x="919" y="424" font-size="13" fill="#dce2da">GPU-safe categorical overviews</text>
+<text x="919" y="444" font-size="13" fill="#dce2da">Full-resolution editable crops</text>
+<text x="630" y="488" font-size="14" fill="#dce2da">Bounded mask loading is the default workspace policy.</text>
+<text x="630" y="508" font-size="14" fill="#dce2da">Full stores stay outside napari in the bounded path.</text>
+<text x="630" y="528" font-size="14" fill="#dce2da">Derived label levels retain IDs; they are display data.</text>
+<text x="630" y="548" font-size="14" fill="#dce2da">Image pyramids use intensity downsampling separately.</text>
+<text x="630" y="568" font-size="14" fill="#dce2da">Scientific operations resolve back to the full source.</text>
+<rect x="1208" y="316" width="568" height="272" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="1222" y="342" font-size="18" fill="#98d4b2" font-weight="700">C / LOCAL EDITING &amp; COORDINATES</text>
+<text x="1222" y="364" font-size="12" fill="#a9b7ad">_camera_follow.py · _editing_backend.py · _coordinates.py</text>
+<rect x="1222" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="1233" y="403" font-size="17" fill="#98d4b2" font-weight="700">Camera-follow editing</text>
+<text x="1233" y="424" font-size="13" fill="#dce2da">Plan and read bounded windows</text>
+<text x="1233" y="444" font-size="13" fill="#dce2da">Paint / erase / undo / redo</text>
+<rect x="1500" y="380" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="1511" y="403" font-size="17" fill="#98d4b2" font-weight="700">Registered writes</text>
+<text x="1511" y="424" font-size="13" fill="#dce2da">Crop pixels ↔ full mask ↔ world</text>
+<text x="1511" y="444" font-size="13" fill="#dce2da">Journal changed source regions</text>
+<text x="1222" y="488" font-size="14" fill="#dce2da">_local_editing.py exposes Edit at View Center controls.</text>
+<text x="1222" y="508" font-size="14" fill="#dce2da">_mask_tiles.py commits edits and supports write recovery.</text>
+<text x="1222" y="528" font-size="14" fill="#dce2da">Affine transforms keep crops aligned with their source.</text>
+<text x="1222" y="548" font-size="14" fill="#dce2da">_dynamic_edit.py also supports direct / automatic editing.</text>
+<text x="1222" y="568" font-size="14" fill="#dce2da">Changed annotations invalidate affected approvals.</text>
+<rect x="24" y="606" width="568" height="272" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="38" y="632" font-size="18" fill="#98d4b2" font-weight="700">D / COMPONENT ANALYSIS &amp; CLEANUP</text>
+<text x="38" y="654" font-size="12" fill="#a9b7ad">_large_components.py · _large_component_controller.py</text>
+<rect x="38" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="49" y="693" font-size="17" fill="#98d4b2" font-weight="700">Entire mask / local area</text>
+<text x="49" y="714" font-size="13" fill="#dce2da">Read full-resolution bounded chunks</text>
+<text x="49" y="734" font-size="13" fill="#dce2da">Join connected regions at seams</text>
+<rect x="316" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="327" y="693" font-size="17" fill="#98d4b2" font-weight="700">Inspect and curate</text>
+<text x="327" y="714" font-size="13" fill="#dce2da">Paged table / locate / pick / copy</text>
+<text x="327" y="734" font-size="13" fill="#dce2da">Noise cleanup + deletion recovery</text>
+<text x="38" y="778" font-size="14" fill="#dce2da">Whole-mask analysis is independent of zoom and edit crop.</text>
+<text x="38" y="798" font-size="14" fill="#dce2da">Disconnected regions of one label remain components.</text>
+<text x="38" y="818" font-size="14" fill="#dce2da">Measurements include pixel area, bounds and centroid.</text>
+<text x="38" y="838" font-size="14" fill="#dce2da">Copy destinations use explicit coordinate matching.</text>
+<text x="38" y="858" font-size="14" fill="#dce2da">_deletion_history.py supports undo of the last deletion.</text>
+<rect x="616" y="606" width="568" height="272" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="630" y="632" font-size="18" fill="#94c8df" font-weight="700">E / SPATIAL QC &amp; REVIEWED REGIONS</text>
+<text x="630" y="654" font-size="12" fill="#a9b7ad">_grid_map.py · _reviewed_regions.py · _component_library.py</text>
+<rect x="630" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="641" y="693" font-size="17" fill="#94c8df" font-weight="700">Reproducible addresses</text>
+<text x="641" y="714" font-size="13" fill="#dce2da">Grid origin + cell size → R12C08</text>
+<text x="641" y="734" font-size="13" fill="#dce2da">Locate findings in source space</text>
+<rect x="908" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="919" y="693" font-size="17" fill="#94c8df" font-weight="700">Confirm tile &amp; next</text>
+<text x="919" y="714" font-size="13" fill="#dce2da">Approve objects AND background</text>
+<text x="919" y="734" font-size="13" fill="#dce2da">Persist exact reviewed rectangles</text>
+<text x="630" y="778" font-size="14" fill="#dce2da">Grid addresses and training approvals are separate state.</text>
+<text x="630" y="798" font-size="14" fill="#dce2da">Confirmed regions define known annotation coverage.</text>
+<text x="630" y="818" font-size="14" fill="#dce2da">Unreviewed pixels remain unknown during partial training.</text>
+<text x="630" y="838" font-size="14" fill="#dce2da">Edits require rechecking affected approved regions.</text>
+<text x="630" y="858" font-size="14" fill="#dce2da">The grid is a spatial reference, not a reviewer audit log.</text>
+<rect x="1208" y="606" width="568" height="272" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="1222" y="632" font-size="18" fill="#98d4b2" font-weight="700">F / COMPONENT LIBRARY &amp; LABEL TOOLS</text>
+<text x="1222" y="654" font-size="12" fill="#a9b7ad">_component_library.py · _label_tool_tiles.py · _widget.py</text>
+<rect x="1222" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="1233" y="693" font-size="17" fill="#98d4b2" font-weight="700">Persistent object library</text>
+<text x="1233" y="714" font-size="13" fill="#dce2da">SQLite IDs / selections / coverage</text>
+<text x="1233" y="734" font-size="13" fill="#dce2da">Separate from temporary analysis IDs</text>
+<rect x="1500" y="670" width="262" height="82" rx="8" fill="#1c2521" stroke="#98d4b2" stroke-width="1.4"/>
+<text x="1511" y="693" font-size="17" fill="#98d4b2" font-weight="700">Full-source mask tools</text>
+<text x="1511" y="714" font-size="13" fill="#dce2da">Relabel / merge / class composition</text>
+<text x="1511" y="734" font-size="13" fill="#dce2da">Vote count / consensus masks</text>
+<text x="1222" y="778" font-size="14" fill="#dce2da">Library-backed selections survive workspace reopening.</text>
+<text x="1222" y="798" font-size="14" fill="#dce2da">Advanced object selections can supplement supervision.</text>
+<text x="1222" y="818" font-size="14" fill="#dce2da">Label tools process disk-backed sources in bounded tiles.</text>
+<text x="1222" y="838" font-size="14" fill="#dce2da">New outputs keep the full source image dimensions.</text>
+<text x="1222" y="858" font-size="14" fill="#dce2da">Workspace Save makes temporary output assets durable.</text>
+<rect x="24" y="896" width="568" height="272" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="38" y="922" font-size="18" fill="#e9c35b" font-weight="700">G / DATASET &amp; SUPERVISION CONTRACT</text>
+<text x="38" y="944" font-size="12" fill="#a9b7ad">_dataset_pairs.py · _coverage_train.py · _multilabel_targets.py</text>
+<rect x="38" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="49" y="983" font-size="17" fill="#e9c35b" font-weight="700">Images + annotations</text>
+<text x="49" y="1004" font-size="13" fill="#dce2da">Current pair / multiple pairs</text>
+<text x="49" y="1024" font-size="13" fill="#dce2da">Complete / partial / unknown</text>
+<rect x="316" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="327" y="983" font-size="17" fill="#e9c35b" font-weight="700">Prepare dataset</text>
+<text x="327" y="1004" font-size="13" fill="#dce2da">Index eligible patches + validity</text>
+<text x="327" y="1024" font-size="13" fill="#dce2da">Spatial / specimen-group splits</text>
+<text x="38" y="1068" font-size="14" fill="#dce2da">Stable layer IDs preserve pair and channel associations.</text>
+<text x="38" y="1088" font-size="14" fill="#dce2da">Binary / exclusive multiclass / overlapping multilabel.</text>
+<text x="38" y="1108" font-size="14" fill="#dce2da">Partial coverage masks exclude unknown supervision.</text>
+<text x="38" y="1128" font-size="14" fill="#dce2da">Preparation is separate from the optional crop preview.</text>
+<text x="38" y="1148" font-size="14" fill="#dce2da">Annotation and source changes invalidate prepared data.</text>
+<rect x="616" y="896" width="568" height="272" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="630" y="922" font-size="18" fill="#e9c35b" font-weight="700">H / OPTIONAL LOCAL MODEL TRAINING</text>
+<text x="630" y="944" font-size="12" fill="#a9b7ad">_quick_train_widget.py · _quick_train.py · _model_providers.py</text>
+<rect x="630" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="641" y="983" font-size="17" fill="#e9c35b" font-weight="700">Model providers</text>
+<text x="641" y="1004" font-size="13" fill="#dce2da">Custom / standard U-Net</text>
+<text x="641" y="1024" font-size="13" fill="#dce2da">Optional SMP / registered providers</text>
+<rect x="908" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="919" y="983" font-size="17" fill="#e9c35b" font-weight="700">Train and evaluate</text>
+<text x="919" y="1004" font-size="13" fill="#dce2da">PyTorch CPU / CUDA when available</text>
+<text x="919" y="1024" font-size="13" fill="#dce2da">Holdout / spatial k-fold / comparisons</text>
+<text x="630" y="1068" font-size="14" fill="#dce2da">2D grayscale inputs use per-crop percentile normalization.</text>
+<text x="630" y="1088" font-size="14" fill="#dce2da">Task mode defines logits, masked loss and metrics.</text>
+<text x="630" y="1108" font-size="14" fill="#dce2da">_coverage_train.py streams indexed supervised patches.</text>
+<text x="630" y="1128" font-size="14" fill="#dce2da">Continuation loads weights with a fresh optimizer.</text>
+<text x="630" y="1148" font-size="14" fill="#dce2da">Training runs in workers with progress and cancellation.</text>
+<rect x="1208" y="896" width="568" height="272" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="1222" y="922" font-size="18" fill="#e9c35b" font-weight="700">I / INFERENCE &amp; ANNOTATION FEEDBACK</text>
+<text x="1222" y="944" font-size="12" fill="#a9b7ad">_quick_train.py · _quick_train_widget.py · _multilabel.py</text>
+<rect x="1222" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="1233" y="983" font-size="17" fill="#e9c35b" font-weight="700">Predict a region</text>
+<text x="1233" y="1004" font-size="13" fill="#dce2da">Current area / entire image / box</text>
+<text x="1233" y="1024" font-size="13" fill="#dce2da">Overlapping tiled prediction</text>
+<rect x="1500" y="960" width="262" height="82" rx="8" fill="#1c2521" stroke="#e9c35b" stroke-width="1.4"/>
+<text x="1511" y="983" font-size="17" fill="#e9c35b" font-weight="700">Return Labels to viewer</text>
+<text x="1511" y="1004" font-size="13" fill="#dce2da">Binary threshold / class argmax</text>
+<text x="1511" y="1024" font-size="13" fill="#dce2da">Independent multilabel channels</text>
+<text x="1222" y="1068" font-size="14" fill="#dce2da">Prediction uses the selected compatible checkpoint.</text>
+<text x="1222" y="1088" font-size="14" fill="#dce2da">Large-region inference supports progress and Cancel.</text>
+<text x="1222" y="1108" font-size="14" fill="#dce2da">Task and class/channel metadata accompany the output.</text>
+<text x="1222" y="1128" font-size="14" fill="#dce2da">Review predictions before using them as ground truth.</text>
+<text x="1222" y="1148" font-size="14" fill="#dce2da">Correct and confirm to begin another training round.</text>
+<rect x="24" y="1186" width="568" height="272" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="38" y="1212" font-size="18" fill="#94c8df" font-weight="700">J / WORKSPACE SAVE &amp; RESTORE</text>
+<text x="38" y="1234" font-size="12" fill="#a9b7ad">workspace/service.py · _workspace_widget.py · _model_project.py</text>
+<rect x="38" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="49" y="1273" font-size="17" fill="#94c8df" font-weight="700">JSON manifest · format 2</text>
+<text x="49" y="1294" font-size="13" fill="#dce2da">Layer / viewer / transform state</text>
+<text x="49" y="1314" font-size="13" fill="#dce2da">Review + task + model references</text>
+<rect x="316" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="327" y="1273" font-size="17" fill="#94c8df" font-weight="700">Workspace data folder</text>
+<text x="327" y="1294" font-size="13" fill="#dce2da">Images / Zarr masks / SQLite</text>
+<text x="327" y="1314" font-size="13" fill="#dce2da">Checkpoints / histories / reports</text>
+<text x="38" y="1358" font-size="14" fill="#dce2da">Save flushes pending local edits before recording state.</text>
+<text x="38" y="1378" font-size="14" fill="#dce2da">Existing Zarr sources may remain linked externally.</text>
+<text x="38" y="1398" font-size="14" fill="#dce2da">Complete-package Save As copies assets for transfer.</text>
+<text x="38" y="1418" font-size="14" fill="#dce2da">Open restores summaries; weights load when selected.</text>
+<text x="38" y="1438" font-size="14" fill="#dce2da">Save/Open waits for training, prediction and model export.</text>
+<rect x="616" y="1186" width="568" height="272" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="630" y="1212" font-size="18" fill="#94c8df" font-weight="700">K / MODEL LIBRARY &amp; RUN PROVENANCE</text>
+<text x="630" y="1234" font-size="12" fill="#a9b7ad">_model_library_widget.py · _model_library.py · _model_files.py</text>
+<rect x="630" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="641" y="1273" font-size="17" fill="#94c8df" font-weight="700">Catalog models and runs</text>
+<text x="641" y="1294" font-size="13" fill="#dce2da">Task / config / dataset / scores</text>
+<text x="641" y="1314" font-size="13" fill="#dce2da">Notes / tags / favorites / history</text>
+<rect x="908" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#94c8df" stroke-width="1.4"/>
+<text x="919" y="1273" font-size="17" fill="#94c8df" font-weight="700">Manage checkpoint files</text>
+<text x="919" y="1294" font-size="13" fill="#dce2da">Managed / external / missing</text>
+<text x="919" y="1314" font-size="13" fill="#dce2da">Copy bundle / locate / select</text>
+<text x="630" y="1358" font-size="14" fill="#dce2da">Browsing catalog records does not load network weights.</text>
+<text x="630" y="1378" font-size="14" fill="#dce2da">Save or export persists in-memory trained checkpoints.</text>
+<text x="630" y="1398" font-size="14" fill="#dce2da">Compare runs using recorded evaluation provenance.</text>
+<text x="630" y="1418" font-size="14" fill="#dce2da">Export history CSV and learning / comparison charts.</text>
+<text x="630" y="1438" font-size="14" fill="#dce2da">Checkpoint selection is shared with Model Training.</text>
+<rect x="1208" y="1186" width="568" height="272" rx="8" fill="#1c2521" stroke="#df9683" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="1222" y="1212" font-size="18" fill="#df9683" font-weight="700">L / IMPLEMENTATION BOUNDARIES</text>
+<text x="1222" y="1234" font-size="12" fill="#a9b7ad">pyproject.toml · tests/ · validation_reports/</text>
+<rect x="1222" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#df9683" stroke-width="1.4"/>
+<text x="1233" y="1273" font-size="17" fill="#df9683" font-weight="700">Local annotation core</text>
+<text x="1233" y="1294" font-size="13" fill="#dce2da">napari / Qt / NumPy / SciPy</text>
+<text x="1233" y="1314" font-size="13" fill="#dce2da">scikit-image / Zarr / SQLite</text>
+<rect x="1500" y="1250" width="262" height="82" rx="8" fill="#1c2521" stroke="#df9683" stroke-width="1.4"/>
+<text x="1511" y="1273" font-size="17" fill="#df9683" font-weight="700">Optional model stack</text>
+<text x="1511" y="1294" font-size="13" fill="#dce2da">PyTorch training extra / SMP extra</text>
+<text x="1511" y="1314" font-size="13" fill="#dce2da">External masks enter as Labels</text>
+<text x="1222" y="1358" font-size="14" fill="#dce2da">No built-in chat, LLM router or SAM inference backend.</text>
+<text x="1222" y="1378" font-size="14" fill="#dce2da">Bounded reads do not make every operation asynchronous.</text>
+<text x="1222" y="1398" font-size="14" fill="#dce2da">Practical scale depends on dtype, chunks and hardware.</text>
+<text x="1222" y="1418" font-size="14" fill="#dce2da">Validation-selected scores are not independent test scores.</text>
+<text x="1222" y="1438" font-size="14" fill="#dce2da">Review approval records inspection, not biological truth.</text>
+<text x="24" y="1512" font-size="16" fill="#98d4b2">Read with system-design.md for source links, workflow details, boundaries and regeneration instructions.</text>
+<text x="24" y="1540" font-size="14" fill="#a9b7ad">Architecture documentation only · no runtime changes · editable SVG + PNG preview</text>
+</g>
+</svg>
