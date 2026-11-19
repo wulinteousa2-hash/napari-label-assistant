@@ -98,7 +98,22 @@ matching source stores; incompatible records are reported and left unapplied.
 Keep the JSON project and its data folder together. Existing workspaces remain
 compatible; editing alone never confirms background.
 
-## Version 7.0.0: Simple curation and annotation batches
+## Version 7.0.1: Continue across sessions and optional two-node training
+
+- Reopening a saved workspace reloads the previously active model checkpoint,
+  making continuation on the next annotation batch available after preparation.
+- Optionally train one Custom small U-Net across two CUDA computers through
+  **Training → Train → Training compute**, using an existing SSH connection.
+  Coverage training with holdout validation supports fresh training and continuation.
+- Keep **This computer** as the default in every new Training panel. Worker
+  connection settings stay on your computer and are excluded from shared workspaces.
+- Check both nodes before submitting; view progress, cancel jobs, and receive the
+  resulting model in the existing library. Each node needs enough memory for its
+  full model copy; two nodes do not automatically provide twice the speed.
+- See [two-node setup](docs/model-management.md#optional-two-node-training) and
+  [release notes](CHANGELOG.md#701---2026-11-19).
+
+### Earlier: Simple curation and annotation batches (7.0.0)
 
 - Choose Simple or Advanced mode, sharing the same annotations and review state.
 - Edit bounded mask areas and approve review tiles from the Simple workflow.
@@ -990,7 +1005,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (7.0.0):
+Install the current GitHub version (7.0.1):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"

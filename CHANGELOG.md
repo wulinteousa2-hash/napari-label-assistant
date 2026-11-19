@@ -5,6 +5,43 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.1] - 2026-11-19
+
+### Added
+
+- Optional two-node training from **Training → Train → Training compute**.
+  Train one Custom small U-Net, including width 64, across the local CUDA GPU
+  and one explicitly configured SSH worker using PyTorch/NCCL. Support fresh
+  training and continuation with coverage patches and holdout validation.
+- Check SSH access, matching PyTorch versions, CUDA initialization, and worker
+  memory availability before submitting a job. Keep connection fields in local
+  preferences; each new Training panel defaults to one local computer.
+- Transfer a bounded-memory snapshot of selected model inputs and the continuation
+  checkpoint. Divide global batches and validation work across nodes, retain the
+  existing validation partition, and return one model to the workspace library.
+  Preserve global masked loss normalization for uneven batches and record node
+  provenance. Clean up job processes and temporary files after completion or
+  cancellation; retain the previous model on failure.
+
+### Fixed
+
+- Automatically reload the checkpoint active when a workspace was saved, including
+  an explicitly selected earlier run. Restore weights whether Training is already
+  open or opened afterward, so the next annotation batch can continue training.
+- Show actionable messages for missing checkpoint files and unloaded model weights.
+  Keep continuation guidance visible independently of the metrics/history toggle.
+
+### Compatibility
+
+- Local training remains the default and requires no second node or SSH setup.
+  Shared workspace settings do not enable remote compute or distribute connection
+  preferences. Sampled training, other model providers, k-fold validation,
+  comparisons, and inference retain their local execution paths.
+- Existing workspace and checkpoint formats remain supported. Two-node training
+  requires compatible CUDA/NCCL environments and enough memory on each node;
+  speedup depends on workload and communication overhead.
+- PyPI publication remains separate from this GitHub source update.
+
 ## [7.0.0] - 2026-11-19
 
 ### Added

@@ -222,38 +222,43 @@ def resize_classes(labels, shape):
     return labels[np.ix_(y, x)].copy()
 
 
-def segmentation_loss(torch, logits, target, valid=None, *, multilabel=False):
+def segmentation_loss(torch, logits, target, valid=None, *, multilabel=False, distributed=False):
     """Preserve the binary loss; use masked cross-entropy and Dice for classes."""
     if valid is None:
         valid = torch.ones_like(target)
+    def total(value):
+        if distributed:
+            from ._distributed_loss import global_sum
+            return global_sum(value)
+        return value
     if multilabel:
         if logits.shape != target.shape or valid.shape != target.shape:
             raise ValueError("Multilabel targets and validity must match N × channels × H × W logits.")
         probability = torch.sigmoid(logits)
         axes = (0, 2, 3)
-        usable = valid.sum(axes)
+        usable = total(valid.sum(axes))
         known = usable > 0
         bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float(), reduction='none')
-        bce = (bce * valid).sum(axes) / usable.clamp_min(1)
-        intersection = (probability * target * valid).sum(axes)
-        denominator = ((probability + target) * valid).sum(axes)
+        bce = total((bce * valid).sum(axes)) / usable.clamp_min(1)
+        intersection = total((probability * target * valid).sum(axes))
+        denominator = total(((probability + target) * valid).sum(axes))
         losses = bce + 1 - (2 * intersection + 1) / (denominator + 1)
         return losses[known].mean() if known.any() else logits.sum() * 0
     if logits.shape[1] == 1:
         probability = torch.sigmoid(logits)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float(), reduction="none")
-        bce = (bce * valid).sum() / valid.sum().clamp_min(1)
-        dice = 1 - (2 * (probability * target * valid).sum() + 1) / ((probability * valid).sum() + (target * valid).sum() + 1)
+        bce = total((bce * valid).sum()) / total(valid.sum()).clamp_min(1)
+        dice = 1 - (2 * total((probability * target * valid).sum()) + 1) / (total(((probability + target) * valid).sum()) + 1)
         return bce + dice
     truth = target[:, 0].long()
     coverage = valid[:, 0]
     ce = torch.nn.functional.cross_entropy(logits, truth, reduction="none")
-    ce = (ce * coverage).sum() / coverage.sum().clamp_min(1)
+    ce = total((ce * coverage).sum()) / total(coverage.sum()).clamp_min(1)
     probability = torch.softmax(logits, dim=1)
     one_hot = torch.nn.functional.one_hot(truth, logits.shape[1]).permute(0, 3, 1, 2).to(logits.dtype)
     axes = (0, 2, 3)
-    intersection = (probability * one_hot * valid).sum(axes)
-    denominator = ((probability + one_hot) * valid).sum(axes)
+    intersection = total((probability * one_hot * valid).sum(axes))
+    denominator = total(((probability + one_hot) * valid).sum(axes))
     return ce + (1 - (2 * intersection[1:] + 1) / (denominator[1:] + 1)).mean()
 
 

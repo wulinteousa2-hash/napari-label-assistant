@@ -368,6 +368,9 @@ class QuickTrainWidget(QWidget):
         self.training_model_label = QLabel()
         self.training_model_label.setWordWrap(True)
         train_layout.addWidget(self.training_model_label)
+        from ._cluster_widget import TrainingComputeWidget
+        self.training_compute = TrainingComputeWidget(self)
+        train_layout.addWidget(self.training_compute)
         train_group = QGroupBox("Train and evaluate")
         train_form = QFormLayout(train_group)
         self.train_form = train_form
@@ -390,7 +393,6 @@ class QuickTrainWidget(QWidget):
         self.results_toggle = QToolButton()
         self.results_toggle.setText("Show metrics and history")
         self.results_toggle.setCheckable(True)
-        self.results_toggle.toggled.connect(self.continuation_note.setVisible)
         train_form.addRow(self.results_toggle)
         train_form.addRow(self.continuation_note)
         self.continuation_note.hide()
@@ -688,6 +690,7 @@ class QuickTrainWidget(QWidget):
         from ._annotation_batches import events as batch_events
         self._batch_events = batch_events(viewer)
         self._batch_events.changed.connect(self._batches_changed)
+        self._safe(self.models_panel.restore_current_model)
 
     def _batch_pairs(self):
         from ._annotation_batches import _id
@@ -1177,6 +1180,7 @@ class QuickTrainWidget(QWidget):
 
     def _update_controls(self):
         busy = self.worker is not None
+        self.training_compute.set_busy(busy)
         self.batch_widget.set_context(self.image_combo.currentData(), self.truth_combo.currentData(), self.reviewed_area_widget)
         self.batch_widget.set_busy(busy)
         for control in (
@@ -1216,8 +1220,12 @@ class QuickTrainWidget(QWidget):
         self.full_validation_button.setToolTip('Evaluate fixed model weights on every reserved patch; no training or checkpoint reselection.'
             if compatible and not seen_holdout and not kfold else 'Prepare a matching spatial/image holdout dataset and load a model. Reserved validation regions must be independent of its training.')
         self.export_csv_button.setEnabled(bool(self.learning_chart.points))
-        self.continuation_note.setText("The current model has already trained in the reserved validation regions. Review new regions for independent validation, or train a new model." if seen_holdout and self.model is not None else "")
-        self.continuation_note.setVisible(seen_holdout and self.model is not None)
+        self.continuation_note.setText(
+            "No model loaded. To continue a previous batch, select its checkpoint in Models → Saved and in-memory models → Select this model."
+            if self.model is None else
+            "The current model has already trained in the reserved validation regions. Review new regions for independent validation, or train a new model."
+            if seen_holdout else "")
+        self.continuation_note.setVisible(bool(self.continuation_note.text()))
         self.predict_button.setEnabled(not busy and self.model is not None)
         names = getattr(getattr(self.model, "config", None), "class_names", ())
         multilabel = getattr(getattr(self.model, 'config', None), 'multilabel', False)
@@ -1255,7 +1263,7 @@ class QuickTrainWidget(QWidget):
         self.readiness_label.setText(reason + "\n" + predict_reason)
         self.train_button.setToolTip(reason)
         self.predict_button.setToolTip(predict_reason)
-        self.continue_button.setToolTip("Continue training requires spatial holdout instead of k-fold validation." if kfold else self.continuation_note.text() if seen_holdout else "Prepare a dataset and train or load a model first." if self.prepared is None or self.model is None else reason)
+        self.continue_button.setToolTip("Continue training requires spatial holdout instead of k-fold validation." if kfold else self.continuation_note.text() if self.model is None or seen_holdout else "Prepare a dataset first." if self.prepared is None else reason)
         subset_error = self._update_patch_selection_controls()
         if subset_error and isinstance(self.prepared, IndexedPatches):
             self.train_button.setEnabled(False)
@@ -2271,6 +2279,17 @@ class QuickTrainWidget(QWidget):
             raise ValueError("K-fold evaluation starts independent models from fresh weights. Continue training is available with spatial holdout.")
         if final_training and (not kfold or self.cross_validation is None):
             raise ValueError("Complete spatial k-fold validation on this dataset before training a final model.")
+        cluster = None
+        if self.training_compute.two_nodes():
+            from ._model_providers import spec_for
+            config = self._training_config(continue_training)
+            if not isinstance(self.prepared, IndexedPatches) or kfold or final_training:
+                raise ValueError('Two-node training requires All patches (coverage) with holdout validation. Choose local compute for sampled or k-fold training.')
+            if spec_for(config).provider != 'custom':
+                raise ValueError('Two-node training currently supports Custom small U-Net models.')
+            if config.device == 'cpu' or config.batch_size < 2:
+                raise ValueError('Two-node training needs Automatic/CUDA compute and a global batch size of at least 2.')
+            cluster = self.training_compute.settings()
         self.learning_chart.set_points([])
         self.export_csv_button.setEnabled(False)
         self.validation_results_label.setText("Final training uses all reviewed patches; no held-out validation loss is measured." if final_training else "Training started. Waiting for the first evaluated epoch.")
@@ -2311,6 +2330,10 @@ class QuickTrainWidget(QWidget):
             function = train_final if final_training else (train_kfold if kfold else train_indexed)
             done = self._training_done if final_training or not kfold else self._cross_validation_done
             extra = {"cross_validation_report": self.cross_validation.report} if final_training else ({"initial_model": self.model if continue_training else None} if not kfold else {})
+            if cluster is not None:
+                from ._cluster_training import train_two_nodes
+                function = train_two_nodes
+                extra['cluster'] = cluster
             self._start_worker(function,
                 lambda result: done(result) if generation == self._generation else self._status("Annotations changed during training; previous model retained."),
                 selected, self._training_config(continue_training), epochs=self.epochs_spin.value(),

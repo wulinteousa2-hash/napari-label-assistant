@@ -383,13 +383,15 @@ def masked_binary_loss(torch, logits, truth, valid):
     return segmentation_loss(torch, logits, truth, valid)
 
 
-def _validate(torch, network, dataset, device, cancel, *, step, total, evaluation_only=False):
+def _validate(torch, network, dataset, device, cancel, *, step, total, evaluation_only=False, distributed=False):
     network.eval()
     tp = fp = fn = 0
     if dataset.class_names:
         tp, fp, fn = (np.zeros(len(dataset.class_names), dtype=np.int64) for _ in range(3))
     losses = []
     ids = dataset.indices('validation')
+    if distributed:
+        ids = ids[torch.distributed.get_rank()::torch.distributed.get_world_size()]
     trial = dataset.validation.get('evaluation', {}).get('mode') == 'trial'
     with torch.no_grad():
         for done, index in enumerate(ids, start=1):
@@ -426,16 +428,27 @@ def _validate(torch, network, dataset, device, cancel, *, step, total, evaluatio
                 label = 'Trial validation' if trial else 'Validating reserved regions'
                 yield QuickTrainProgress(done if evaluation_only else step, len(ids) if evaluation_only else total,
                                          f'{label}: {done:,}/{len(ids):,} patches.')
-    return {'loss': float(np.mean(losses)), **metrics_from_counts(tp, fp, fn)}
+    if distributed:
+        counts = torch.tensor(np.array([tp, fp, fn]), device=device, dtype=torch.float64)
+        torch.distributed.all_reduce(counts)
+        tp, fp, fn = counts.cpu().numpy()
+        loss_counts = torch.tensor([sum(losses), len(losses)], device=device, dtype=torch.float64)
+        torch.distributed.all_reduce(loss_counts)
+        mean_loss = float(loss_counts[0] / loss_counts[1].clamp_min(1))
+    else:
+        mean_loss = float(np.mean(losses))
+    return {'loss': mean_loss, **metrics_from_counts(tp, fp, fn)}
 
 
 def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rate=0.001,
                   initial_model=None, source_info=None, cancel=None,
                   plateau_enabled=False, reduce_patience=10, stop_patience=10,
-                  lr_factor=0.5, min_delta=0.0001, validation_enabled=True):
+                  lr_factor=0.5, min_delta=0.0001, validation_enabled=True, distributed=False):
     from ._model_providers import build_model, spec_for, training_mode, library_versions
     from ._model_comparison import dataset_snapshot
     config.validate()
+    if distributed and spec_for(config).provider != 'custom':
+        raise ValueError('Two-node training currently supports Custom small U-Net models.')
     if tuple(dataset.class_names) != config.class_names or dataset.multilabel != config.multilabel:
         raise ValueError('Class definitions changed. Prepare the dataset again.')
     _check_class_coverage(dataset, validation_enabled)
@@ -452,6 +465,9 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
     stop_reason = None
     torch = _torch()
     device = _device(torch, config.device)
+    world = torch.distributed.get_world_size() if distributed else 1
+    rank = torch.distributed.get_rank() if distributed else 0
+    validation_options = {'distributed': True} if distributed else {}
     old_threads = torch.get_num_threads()
     network = None
     started = monotonic()
@@ -471,8 +487,12 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             network = build_model(config, initialize=initial_model is None).to(device)
         if initial_model is not None:
             network.load_state_dict(initial_model.network.state_dict())
+        forward_network = (torch.nn.parallel.DistributedDataParallel(
+            network, device_ids=[torch.cuda.current_device()] if device == 'cuda' else None)
+            if distributed else network)
+        if initial_model is not None:
             yield QuickTrainProgress(0, total, 'Evaluating current model on reserved validation regions…')
-            best_metrics = yield from _validate(torch, network, dataset, device, cancel, step=step, total=total)
+            best_metrics = yield from _validate(torch, network, dataset, device, cancel, step=step, total=total, **validation_options)
             best_score = best_metrics['dice']
             if control is not None:
                 control.update(best_metrics['loss'])
@@ -486,8 +506,11 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             for start in range(0, len(order), config.batch_size):
                 _check_cancel(cancel)
                 batch_ids = order[start:start + config.batch_size]
-                batches = [dataset.read(int(i)) for i in batch_ids]
+                local_ids = batch_ids[rank::world]
+                batches = [dataset.read(int(i)) for i in (local_ids if len(local_ids) else batch_ids[:1])]
                 x, y, valid = [np.stack(parts) for parts in zip(*batches)]
+                if not len(local_ids):
+                    valid.fill(0)
                 x, y, valid = augment_batch(x, y, valid, rng, config)
                 x, y, valid = [torch.from_numpy(a.copy()).to(device) for a in (x, y, valid)]
                 x = x.unsqueeze(1)
@@ -495,7 +518,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
                     y, valid = y.unsqueeze(1), valid.unsqueeze(1)
                 training_mode(network, len(batch_ids))
                 optimizer.zero_grad(set_to_none=True)
-                loss = segmentation_loss(torch, network(x), y, valid, multilabel=dataset.multilabel)
+                loss = segmentation_loss(torch, forward_network(x), y, valid, multilabel=dataset.multilabel, distributed=distributed)
                 loss.backward(); optimizer.step()
                 step += 1
                 visited.update(map(int, batch_ids))
@@ -504,7 +527,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             if validation_enabled:
                 label = 'trial validation on selected reserved patches' if trial else 'validating all reserved patches'
                 yield QuickTrainProgress(step, total, f'Epoch {epoch}/{epochs}: {label}…')
-                metrics = yield from _validate(torch, network, dataset, device, cancel, step=step, total=total)
+                metrics = yield from _validate(torch, network, dataset, device, cancel, step=step, total=total, **validation_options)
                 checkpoints.append({'epoch': epoch, 'step': step, 'unique_patches': len(visited),
                     'learning_rate': optimizer.param_groups[0]['lr'], 'training_loss_last_batch': float(loss.detach()), 'validation': dict(metrics)})
                 if metrics['dice'] >= best_score:
@@ -548,6 +571,7 @@ def train_indexed(dataset, config, *, epochs=5, extra_targets=0.25, learning_rat
             'learning_rate_events': lr_events, 'stop_reason': stop_reason,
             'steps': step, 'extra_targets': extra_targets, 'learning_rate': learning_rate,
             'optimizer': 'AdamW (fresh each round)', 'singleton_batch_norm': 'running_statistics', 'device': device, 'source': deepcopy(source_info or {}),
+            'compute': {'nodes': world, 'global_batch_size': config.batch_size},
             'dataset_summary': dataset.summary(), 'reviewed_pixels': dataset.reviewed_pixels,
             'total_pixels': dataset.total_pixels, 'validation_blocks': [b['id'] for b in dataset.blocks if b['split'] == 'validation'],
             'checkpoints': checkpoints, 'retained_epoch': retained_epoch, 'retained_validation': dict(best_metrics)})

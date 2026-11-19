@@ -220,13 +220,16 @@ def test_models_ui_task_binding_new_vs_continue_and_restore(make_napari_viewer,q
     widget.epochs_spin.setValue(7)
     widget.annotation_combo.setCurrentIndex(widget.annotation_combo.findData('complete'))
     widget._training_done(widget.model)
+    model_identity = dict(widget.model.identity)
     path=tmp_path/'workspace.json'
     save_workspace(viewer,path,complete_package=True)
     assert 'saved with workspace' in widget.model_state_label.text()
     assert 'updated weights not saved' not in panel.details.toPlainText()
     widget.epochs_spin.setValue(2)
     load_workspace(viewer,path)
-    assert widget.model is None
+    qtbot.waitUntil(lambda: widget.worker is None, timeout=15000)
+    assert widget.model is not None
+    assert widget.model.identity == model_identity
     assert widget.epochs_spin.value()==7
     assert panel.task()['name']=='Myelin'
     assert len(panel.candidates)==2
@@ -235,6 +238,72 @@ def test_models_ui_task_binding_new_vs_continue_and_restore(make_napari_viewer,q
     panel.definition.setText('Whole fiber pixels')
     with pytest.raises(ValueError,match='Create another task'):
         panel._update_task()
+
+
+@pytest.mark.parametrize('open_training_first', [True, False])
+@pytest.mark.parametrize('checkpoint', ['latest', 'older', 'missing'])
+def test_reopen_restores_saved_checkpoint_for_next_batch(
+    make_napari_viewer, qtbot, tmp_path, monkeypatch, open_training_first, checkpoint
+):
+    import torch
+    from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
+    from napari_label_assistant_tools.workspace import save_workspace, load_workspace
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.zeros((64, 64), np.uint8))
+    viewer.add_labels(np.ones((64, 64), np.uint8))
+    trainer = QuickTrainWidget(viewer)
+    qtbot.addWidget(trainer)
+    trainer.annotation_combo.setCurrentIndex(trainer.annotation_combo.findData('complete'))
+    trainer.workflow_combo.setCurrentIndex(trainer.workflow_combo.findData('sampled'))
+    first = model()
+    trainer._training_done(first)
+    first_revision = project(viewer)['current_checkpoint']
+    second = model()
+    second.identity = dict(first.identity)
+    second.history = deepcopy(first.history) + [{'mode': 'continue', 'checkpoints': [], 'config': {}, 'steps': 2}]
+    trainer._training_done(second)
+    if checkpoint == 'older':
+        panel = trainer.models_panel
+        panel.run_combo.setCurrentIndex(panel.run_combo.findData(first_revision))
+        panel.use_selected()
+    expected = first if checkpoint == 'older' else second
+    path = tmp_path / 'workspace.json'
+    save_workspace(viewer, path, complete_package=True)
+    saved_revision = project(viewer)['current_checkpoint']
+    if checkpoint == 'missing':
+        Path(project(viewer)['models'][0]['checkpoint']).unlink()
+
+    reopened = make_napari_viewer()
+    if open_training_first:
+        restored = QuickTrainWidget(reopened)
+        qtbot.addWidget(restored)
+    load_workspace(reopened, path)
+    if not open_training_first:
+        restored = QuickTrainWidget(reopened)
+        qtbot.addWidget(restored)
+    qtbot.waitUntil(lambda: restored.worker is None, timeout=15000)
+    assert project(reopened)['current_checkpoint'] == saved_revision
+    if checkpoint == 'missing':
+        assert restored.model is None
+        assert not restored.continue_button.isEnabled()
+        assert 'checkpoint unavailable' in restored.model_state_label.text()
+        assert 'No model loaded' in restored.continuation_note.text()
+        return
+
+    assert restored.model is not None
+    for name, weights in expected.network.state_dict().items():
+        assert torch.equal(restored.model.network.state_dict()[name], weights)
+    assert len(project(reopened)['models'][0]['runs']) == 2
+    # A newly prepared batch must continue with the restored weights.
+    restored.prepared = object()
+    restored._prepared_signature = restored._signature()
+    restored._update_controls()
+    assert restored.continue_button.isEnabled()
+    captured = []
+    monkeypatch.setattr(restored, '_start_worker', lambda *args, **kwargs: captured.append(kwargs))
+    restored.continue_button.click()
+    assert captured[-1]['initial_model'] is restored.model
 
 
 def test_custom_registered_provider_can_reload_without_executing_checkpoint_code(monkeypatch,tmp_path):

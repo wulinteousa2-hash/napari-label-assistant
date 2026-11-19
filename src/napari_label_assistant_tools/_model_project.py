@@ -241,6 +241,8 @@ def restore_project(viewer, state, manifest):
         widget.models_panel.refresh()
         widget.restore_project_settings(restored.get("settings", {}))
     notify_project(viewer)
+    if widget is not None:
+        widget._safe(widget.models_panel.restore_current_model)
 
 
 def resolve_references(state, manifest):

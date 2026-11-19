@@ -23,6 +23,58 @@ membership revision, and bounds are saved in run provenance. Changing a batch do
 not create a model or change its weights. New checkpoint names include the batch name
 for a single active image/Labels pair. Earlier runs keep their saved provenance.
 
+Save the workspace after training to keep the checkpoint. Reopening automatically
+loads the checkpoint that was active when saved, including an older run if that
+was selected. After reviewing the next batch, select that batch, prepare its
+dataset, and click **Continue training**. Validation independence checks still
+apply. If the checkpoint file is missing, the training panel explains how to
+locate it in the Model Library.
+
+## Optional two-node training
+
+**Training → 3. Train → Training compute** defaults to **This computer**.
+Normal local training needs no SSH, second computer, or additional packages.
+Every new Training panel starts in local mode. Workspace files do not enable
+remote compute or carry machine-specific connection settings.
+
+To train one model across two CUDA computers, choose **This computer + one SSH
+worker** and enter the worker's existing SSH alias, its absolute Python executable
+path, and this computer's IP address on the inter-node network. The network
+interface can be left blank to select it from that IP address. These connection
+fields are remembered only in this computer's preferences. SSH must already work
+without an interactive password prompt and the worker's host key must be known.
+Both Python environments need matching PyTorch versions with CUDA/NCCL, NumPy,
+and SciPy. The plugin sends its current training code with each job; a napari GUI
+installation is not needed on the worker. Both nodes must be able to communicate
+on the training network, including the coordinator's rendezvous port and NCCL
+connections.
+
+Click **Check both nodes**, prepare the dataset, and use **Train new model** or
+**Continue training** as usual. This mode currently supports **Custom small U-Net**
+models, including width 64, using **All patches (coverage)** and holdout validation.
+Sampled training, other providers, k-fold validation, architecture comparisons,
+and inference continue to use the local execution paths. The total batch size
+must be at least two; it is divided across nodes rather than doubled. Each node
+holds a full model copy, so this mode increases compute rather than pooling memory
+for a model that cannot fit on one GPU.
+
+The submitted job freezes only the selected model-input patches, supervision,
+and validation partition to temporary disk files, then transfers those inputs
+and the continuation checkpoint to the worker. Both GPUs train synchronously
+and divide validation work; one resulting model returns to the normal model
+library. Progress and cancellation use
+the existing training controls. Cancelling or losing a node retains the previous
+model; an interrupted job is not silently retried on one node. The job's worker
+processes and temporary files are cleaned up on normal completion or cancellation.
+If the worker becomes unreachable, cleanup cannot be confirmed until it is
+reachable again; its stdin monitor and collective timeout terminate disconnected
+workers.
+
+Two-node operation is opt-in and stays fixed for the duration of the job. It does
+not discover or join other computers during training. Small jobs can be slower
+because of input transfer and synchronization; measure a representative run on
+your hardware to assess the speedup.
+
 Preparation does not add preview layers or move the canvas. **Show patch preview** opens a separate contact sheet to the right of the source image and focuses it. Placement accounts for the source image's world extent and pixel scale, including rotated or sheared images. The gallery is a rearrangement of patches, not an overlay at their source coordinates.
 
 - **Crop images:** Normalized model input patches.

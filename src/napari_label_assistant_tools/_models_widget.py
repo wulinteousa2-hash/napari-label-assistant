@@ -410,6 +410,27 @@ class ModelsWidget(QWidget):
         if row is None:
             raise ValueError("Select a trained model first.")
         entry=self.checkpoint(row)
+        self._use_checkpoint(row, entry)
+
+    def restore_current_model(self):
+        """Reload exactly the checkpoint active when the workspace was saved."""
+        state = project(self.viewer)
+        row = next((row for row in state['models'] if row['id'] == state.get('current_model')), None)
+        if row is None:
+            return
+        revision = state.get('current_checkpoint') or row['revision']
+        entry = row if revision == row['revision'] else next(
+            (run for run in row.get('runs', []) if run['revision'] == revision), None)
+        if entry is None or not entry.get('checkpoint') or not Path(entry['checkpoint']).is_file():
+            message = ('Previous model checkpoint unavailable. Locate it in Models → Open Model Library '
+                       'to continue training on the next batch.')
+            self.trainer.model_state_label.setText(message)
+            self.trainer._status(message)
+            return
+        self.trainer._status(f"Loading previous model for continuation: {row['name']}…")
+        self._use_checkpoint(row, entry)
+
+    def _use_checkpoint(self, row, entry):
         revision=entry["revision"]
         runtime_key=row["id"] if entry is row else row["id"] + ":" + revision
         runtime=getattr(self.viewer,RUNTIME,{})
