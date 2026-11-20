@@ -7,7 +7,7 @@ import numpy as np
 from qtpy.QtCore import QTimer, Qt
 from qtpy.QtWidgets import (
     QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QMessageBox, QProgressBar, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ._coordinates import mask_world_affine, matching_mask_transforms
@@ -138,11 +138,9 @@ class SimpleCurationPanel(QScrollArea):
         self.batch_widget = AnnotationBatchWidget(viewer, self, review=self.review,
                                                    selected_regions=lambda: self.pending)
         self.progress_section.content.insertWidget(1, self.batch_widget)
-        self.workflow_progress = QProgressBar()
-        self.workflow_progress.setFixedHeight(20)
-        self.workflow_progress.setTextVisible(True)
-        self.workflow_progress.hide()
-        self.progress_section.content.addWidget(self.workflow_progress)
+        # The one live progress bar stays above the scrollable work area.
+        self.workflow_progress = shell._activity_header.progress
+        self.persistence_label.hide()
         row, buttons = self._buttons(('Show Coverage', self.review.show_coverage), ('Prepare Dataset', self.prepare))
         self.coverage_button, self.prepare_button = buttons
         self.progress_section.content.addWidget(row)
@@ -229,34 +227,19 @@ class SimpleCurationPanel(QScrollArea):
             self.workflow_progress.repaint()
 
     def _update_workflow_progress(self):
-        bar, tiles = self.workflow_progress, self._tile_progress
+        hub, tiles = self.shell.activity, self._tile_progress
         if self.busy and tiles is not None:
-            bar.setRange(0, tiles['total'])
-            bar.setValue(tiles['completed'])
-            bar.setFormat(f"{tiles['action']} · %v / %m tiles")
-        elif self._save_activity == 'error':
-            bar.setRange(0, 1)
-            bar.setValue(0)
-            bar.setFormat('Tile progress not saved')
+            hub.report('tiles', 'busy', f"{tiles['action']} tiles · {tiles['completed']} / {tiles['total']}",
+                       completed=tiles['completed'], total=tiles['total'], priority=65,
+                       progress_format=f"{tiles['action']} · %v / %m tiles",
+                       cancel=lambda: setattr(self, '_cancelled', True))
         elif tiles is not None and 'stopped' in tiles:
-            bar.setRange(0, tiles['total'])
-            bar.setValue(tiles['completed'])
-            bar.setFormat(('Stopped' if tiles['stopped'] else 'Updated') + ' · %v / %m tiles')
-        elif self._save_activity in ('queued', 'saving'):
-            bar.setRange(0, 0)
-            bar.setFormat('Saving tile progress…')
-        elif tiles is not None:
-            bar.setRange(0, tiles['total'])
-            bar.setValue(tiles['completed'])
-            bar.setFormat(('Stopped' if tiles.get('stopped') else 'Updated') + ' · %v / %m tiles')
-        elif self._save_activity == 'saved':
-            bar.setRange(0, 1)
-            bar.setValue(1)
-            bar.setFormat('Tile progress saved')
-        else:
-            bar.hide()
-            return
-        bar.show()
+            stopped = tiles['stopped']
+            hub.report('tiles', 'error' if tiles.get('error') else 'warning' if stopped else 'ready',
+                       f"{'Stopped' if stopped else tiles.get('action', 'Updated')} · {tiles['completed']} / {tiles['total']} tiles",
+                       completed=tiles['completed'], total=tiles['total'], priority=65,
+                       details=tiles.get('error'),
+                       progress_format=('Stopped' if stopped else 'Updated') + ' · %v / %m tiles')
 
     @property
     def truth(self):
@@ -687,7 +670,8 @@ class SimpleCurationPanel(QScrollArea):
             if next_tile and not error and not self._cancelled:
                 self.skip()
             self._tile_progress = dict(total=len(rectangles), completed=len(completed),
-                                      stopped=bool(error or self._cancelled))
+                                      stopped=bool(error or self._cancelled), error=str(error) if error else None,
+                                      action='Review restored' if undo_state is not None else 'Approved' if value else 'Revoked')
             self._update_workflow_progress()
             self.refresh_sources()
             self.refresh_status()
@@ -789,6 +773,7 @@ class SimpleCurationPanel(QScrollArea):
             return
         self.project_label.setText(self.workspace.current_label.text())
         self.batch_widget.set_context(self.image, self.truth)
+        self._update_header_summary()
         if active_path(self.viewer) is None:
             self.persistence_label.setText('Save workspace once to enable tile progress recovery.')
         if not self.active:
@@ -820,7 +805,8 @@ class SimpleCurationPanel(QScrollArea):
         self.approve_button.setText(f'Approve {len(self.pending)} selected tiles' if self.pending else
                                     'Click tiles on image first' if review_mode else 'Reviewed && Next')
         available = self.truth is not None and self.image is not None and active_path(self.viewer) is not None
-        busy = self.busy or self.training.worker is not None or self.c._large_controller.busy
+        workspace_busy = self.shell.activity.records.get('workspace', {}).get('state') == 'busy'
+        busy = self.busy or self.training.worker is not None or self.c._large_controller.busy or workspace_busy
         self.batch_widget.set_busy(busy)
         reason = ('Wait for the current operation to finish.' if busy else
                   'Choose an aligned 2D image and mask.' if self.truth is None or self.image is None else
@@ -840,8 +826,8 @@ class SimpleCurationPanel(QScrollArea):
         self.open_button.setEnabled(not busy)
         self.open_training_button.setEnabled(not self.busy)
         self.patch_selection_button.setEnabled(not busy)
-        self.shell.simple_radio.setEnabled(not self.busy)
-        self.shell.advanced_radio.setEnabled(not self.busy)
+        self.shell.simple_radio.setEnabled(not self.busy and not workspace_busy)
+        self.shell.advanced_radio.setEnabled(not self.busy and not workspace_busy)
         for button in self.tool_buttons:
             button.setEnabled(not busy)
         self.tool_buttons[3].setEnabled(not busy and self._undo is not None)
@@ -854,6 +840,22 @@ class SimpleCurationPanel(QScrollArea):
             action()
         except Exception as error:
             self.message.setText(str(error))
+            self.shell.activity.report('curation', 'error', str(error))
+
+    def _update_header_summary(self):
+        """Use cached review/batch summaries; never read mask pixels on a poll."""
+        counts = self.review.progress_label.text().replace('Confirmed grid tiles:', 'Confirmed').strip()
+        pending = self.c._pending_training_tiles()
+        if pending:
+            counts += f' · {len(pending)} pending'
+        batch = self.batch_widget.summary.text().split('\n')[0].replace('Active for annotation: ', '').replace(' regions reviewed.', ' reviewed')
+        self.shell.activity.set_summary(counts, batch or 'Choose an image and mask')
+        cell = self.review.cell_label.text()
+        if 'Needs recheck' in cell:
+            self.shell.activity.report('context', 'warning', 'Current tile needs rechecking after edits',
+                                       details=cell, priority=0, transient=False, log=False)
+        else:
+            self.shell.activity.clear('context')
 
     def shutdown(self):
         if self.closed:

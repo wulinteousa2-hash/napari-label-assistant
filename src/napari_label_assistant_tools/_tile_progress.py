@@ -190,6 +190,8 @@ class ProgressJournal(QObject):
             capture_progress(self.viewer, active_path(self.viewer))
             self.activity.emit('queued')
             self.status.emit('Saving tile progress…')
+            from ._activity import activity_for
+            activity_for(self.viewer).report('journal', 'busy', 'Saving tile progress…', priority=20, log=False)
             self.timer.start()
 
     def flush(self):
@@ -198,14 +200,21 @@ class ProgressJournal(QObject):
         if self.closed or path is None or getattr(self.viewer, '_label_assistant_workspace_loading', False):
             return
         try:
+            from ._activity import activity_for
+            hub = activity_for(self.viewer)
+            hub.report('journal', 'busy', 'Saving tile progress…', priority=20, log=False)
             self.activity.emit('saving')
             from .workspace.service import _commit_pending_local_edits
             _commit_pending_local_edits(self.viewer)
             write_progress(self.viewer, path)
             self.status.emit('Tile progress saved')
+            hub.report('journal', 'ready', 'Tile progress saved', completed=1, total=1,
+                       priority=20, progress_format='Tile progress saved')
             self.activity.emit('saved')
         except Exception as error:
             self.status.emit(f'Tile progress not saved: {error}')
+            hub.report('journal', 'error', 'Tile progress not saved', details=str(error),
+                       completed=0, total=1, priority=20, progress_format='Tile progress not saved')
             self.activity.emit('error')
 
     def shutdown(self):

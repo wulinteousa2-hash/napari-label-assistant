@@ -13,11 +13,11 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-![napari-label-assistant Simple mode showing a microscopy image, curated mask, reviewed tiles, and annotation batches](docs/simple-mode-gui.png)
+![Simple mode showing a microscopy image, curated mask, reviewed regions, annotation batches, and the fixed progress summary](docs/simple-mode-gui.png)
 
-**Simple mode in napari:** edit masks, approve reviewed tiles, track annotation
-batches in color, and prepare training data from one dock panel. Purple outlines
-show the active batch's approved regions. [Open the full-size GUI screenshot](docs/simple-mode-gui.png).
+**Simple mode in napari:** the fixed top summary keeps task progress, confirmed
+tiles, and batch counts visible without scrolling. Purple outlines show the
+active batch's approved regions. [View full-size screenshot](docs/simple-mode-gui.png).
 
 ![Plugin purpose: curate and review masks, then measure or optionally train models](docs/purpose-flowchart.png)
 
@@ -34,6 +34,14 @@ compact tile workflow. **Label Curation — Advanced** opens the same dock with
 **Workspace** and **Labels** tabs. **Plugins → napari-label-assistant → Model
 Training** opens the independent training dock. Switching modes preserves masks
 and pending selections; training shortcuts reuse the same model and dataset.
+
+The fixed top summary stays visible in both modes:
+
+- **Annotation:** confirmed tiles, pending selections, and the active batch's reviewed count.
+- **Current task:** progress for loading, saving, analysis, mask edits, and model work; **Stop** when supported.
+- **Feedback:** brief completion messages, persistent failures, and **⋯** for recent task details.
+
+Its height stays stable during updates. Section 3 retains batch controls and dataset details.
 
 1. **Workspace:** open a project, or save a new one once to establish durable
    mask storage and tile-progress recovery.
@@ -100,7 +108,14 @@ matching source stores; incompatible records are reported and left unapplied.
 Keep the JSON project and its data folder together. Existing workspaces remain
 compatible; editing alone never confirms background.
 
-## Version 7.0.2: Independent Model Training dock
+## Version 7.0.3: Progress always in view
+
+- Keep task progress and annotation counts in the fixed top summary, without scrolling.
+- Follow active work without routine viewer updates replacing its message.
+- Stop supported tasks, inspect recent activity, and see failures until dismissed or retried.
+- Updated GUI screenshot above shows the current layout.
+
+### Earlier: Independent Model Training dock (7.0.2)
 
 - Advanced Label Curation focuses on **Workspace** and **Labels**.
 - Open **Model Training** from the plugin submenu or curation shortcuts as its
@@ -1018,7 +1033,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (7.0.2):
+Install the current GitHub version (7.0.3):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"

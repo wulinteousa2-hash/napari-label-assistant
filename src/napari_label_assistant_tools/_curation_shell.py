@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (
 from ._widget import _LayerActivityIndicator, component_operations_widget
 from ._workspace_widget import WorkspaceManagerWidget
 from ._quick_train_widget import quick_train_widget, open_training
+from ._activity import activity_for
 
 
 class _ModeStack(QStackedWidget):
@@ -37,8 +38,9 @@ class LabelAssistantWidget(QWidget):
         mode_bar.addWidget(self.advanced_radio)
         mode_bar.addStretch(1)
         layout.addLayout(mode_bar)
-        self._activity_header = _LayerActivityIndicator(self)
-        self._activity_header.set_context_tooltip('Bounded mask editing, tile review, and dataset preparation.')
+        self.activity = activity_for(viewer)
+        self._activity_header = _LayerActivityIndicator(self, hub=self.activity)
+        self._activity_header.set_context_tooltip('Current task, confirmed tiles, and active annotation batch. Details opens recent activity.')
         layout.addWidget(self._activity_header)
         self.stack = _ModeStack(self)
         self.advanced = QWidget()
@@ -165,6 +167,7 @@ QWidget#labelAssistantShell QPushButton#simplePrimaryAction {{
         self.viewer.events.theme.disconnect(self._apply_theme)
         self.simple.shutdown()
         self.training.shutdown()
+        self.activity.has_display = False
         if getattr(self.viewer, '_label_assistant_curation_widget', None) is self:
             self.viewer._label_assistant_curation_widget = None
         if getattr(self.viewer, '_label_assistant_progress_journal', None) is self.simple.journal:

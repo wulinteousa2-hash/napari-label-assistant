@@ -23,6 +23,8 @@ class ComponentLibraryWidget(QGroupBox):
     def __init__(self, viewer, source_layer, parent=None):
         super().__init__("Training component library", parent)
         self.viewer, self.source_layer = viewer, source_layer
+        from ._activity import activity_for
+        self.activity = activity_for(viewer)
         self.layer = None
         self.library = None
         self.worker = None
@@ -242,6 +244,7 @@ class ComponentLibraryWidget(QGroupBox):
             self.table.setEnabled(False)
             self.cancel_button.setEnabled(True)
             self.progress.show()
+            self.activity.report('library', 'busy', 'Updating component library…', priority=60, cancel=self.cancel)
             self.worker.start()
         except Exception as error:
             self._error(error)
@@ -252,11 +255,14 @@ class ComponentLibraryWidget(QGroupBox):
         self.progress.setRange(0, total)
         self.progress.setValue(done)
         self.status.setText(message)
+        self.activity.report('library', 'busy', message, completed=done, total=total,
+                             priority=60, cancel=self.cancel)
 
     def _ready(self, state):
         if not self.closed:
             notify_library(self.layer)
             self.status.setText("Library saved. Check objects to include; review background in Local Editing.")
+            self.activity.report('library', 'ready', 'Component library saved', priority=60)
 
     def _error(self, error):
         self._auto_paused = True
@@ -265,6 +271,8 @@ class ComponentLibraryWidget(QGroupBox):
                 self.status.setText("Scan cancelled. Saved IDs and selections are retained.")
             else:
                 self.status.setText(f"Library scan stopped: {error}")
+            self.activity.report('library', 'warning' if self.cancel_event is not None and self.cancel_event.is_set() else 'error',
+                                 self.status.text(), priority=60)
 
     def _finished(self):
         if self.layer is not None:

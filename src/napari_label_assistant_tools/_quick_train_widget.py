@@ -28,6 +28,7 @@ from ._quick_train import (
 
 from ._coverage_train import IndexedPatches, index_patches, index_pairs, preview_index, train_indexed, train_kfold, train_final
 from ._patch_subset import select_training_patches, select_trial_validation
+from ._activity import activity_for
 
 
 class QuickTrainWorkerError(Exception):
@@ -52,6 +53,7 @@ class QuickTrainWidget(QWidget):
     def __init__(self, viewer, parent=None):
         super().__init__(parent)
         self.viewer = viewer
+        self.activity = activity_for(viewer)
         self.model = None
         self.cross_validation = None
         self._validation_preview_layer = None
@@ -1010,9 +1012,16 @@ class QuickTrainWidget(QWidget):
             if self.worker is None:
                 self._unlock_sources()
             self._status(str(error))
+            self.activity.report('training', 'error', str(error), priority=80)
 
     def _status(self, message):
         if not self.closed:
+            if self.worker is not None:
+                current = self.activity.records.get('training', {})
+                if current.get('state') not in ('error', 'warning'):
+                    self.activity.report('training', 'busy', message, priority=80,
+                                         completed=max(0, self.progress.value()), total=self.progress.maximum(),
+                                         cancel=self._cancel)
             self._update_training_overview()
             self.status_label.setText(message)
             self.status_label.setToolTip(message)
@@ -1297,6 +1306,15 @@ class QuickTrainWidget(QWidget):
             _connect={"errored": self._on_error},
         )
         self.worker = worker
+        name = getattr(function, '__name__', '').lower()
+        title = next((text for part, text in (
+            ('predict', 'Predicting labels…'), ('train', 'Training model…'),
+            ('load', 'Loading model…'), ('save', 'Saving model…'),
+            ('export', 'Exporting model…'), ('preview', 'Preparing patch preview…'),
+            ('compar', 'Comparing models…'), ('evaluat', 'Evaluating model…'),
+            ('index', 'Preparing dataset…'), ('prepare', 'Preparing dataset…')) if part in name),
+            'Preparing model operation…')
+        self.activity.report('training', 'busy', title, priority=80, cancel=self._cancel)
         if hasattr(worker, "yielded"):
             worker.yielded.connect(self._on_progress)
         worker.returned.connect(lambda result: self._returned(result, on_done))
@@ -1310,6 +1328,7 @@ class QuickTrainWidget(QWidget):
             self.cancel_event = None
             self._unlock_sources()
             self._update_controls()
+            self.activity.report('training', 'error', 'Model operation could not start', priority=80)
             raise
 
     def _on_progress(self, update):
@@ -1337,20 +1356,27 @@ class QuickTrainWidget(QWidget):
             return
         if self.cancel_event is not None and self.cancel_event.is_set():
             self._status("Model Training operation canceled. Existing layers and model are unchanged.")
+            self.activity.report('training', 'warning', 'Model operation stopped',
+                                 details=self.status_label.text(), priority=80)
             return
         self._safe(lambda: on_done(result))
 
     def _on_error(self, error):
+        if self.closed:
+            return
         if isinstance(error, QuickTrainCancelled):
             self._status("Model Training operation canceled. Existing layers and model are unchanged.")
         else:
             self._status(f"Model Training failed: {error}")
+        self.activity.report('training', 'warning' if isinstance(error, QuickTrainCancelled) else 'error',
+                             self.status_label.text(), priority=80)
 
     def _finished(self):
         self.worker = None
         self.cancel_event = None
         self._unlock_sources()
         if not self.closed:
+            self.activity.finish('training', self.status_label.text())
             self._update_controls()
             self.refresh_layers()
             shell = getattr(self.viewer, '_label_assistant_curation_widget', None)

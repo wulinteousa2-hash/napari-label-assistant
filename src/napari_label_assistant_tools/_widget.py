@@ -43,6 +43,7 @@ from qtpy.QtWidgets import (
 )
 
 from ._grid_map import build_visible_grid_label_layout
+from ._activity import ActivityIndicator as _LayerActivityIndicator, activity_for
 from ._dynamic_edit import (
     DEFAULT_TILE_SIZE,
     DynamicLabelsEditController,
@@ -74,116 +75,6 @@ def _collapsible_section(title: str, content: QWidget) -> QGroupBox:
     content.setVisible(False)
     section.toggled.connect(content.setVisible)
     return section
-
-
-class _LayerActivityIndicator(QFrame):
-    """Compact, non-modal feedback for layer and editable-area readiness."""
-
-    _BUSY_FRAMES = ("◐", "◓", "◑", "◒")
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setObjectName("layerActivityIndicator")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setAutoFillBackground(True)
-        self.setFixedHeight(46)
-        self.state = "idle"
-        self._frame = 0
-        self._full_message = "Ready"
-        self._context_tooltip = ""
-        self.icon = QLabel("●")
-        self.icon.setObjectName("layerActivityIcon")
-        self.icon.setAlignment(Qt.AlignCenter)
-        self.icon.setFixedWidth(18)
-        self.message = QLabel("Ready")
-        self.message.setWordWrap(False)
-        self.message.setMinimumWidth(0)
-        self.message.setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Preferred
-        )
-        row = QHBoxLayout(self)
-        row.setContentsMargins(6, 3, 6, 3)
-        row.setSpacing(4)
-        row.addWidget(self.icon)
-        row.addWidget(self.message, 1)
-        self._animation = QTimer(self)
-        self._animation.setInterval(140)
-        self._animation.timeout.connect(self._advance_busy_frame)
-        self.set_state("idle", "Ready")
-
-    def set_context_tooltip(self, text: str) -> None:
-        self._context_tooltip = str(text).strip()
-        self._apply_tooltip(self.toolTip())
-
-    def set_state(
-        self, state: str, message: str, *, details: str | None = None
-    ) -> None:
-        normalized = (
-            state
-            if state in {"idle", "busy", "ready", "warning", "error"}
-            else "idle"
-        )
-        self.state = normalized
-        icons = {
-            "idle": "●",
-            "busy": self._BUSY_FRAMES[0],
-            "ready": "✓",
-            "warning": "⚠",
-            "error": "✕",
-        }
-        accents = {
-            "idle": "#868e96",
-            "busy": "#228be6",
-            "ready": "#2f9e44",
-            "warning": "#e67700",
-            "error": "#e03131",
-        }
-        accent = accents[normalized]
-        self._animation.stop()
-        self._frame = 0
-        self.icon.setText(icons[normalized])
-        self._full_message = str(message)
-        self._render_message()
-        tooltip = str(details or message)
-        self._apply_tooltip(tooltip)
-        self.setStyleSheet(
-            "QFrame#layerActivityIndicator {"
-            " background-color: #e7f5ff; color: #12344d;"
-            " border: 1px solid #74c0fc; border-radius: 4px; }"
-            "QFrame#layerActivityIndicator QLabel {"
-            " color: #12344d; background-color: transparent; border: none; }"
-            "QFrame#layerActivityIndicator QLabel#layerActivityIcon {"
-            f" color: {accent}; font-weight: 700; }}"
-        )
-        if normalized == "busy":
-            self._animation.start()
-
-    def _apply_tooltip(self, details: str) -> None:
-        parts = [str(details).strip()]
-        if self._context_tooltip:
-            parts.append(self._context_tooltip)
-        tooltip = "\n\n".join(part for part in parts if part)
-        self.setToolTip(tooltip)
-        self.icon.setToolTip(tooltip)
-        self.message.setToolTip(tooltip)
-
-    def _render_message(self) -> None:
-        width = max(1, self.message.width() - 2)
-        visible = self.message.fontMetrics().elidedText(
-            self._full_message, Qt.ElideRight, width
-        )
-        self.message.setText(visible)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._render_message()
-
-    def _advance_busy_frame(self) -> None:
-        if self.state != "busy":
-            self._animation.stop()
-            return
-        self._frame = (self._frame + 1) % len(self._BUSY_FRAMES)
-        self.icon.setText(self._BUSY_FRAMES[self._frame])
 
 
 def _auto_refresh_layer_controls(viewer, parent, refresh):
@@ -1226,6 +1117,7 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
                 layer.editable = False
             container.setEnabled(False)
             _set_status("Processing full Labels sources in bounded tiles…")
+            activity_for(viewer).report('label-tools', 'busy', f'{mode} · processing full masks…', priority=70)
 
             @thread_worker
             def calculate():
@@ -1237,9 +1129,11 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
                     if any(not any(candidate is layer for candidate in viewer.layers) for layer in layers):
                         raise ValueError("A selected layer was removed during processing; no output applied.")
                     _write_output(result, layers, mode, temporary)
+                    activity_for(viewer).report('label-tools', 'ready', f'{mode} complete', priority=70)
                 except Exception as error:
                     temporary.cleanup()
                     _set_status(str(error))
+                    activity_for(viewer).report('label-tools', 'error', str(error), priority=70)
 
             def finished():
                 container.setEnabled(True)
@@ -1248,7 +1142,10 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
 
             worker = calculate()
             worker.returned.connect(completed)
-            worker.errored.connect(lambda error: _set_status(str(error)))
+            def failed(error):
+                _set_status(str(error))
+                activity_for(viewer).report('label-tools', 'error', str(error), priority=70)
+            worker.errored.connect(failed)
             worker.finished.connect(finished)
             container._operation_worker = worker
             worker.start()
@@ -1299,6 +1196,7 @@ def label_operations_widget(viewer=None, **kwargs) -> QWidget:
             fn()
         except Exception as e:
             _set_status(str(e))
+            activity_for(viewer).report('label-tools', 'error', str(e), priority=70)
 
     btn_refresh.clicked.connect(_refresh_layers)
     btn_apply.clicked.connect(lambda: _run_safely(_apply))
@@ -1724,7 +1622,7 @@ def component_operations_widget(
     layout.addLayout(source_form)
     layer_activity = activity_indicator
     if layer_activity is None:
-        layer_activity = _LayerActivityIndicator(container)
+        layer_activity = _LayerActivityIndicator(container, hub=activity_for(viewer))
         layer_activity.set_context_tooltip(
             "Shows when the selected layer view or local editable area is ready."
         )
@@ -2848,6 +2746,7 @@ def component_operations_widget(
         analyze_button=btn_analyze,
         status=_set_status,
         on_ready=_on_large_ready,
+        activity=activity_for(viewer),
     )
     dynamic_edit_controller = DynamicLabelsEditController(
         viewer=viewer,
@@ -3272,6 +3171,7 @@ def component_operations_widget(
         if tile is not None:
             tile.editable = False
         large_controller.edit_active = True
+        activity_for(viewer).report('undo', 'busy', 'Restoring last deletion…', priority=70)
         btn_undo_delete.setEnabled(False)
         totals = (0, 0)
 
@@ -3284,6 +3184,7 @@ def component_operations_widget(
             try:
                 restored, skipped, slices = next(iterator)
                 totals = (restored, skipped)
+                activity_for(viewer).report('undo', 'busy', f'Restoring deletion · {restored:,} pixels', priority=70)
                 if not whole:
                     _component_pixels_changed(layer, (slices[0].start, slices[1].start, slices[0].stop, slices[1].stop))
             except Exception as error:
@@ -3301,10 +3202,12 @@ def component_operations_widget(
                 dynamic_edit_controller.sync(force=True)
                 if isinstance(error, StopIteration):
                     _set_status(f"Restored {totals[0]:,} pixels in {layer.name}; preserved {totals[1]:,} later edits. Find components to refresh results.")
+                    activity_for(viewer).report('undo', 'ready', f'Restored {totals[0]:,} pixels · preserved {totals[1]:,} later edits', priority=70)
                     deletion_history.close()
                 else:
                     btn_undo_delete.setEnabled(True)
                     _set_status(f"Undo stopped: {error}. Recovery is still available.")
+                    activity_for(viewer).report('undo', 'error', f'Undo stopped: {error}. Recovery is still available.', priority=70)
                 return
             QTimer.singleShot(0, step)
 

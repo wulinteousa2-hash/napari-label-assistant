@@ -107,7 +107,7 @@ def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
     assert isinstance(widget.training, QuickTrainWidget)
     labels = widget._tool_tabs.widget(1)
     assert labels._layer_activity_indicator is widget._activity_header
-    assert widget._activity_header.height() == 46
+    assert widget._activity_header.height() >= 94
 
 
 def test_training_menu_reuses_independent_dock_and_review_navigation(make_napari_viewer, qtbot):

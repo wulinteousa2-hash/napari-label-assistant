@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
 )
 
 from .workspace import load_workspace, save_workspace
+from ._activity import activity_for
 
 SETTINGS_ORG = "napari-label-assistant"
 SETTINGS_APP = "label-assistant"
@@ -48,6 +49,7 @@ class WorkspaceManagerWidget(QWidget):
     ) -> None:
         super().__init__()
         self.viewer = napari_viewer or viewer or current_viewer()
+        self.activity = activity_for(self.viewer) if self.viewer is not None else None
         self.settings = settings or QSettings(SETTINGS_ORG, SETTINGS_APP)
         last = str(
             self.settings.value(LAST_WORKSPACE_KEY, "", type=str) or ""
@@ -380,29 +382,19 @@ class WorkspaceManagerWidget(QWidget):
             QMessageBox.warning(self, "Incomplete workspace", message)
             return
         optimize = self.optimize_images_check.isChecked()
-        dialog = QProgressDialog(self)
-        dialog.setWindowTitle("Saving Workspace")
-        dialog.setWindowModality(Qt.WindowModal)
-        dialog.setCancelButton(None)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setMinimumDuration(0)
-        dialog.setRange(0, 0)
-        dialog.setLabelText("Preparing workspace and mask data…")
-        dialog.setMinimumWidth(420)
-        dialog.show()
+        dialog = self._progress_dialog('Saving Workspace', 'Preparing workspace and mask data…')
+        self.activity.report('workspace', 'busy', 'Saving workspace…', priority=80)
+        self._block_operation_input()
         QApplication.processEvents()
 
         def _progress(completed: int, total: int, message: str) -> None:
-            if dialog is None:
-                return
             maximum = max(1, int(total))
-            dialog.setRange(0, maximum)
-            dialog.setValue(min(int(completed), maximum))
-            dialog.setLabelText(
-                f"{message}\n{min(int(completed), maximum):,} of "
-                f"{maximum:,} tiles"
-            )
+            if dialog is not None:
+                dialog.setRange(0, maximum)
+                dialog.setValue(min(int(completed), maximum))
+                dialog.setLabelText(f"{message}\n{min(int(completed), maximum):,} of {maximum:,} tiles")
+            self.activity.report('workspace', 'busy', f'Saving workspace · {message}',
+                                 completed=completed, total=total, priority=80)
             self._set_status(message)
             QApplication.processEvents()
 
@@ -436,6 +428,7 @@ class WorkspaceManagerWidget(QWidget):
                 completed_path=path,
             )
         finally:
+            self._restore_operation_input()
             if dialog is not None:
                 dialog.close()
                 dialog.deleteLater()
@@ -459,28 +452,19 @@ class WorkspaceManagerWidget(QWidget):
         self._load_with_progress(path)
 
     def _load_with_progress(self, path: Path) -> None:
-        dialog = QProgressDialog(self)
-        dialog.setWindowTitle("Loading Workspace")
-        dialog.setWindowModality(Qt.WindowModal)
-        dialog.setCancelButton(None)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        dialog.setMinimumDuration(0)
-        dialog.setRange(0, 0)
-        dialog.setLabelText("Preparing project…")
-        dialog.setMinimumWidth(420)
-        dialog.show()
+        dialog = self._progress_dialog('Loading Workspace', 'Preparing project…')
+        self.activity.report('workspace', 'busy', 'Opening workspace…', priority=80)
+        self._block_operation_input()
         QApplication.processEvents()
 
         def _progress(completed: int, total: int, message: str) -> None:
             maximum = max(1, int(total))
-            if dialog.maximum() != maximum:
+            if dialog is not None:
                 dialog.setRange(0, maximum)
-            dialog.setLabelText(
-                f"{message}\n{min(int(completed), maximum)} of {int(total)} "
-                "layers completed"
-            )
-            dialog.setValue(min(int(completed), maximum))
+                dialog.setLabelText(f"{message}\n{min(int(completed), maximum)} of {int(total)} layers completed")
+                dialog.setValue(min(int(completed), maximum))
+            self.activity.report('workspace', 'busy', f'Opening workspace · {message}',
+                                 completed=completed, total=total, priority=80)
             self._set_status(message)
             QApplication.processEvents()
 
@@ -493,11 +477,14 @@ class WorkspaceManagerWidget(QWidget):
             )
         except Exception as exc:
             self._set_status(f"Project loading failed: {exc}")
+            self.activity.report('workspace', 'error', 'Workspace could not be opened', details=str(exc), priority=80)
             QMessageBox.warning(self, "Project loading failed", str(exc))
             return
         finally:
-            dialog.close()
-            dialog.deleteLater()
+            self._restore_operation_input()
+            if dialog is not None:
+                dialog.close()
+                dialog.deleteLater()
 
         self.viewer._label_assistant_missing_workspace_layers = list(result["skipped_layers"])
         if result.get("storage_state"):
@@ -520,6 +507,9 @@ class WorkspaceManagerWidget(QWidget):
             + (' Tile progress: ' + '; '.join(result['progress_warnings'])
                if result.get('progress_warnings') else '')
         )
+        self.activity.report('workspace', 'warning' if result['skipped_layers'] or result.get('progress_warnings') else 'ready',
+                             'Workspace opened with warnings' if result['skipped_layers'] or result.get('progress_warnings') else 'Workspace opened',
+                             details=self.status_label.text(), priority=80)
         if result["skipped_layers"]:
             details = "\n".join(f"{item['name']}: {item['reason']}" for item in result["skipped_layers"])
             QMessageBox.warning(
@@ -541,6 +531,7 @@ class WorkspaceManagerWidget(QWidget):
             result = operation()
         except Exception as exc:
             self._set_status(f"Workspace operation failed: {exc}")
+            self.activity.report('workspace', 'error', 'Workspace operation failed', details=str(exc), priority=80)
             QMessageBox.warning(self, "Workspace operation failed", str(exc))
             return
         if completed_path is not None:
@@ -550,8 +541,45 @@ class WorkspaceManagerWidget(QWidget):
             self._refresh_current_label()
             self._refresh_recent_list()
         self._set_status(success(result))
+        self.activity.report('workspace', 'warning' if result.get('progress_warning') else 'ready',
+                             'Workspace saved with warnings' if result.get('progress_warning') else 'Workspace saved',
+                             details=self.status_label.text(), priority=80)
         if completed_path is not None:
             self.save_state_label.setText(f"Workspace saved or opened at {datetime.now():%H:%M:%S}. No subsequent changes recorded.")
+
+    def _progress_dialog(self, title, message):
+        if self.activity is not None and self.activity.has_display:
+            return None
+        dialog = QProgressDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setMinimumDuration(0)
+        dialog.setRange(0, 0)
+        dialog.setLabelText(message)
+        dialog.setMinimumWidth(420)
+        dialog.show()
+        return dialog
+
+    def _block_operation_input(self):
+        """Keep the old dialog's input protection while progress stays in the header."""
+        shell = getattr(self.viewer, '_label_assistant_curation_widget', None)
+        widgets = [self, self.viewer.window._qt_viewer, self.viewer.window._qt_window.menuBar()]
+        if shell is not None:
+            widgets.extend((shell.stack, shell.simple_radio, shell.advanced_radio))
+        trainer = getattr(self.viewer, '_label_assistant_training_widget', None)
+        if trainer is not None:
+            widgets.append(trainer)
+        self._operation_inputs = [(widget, widget.isEnabled()) for widget in widgets]
+        for widget, _enabled in self._operation_inputs:
+            widget.setEnabled(False)
+
+    def _restore_operation_input(self):
+        for widget, enabled in getattr(self, '_operation_inputs', ()):
+            widget.setEnabled(enabled)
+        self._operation_inputs = []
 
     def _confirm_clear(self, message: str) -> bool:
         answer = QMessageBox.question(

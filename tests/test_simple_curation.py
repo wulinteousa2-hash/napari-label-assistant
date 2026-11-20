@@ -343,6 +343,38 @@ def test_selection_save_shows_busy_then_saved_progress(setup_simple):
     assert associated_mask(viewer,panel.image,panel.truth) is None
 
 
+def test_header_keeps_counts_and_batch_visible_when_scrolled_or_switched(setup_simple, qtbot):
+    viewer, shell, _ = setup_simple
+    panel, header = shell.simple, shell._activity_header
+    pick(panel, 10, 10)
+    panel.approve()
+    finish(panel, qtbot)
+    qtbot.waitUntil(lambda: '1 / 16' in header.confirmed_label.toolTip())
+    assert panel.workflow_progress is header.progress
+    assert header.progress.parentWidget() is header
+    assert 'Batch 1' in header.batch_label.toolTip()
+    assert '1 / 1' in header.batch_label.toolTip()
+    for width in (360, 480, 520):
+        shell.resize(width, 640)
+        panel.verticalScrollBar().setValue(panel.verticalScrollBar().maximum())
+        qtbot.wait(20)
+        assert header.isVisible()
+        assert header.geometry().bottom() < shell.stack.geometry().top()
+        assert 'Confirmed' in header.confirmed_label.text()
+    shell.set_mode('advanced')
+    assert header.isVisible()
+    assert '1 / 16' in header.confirmed_label.toolTip()
+    # Annotation changes revoke approval and remain visible above the scroll area.
+    shell.set_mode('simple')
+    panel.canvas_mode.setCurrentIndex(panel.canvas_mode.findData('edit'))
+    panel.truth.brush_size = 1
+    panel.truth.paint((15, 15), 55)
+    manager_for(viewer).flush()
+    panel.review.update_status()
+    panel.refresh_status()
+    assert '0 / 16' in header.confirmed_label.toolTip()
+
+
 def test_selection_progress_finishes_automatically_without_manual_save(setup_simple,qtbot):
     from json import loads
     _, shell, path = setup_simple
@@ -366,6 +398,7 @@ def test_approval_progress_counts_completed_tiles(setup_simple,qtbot):
     panel.approve()
     finish(panel,qtbot)
     assert all((count,3) in counts for count in (0,1,2,3))
+    panel.journal.flush()
     assert bar.value() == 3 and bar.maximum() == 3
     assert bar.format() == 'Updated · %v / %m tiles'
     assert panel.message.text() == ''
@@ -377,6 +410,7 @@ def test_cancelled_progress_keeps_actual_partial_count(setup_simple,qtbot):
     panel._operate(1,[(0,0,32,32),(0,32,32,64),(64,64,96,96)])
     panel._cancelled = True
     finish(panel,qtbot)
+    panel.journal.flush()
     bar = panel.workflow_progress
     assert bar.maximum() == 3 and bar.value() == 1
     assert bar.format().startswith('Stopped')

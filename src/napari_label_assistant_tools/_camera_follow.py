@@ -138,6 +138,14 @@ class CameraFollowController(QObject):
         if state:
             self.state = state
         self.project.auto_status.setText(text)
+        from ._activity import activity_for
+        hub = activity_for(self.project.viewer)
+        if self.state in ('loading', 'error'):
+            hub.report('camera', 'error' if self.state == 'error' else 'busy', text,
+                       details=self.project.status.text() if self.state == 'error' else text,
+                       priority=10, transient=False, log=False)
+        else:
+            hub.clear('camera')
         self.project._update()
 
     def set_enabled(self, enabled):

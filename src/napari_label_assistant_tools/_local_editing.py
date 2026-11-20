@@ -88,6 +88,8 @@ class LocalEditingControls(QWidget):
             self.status.clear()
         except Exception as error:
             self.status.setText(str(error))
+            from ._activity import activity_for
+            activity_for(self.viewer).report('camera', 'error', str(error), priority=10)
 
     @property
     def masks(self):

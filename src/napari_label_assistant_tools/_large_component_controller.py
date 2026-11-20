@@ -36,12 +36,14 @@ class LargeComponentController:
         analyze_button,
         status: Callable[[str], None],
         on_ready: Callable[[str, LargeComponentIndex], None],
+        activity=None,
     ) -> None:
         self.progress = progress
         self.cancel_button = cancel_button
         self.analyze_button = analyze_button
         self.status = status
         self.on_ready = on_ready
+        self.activity = activity
         self.worker = None
         self.cancel_event: Event | None = None
         self.edit_active = False
@@ -62,6 +64,7 @@ class LargeComponentController:
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self.status("Large-mask analysis started. You can keep using napari.")
+        self._activity('busy', 'Finding components…', completed=0, total=100)
         worker = create_worker(
             build_large_component_index,
             source,
@@ -93,14 +96,17 @@ class LargeComponentController:
         self.progress.setValue(int(100 * completed / max(total, 1)))
         self.progress.setFormat(f"{self.progress.value()}% - {message}")
         self.status(message)
+        self._activity('busy', message, completed=completed, total=total)
 
     def _on_returned(self, layer_name: str, index: LargeComponentIndex) -> None:
         if self.closed or (self.cancel_event and self.cancel_event.is_set()):
             index.close()
             if not self.closed:
                 self.status("Large-mask analysis canceled; no mask data was changed.")
+                self._activity('warning', 'Component analysis stopped; mask unchanged')
             return
         self.on_ready(layer_name, index)
+        self._activity('ready', f'Analysis complete · {len(index.records):,} components')
 
     def _on_error(self, error: Exception) -> None:
         if self.closed:
@@ -109,6 +115,8 @@ class LargeComponentController:
             self.status("Large-mask analysis canceled; no mask data was changed.")
         else:
             self.status(f"Large-mask analysis failed: {error}")
+        self._activity('warning' if isinstance(error, LargeAnalysisCancelled) else 'error',
+                       'Component analysis stopped' if isinstance(error, LargeAnalysisCancelled) else f'Component analysis failed: {error}')
 
     def _on_finished(self) -> None:
         self.worker = None
@@ -165,6 +173,7 @@ class LargeComponentController:
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
         self.progress.setFormat("Applying selected components tile by tile...")
+        self._activity('busy', 'Updating selected components…')
 
         def step() -> None:
             nonlocal changed, tile_count
@@ -188,10 +197,12 @@ class LargeComponentController:
                 except Exception as error:
                     refresh_error = error
                 on_done(changed)
+                self._activity('ready', f'Mask updated · {changed:,} pixels')
                 if refresh_error is not None:
                     self.status(
                         f"Pixels were written, but napari refresh failed: {refresh_error}"
                     )
+                    self._activity('error', f'Mask written; viewer refresh failed: {refresh_error}')
                 return
             try:
                 slices = (slice(tile.y0, tile.y1), slice(tile.x0, tile.x1))
@@ -217,6 +228,7 @@ class LargeComponentController:
                 self.status(
                     f"Updated {tile_count:,} tile(s), {changed:,} selected pixels."
                 )
+                self._activity('busy', f'Updating mask · {tile_count:,} tiles · {changed:,} pixels')
             except Exception as error:
                 self.edit_active = False
                 target_layer._label_assistant_component_editing = False
@@ -234,6 +246,7 @@ class LargeComponentController:
                     f"Large-mask edit stopped after {changed:,} pixels; "
                     f"earlier tiles may have changed: {error}. Reanalyze before editing."
                 )
+                self._activity('error', f'Mask update stopped after {changed:,} pixels: {error}')
                 return
             QTimer.singleShot(0, step)
 
@@ -257,6 +270,7 @@ class LargeComponentController:
         self.cancel_button.setVisible(True)
         self.progress.setVisible(True);self.progress.setRange(0,0)
         self.progress.setFormat(f'{operation}: selected components…')
+        self._activity('busy', f'{operation}: selected components…')
         iterator=iter(regions)
         changed=0
         def finish(message=None):
@@ -275,8 +289,10 @@ class LargeComponentController:
             self.cancel_button.setVisible(False);self.progress.setVisible(False)
             try:
                 on_done(changed,message)
+                self._activity('warning' if message else 'ready', message or f'{operation} complete · {changed:,} pixels')
             except Exception as error:
                 self.status((message or f'Wrote {changed:,} selected pixels.')+f' Preview refresh failed: {error}')
+                self._activity('error', f'Wrote {changed:,} pixels; preview refresh failed: {error}')
         def step():
             nonlocal changed
             if self.closed:
@@ -298,12 +314,21 @@ class LargeComponentController:
                 else:
                     changed+=result
                     self.status(f'Copying at image coordinates: {changed:,} selected pixels written…')
+                self._activity('busy', f'{operation} · {changed:,} pixels written')
             except Exception as error:
                 finish(f'Copy stopped: {error}. Earlier pixels may have changed.');return
             QTimer.singleShot(0,step)
         QTimer.singleShot(0,step)
 
+    def _activity(self, state, message, *, completed=None, total=None):
+        if self.activity is not None and not self.closed:
+            self.activity.report('analysis', state, message, priority=70,
+                                 completed=completed, total=total,
+                                 cancel=self.cancel if self.cancel_event is not None else None)
+
     def close(self) -> None:
+        if self.activity is not None:
+            self.activity.clear('analysis')
         for layer,editable in getattr(self,'_copy_editable',[]):
             layer.editable=editable
         self._copy_editable=[]

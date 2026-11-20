@@ -12,6 +12,7 @@ from qtpy.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLab
     QGroupBox, QScrollArea, QLayout)
 
 from ._model_project import project, model_project_events, RUNTIME
+from ._activity import activity_for
 from ._model_library import (catalog, comparison_key, comparison_note, annotate,
     export_csv, run_curve, chart_svg, weight_statistics, number, FIELDS)
 
@@ -45,6 +46,7 @@ class ModelLibraryWidget(QWidget):
     def __init__(self, viewer):
         super().__init__()
         self.viewer = viewer
+        self.activity = activity_for(viewer)
         viewer._label_assistant_model_library = self
         self.rows = []
         self.comparison_ids = []
@@ -562,24 +564,31 @@ class ModelLibraryWidget(QWidget):
             except Exception as error:
                 if not self.closed:
                     self.status.setText(str(error))
+                    self.activity.report('model-files', 'error', str(error), priority=60)
                 return
             if not self.closed:
                 self.status.setText(f"{message}. Save the workspace to keep the updated reference. Original files were not moved.")
+                self.activity.report('model-files', 'ready', message, details=self.status.text(), priority=60)
         def finished():
             self.file_worker = None
             if not self.closed:
                 self._file_controls()
-        worker = create_worker(function, *args, _start_thread=False,
-                               _connect={"errored": lambda error: self.status.setText(str(error)) if not self.closed else None})
+        def failed(error):
+            if not self.closed:
+                self.status.setText(str(error))
+                self.activity.report('model-files', 'error', str(error), priority=60)
+        worker = create_worker(function, *args, _start_thread=False, _connect={"errored": failed})
         self.file_worker = worker
         worker.returned.connect(returned)
         worker.finished.connect(finished)
         self._file_controls()
         self.status.setText("Managing checkpoint files…")
+        self.activity.report('model-files', 'busy', 'Managing checkpoint files…', priority=60)
         try:
             worker.start()
-        except Exception:
+        except Exception as error:
             finished()
+            failed(error)
             raise
 
     def _open_models_folder(self):
@@ -608,17 +617,28 @@ class ModelLibraryWidget(QWidget):
         if model is None:
             raise ValueError("Select this checkpoint first to load its weights. Browsing the library does not load networks.")
         from superqt.utils import create_worker
+        def failed(error):
+            if not self.closed:
+                self.status.setText(str(error))
+                self.activity.report('weights', 'error', str(error), priority=60)
         worker = create_worker(weight_statistics, model, _start_thread=False,
-                               _connect={"errored": lambda error: self.status.setText(str(error)) if not self.closed else None})
+                               _connect={"errored": failed})
         self.weight_worker = worker
         worker.returned.connect(self._show_weights)
         worker.finished.connect(lambda: setattr(self, "weight_worker", None))
-        worker.start()
+        self.activity.report('weights', 'busy', 'Inspecting model weights…', priority=60)
+        try:
+            worker.start()
+        except Exception as error:
+            self.weight_worker = None
+            failed(error)
+            raise
         self.status.setText("Inspecting bounded samples of loaded weights…")
 
     def _show_weights(self, rows):
         if self.closed:
             return
+        self.activity.report('weights', 'ready', 'Model weight inspection complete', priority=60)
         self.weight_window = QWidget(self, Qt.Window)
         self.weight_window.setWindowTitle("Loaded model weights")
         layout = QVBoxLayout(self.weight_window)

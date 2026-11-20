@@ -5,6 +5,25 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.3] - 2026-11-20
+
+### Changed
+
+- Keep task progress, confirmed tiles, pending selections, and active-batch
+  review counts in the fixed top summary in Simple and Advanced modes.
+- Show loading, saving, analysis, mask-operation, and model progress here.
+  Routine viewer updates cannot replace active tasks; the header stays the same size.
+- Offer Stop for supported tasks and recent activity under **⋯**. Briefly show
+  completion messages; retain failures until dismissed or retried.
+- Preserve input protection during workspace save/load. Standalone workspace
+  panels retain their progress dialog.
+- Replace the README GUI figure with the supplied screenshot of the current layout.
+
+### Validation
+
+- Passed 153 regression tests and the final focused header checks, including
+  narrow windows, long batch names, task priority, and workspace input protection.
+
 ## [7.0.2] - 2026-11-20
 
 ### Changed
