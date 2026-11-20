@@ -143,9 +143,11 @@ def test_dataset_fits_narrow_dock(make_napari_viewer, qtbot):
     panel = label_assistant_widget(viewer)
     qtbot.addWidget(panel)
     panel.resize(480, 950)
-    panel._tool_tabs.setCurrentIndex(2)
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    panel.show_training()
     panel.show()
-    training = panel._tool_tabs.widget(2)
+    training = panel.training
     qtbot.waitUntil(lambda: training.dataset_scroll.horizontalScrollBar().maximum() == 0)
     training.selection_toggle.setChecked(True)
     qtbot.waitUntil(lambda: training.dataset_scroll.horizontalScrollBar().maximum() == 0)

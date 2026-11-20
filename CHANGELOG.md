@@ -5,6 +5,24 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.2] - 2026-11-20
+
+### Changed
+
+- Advanced Label Curation contains only Workspace and Labels. Model Training
+  opens as an independent dock from the existing plugin submenu, Simple mode
+  shortcuts, or the Labels dataset shortcut.
+- Reuse one training panel per viewer across entry points, preserving the loaded
+  model, prepared dataset, annotation batches, and shared review controls.
+- Training shortcuts reveal the existing dock without switching Simple mode to
+  Advanced. Edit & Confirm returns to the Labels editor; Model Library checkpoint
+  selection reveals the same training dock.
+
+### Validation
+
+- Passed 34 focused Qt integration tests covering panel reuse, navigation,
+  tile confirmation, supervision, and workspace round trips.
+
 ## [7.0.1] - 2026-11-19
 
 ### Added

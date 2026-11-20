@@ -53,7 +53,7 @@ def test_simple_and_advanced_share_pending_tiles_and_controllers(setup_simple):
     viewer, shell, _ = setup_simple
     panel = shell.simple
     assert label_assistant_widget(viewer) is shell
-    assert shell._tool_tabs.count() == 3
+    assert shell._tool_tabs.count() == 2
     pick(panel, 10, 10)
     pick(panel, 70, 70)
     expected = [(0,0,32,32), (64,64,96,96)]
@@ -73,10 +73,13 @@ def test_simple_and_advanced_share_pending_tiles_and_controllers(setup_simple):
 
 
 def test_simple_training_amount_opens_existing_dataset_controls(setup_simple):
-    _,shell,_=setup_simple
+    viewer,shell,_=setup_simple
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
     shell.simple.patch_selection_button.click()
-    assert shell.mode == 'advanced'
-    assert shell._tool_tabs.currentWidget() is shell.training
+    assert shell.mode == 'simple'
+    assert shell.training.isVisible()
+    assert shell._tool_tabs.indexOf(shell.training) == -1
     assert shell.training.workflow_tabs.currentIndex() == 0
     assert not shell.training.patch_selection_group.isHidden()
 

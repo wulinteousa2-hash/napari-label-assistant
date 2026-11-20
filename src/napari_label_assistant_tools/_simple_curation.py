@@ -147,7 +147,7 @@ class SimpleCurationPanel(QScrollArea):
         self.coverage_button, self.prepare_button = buttons
         self.progress_section.content.addWidget(row)
         row, buttons = self._buttons(('Training amount…', self._open_patch_selection),
-                                     ('Open Training', lambda: shell.show_advanced(2)))
+                                     ('Open Training', shell.show_training))
         self.patch_selection_button, self.open_training_button = buttons
         self.progress_section.content.addWidget(row)
         self.cancel_button = QPushButton('Stop tile operation')
@@ -780,7 +780,7 @@ class SimpleCurationPanel(QScrollArea):
         self.c._workflow_tabs.widget(0).ensureWidgetVisible(section)
 
     def _open_patch_selection(self):
-        self.shell.show_advanced(2)
+        self.shell.show_training()
         self.training.workflow_tabs.setCurrentIndex(0)
         self.training.dataset_scroll.ensureWidgetVisible(self.training.patch_selection_group)
 

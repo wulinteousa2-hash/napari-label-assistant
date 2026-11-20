@@ -591,12 +591,8 @@ class ModelLibraryWidget(QWidget):
             raise ValueError(f"Could not open the file manager. Models folder: {folder}")
 
     def _trainer(self):
-        trainer = getattr(self.viewer, "_label_assistant_training_widget", None)
-        if trainer is None or trainer.closed:
-            from ._quick_train_widget import quick_train_widget
-            trainer = quick_train_widget(self.viewer)
-            self.viewer.window.add_dock_widget(trainer, name="Model Training")
-        return trainer
+        from ._quick_train_widget import open_training
+        return open_training(self.viewer)
 
     def _inspect_weights(self):
         if self.weight_worker is not None:

@@ -98,16 +98,52 @@ def test_label_assistant_widget_contains_all_tabs(make_napari_viewer):
 
     widget = label_assistant_widget(viewer)
 
-    assert widget._tool_tabs.count() == 3
+    assert widget._tool_tabs.count() == 2
     assert [
         widget._tool_tabs.tabText(index)
         for index in range(widget._tool_tabs.count())
-    ] == ["Workspace", "Labels", "Training"]
+    ] == ["Workspace", "Labels"]
     from napari_label_assistant_tools._quick_train_widget import QuickTrainWidget
-    assert isinstance(widget._tool_tabs.widget(2), QuickTrainWidget)
+    assert isinstance(widget.training, QuickTrainWidget)
     labels = widget._tool_tabs.widget(1)
     assert labels._layer_activity_indicator is widget._activity_header
     assert widget._activity_header.height() == 46
+
+
+def test_training_menu_reuses_independent_dock_and_review_navigation(make_napari_viewer, qtbot):
+    from napari_label_assistant_tools._quick_train_widget import quick_train_widget, open_training
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.zeros((32, 32), dtype=np.uint8), name='image')
+    viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name='Curated')
+    # Opening Training before curation must preserve the same panel as well.
+    training = open_training(viewer)
+    training.epochs_spin.setValue(7)
+    panel = label_assistant_widget(viewer)
+    qtbot.addWidget(panel)
+    viewer.window.add_dock_widget(panel, name='Label Curation')
+    panel.set_mode('simple')
+    assert panel.training is training
+    assert quick_train_widget(viewer) is training
+    assert panel._tool_tabs.indexOf(training) == -1
+    dock = training.parentWidget()
+    dock.hide()
+    assert panel.show_training() is training
+    assert training.parentWidget() is dock
+    assert not dock.isHidden()
+    assert training.epochs_spin.value() == 7
+    menu_dock, menu_training = viewer.window.add_plugin_dock_widget(
+        'napari-label-assistant', 'Model Training')
+    assert menu_dock is dock
+    assert menu_training is training
+    assert panel.mode == 'simple'
+    training.edit_confirm_button.click()
+    assert panel.mode == 'advanced'
+    assert panel._tool_tabs.currentWidget() is panel.components
+    dock.hide()
+    panel.components._reviewed_area_widget.prepare_dataset_button.click()
+    assert not dock.isHidden()
+    assert training.workflow_tabs.currentIndex() == 0
 
 
 def test_activity_header_paints_high_contrast_background(
@@ -262,10 +298,12 @@ def test_labels_owns_review_and_dataset_shares_training_selection(make_napari_vi
     panel.resize(540, 850)
     panel.show()
     labels = panel._tool_tabs.widget(1)
-    training = panel._tool_tabs.widget(2)
+    training = panel.training
     review = labels._reviewed_area_widget
     library = labels.component_library_widget
-    panel._tool_tabs.setCurrentIndex(2)
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    panel.show_training()
     assert training.reviewed_area_widget is review
     assert training.component_library_widget is library
     assert review.parentWidget() is labels._annotate_page
@@ -296,7 +334,7 @@ def test_labels_owns_review_and_dataset_shares_training_selection(make_napari_vi
     assert library.source_layer() is other
     assert review.selected_cell is None
     panel._tool_tabs.setCurrentIndex(1)
-    assert not library.isVisible()
+    assert library.isVisible()
     assert review.mark_button.isVisible()
     assert review.mouse_review_check.parentWidget() is review
     training.workflow_tabs.setCurrentIndex(next(
@@ -322,7 +360,7 @@ def test_dataset_click_marking_activates_canvas_and_restores_editing(make_napari
     panel = label_assistant_widget(viewer)
     qtbot.addWidget(panel)
     labels = panel._tool_tabs.widget(1)
-    training = panel._tool_tabs.widget(2)
+    training = panel.training
     review = training.reviewed_area_widget
     training.truth_combo.setCurrentIndex(training.truth_combo.findData(curated))
     labels._grid_y_spin.setValue(32)

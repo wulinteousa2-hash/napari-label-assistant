@@ -13,7 +13,7 @@ from types import GeneratorType
 import napari
 import numpy as np
 from qtpy.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 from superqt.utils import create_worker
@@ -2741,6 +2741,9 @@ class QuickTrainWidget(QWidget):
 
     def attach_annotation_widgets(self, components):
         """Share annotation controls with the Labels editor without duplicating state."""
+        if getattr(self, '_annotation_components', None) is components:
+            return
+        self._annotation_components = components
         review = components._reviewed_area_widget
         library = components.component_library_widget
         self.reviewed_area_widget = review
@@ -2772,6 +2775,11 @@ class QuickTrainWidget(QWidget):
         review.prepare_dataset_button.setEnabled(True)
 
         def show_labels():
+            shell = getattr(self.viewer, '_label_assistant_curation_widget', None)
+            if shell is not None:
+                shell.show_advanced(1)
+                _reveal_panel(shell)
+                return
             ancestor = components.parentWidget()
             while ancestor is not None:
                 if isinstance(ancestor, QTabWidget) and ancestor.indexOf(components) >= 0:
@@ -2793,12 +2801,7 @@ class QuickTrainWidget(QWidget):
             components._workflow_tabs.widget(0).ensureWidgetVisible(review)
 
         def show_dataset():
-            ancestor = self.parentWidget()
-            while ancestor is not None:
-                if isinstance(ancestor, QTabWidget) and ancestor.indexOf(self) >= 0:
-                    ancestor.setCurrentWidget(self)
-                    break
-                ancestor = ancestor.parentWidget()
+            open_training(self.viewer)
             self.workflow_tabs.setCurrentIndex(0)
             self.refresh_layers()
 
@@ -2915,4 +2918,34 @@ def quick_train_widget(viewer=None, **kwargs):
         viewer = napari.current_viewer()
     if viewer is None:
         raise RuntimeError("No active napari viewer found.")
-    return QuickTrainWidget(viewer)
+    widget = getattr(viewer, '_label_assistant_training_widget', None)
+    if widget is None or widget.closed:
+        widget = QuickTrainWidget(viewer)
+    return widget
+
+
+def _reveal_panel(widget):
+    """Reveal an existing dock without constructing another panel."""
+    ancestor = widget.parentWidget()
+    while ancestor is not None:
+        if isinstance(ancestor, QDockWidget):
+            ancestor.show()
+            ancestor.raise_()
+            widget.show()
+            return True
+        ancestor = ancestor.parentWidget()
+    widget.show()
+    return False
+
+
+def open_training(viewer):
+    """Open the shared training workflow as an independent dock."""
+    widget = quick_train_widget(viewer)
+    ancestor = widget.parentWidget()
+    shell = getattr(viewer, '_label_assistant_curation_widget', None)
+    while ancestor is not None and ancestor is not shell and not isinstance(ancestor, QDockWidget):
+        ancestor = ancestor.parentWidget()
+    if ancestor is None or ancestor is shell:
+        viewer.window.add_plugin_dock_widget('napari-label-assistant', 'Model Training')
+    _reveal_panel(widget)
+    return widget

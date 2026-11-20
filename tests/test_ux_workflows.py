@@ -98,7 +98,7 @@ def test_shared_pair_restored_and_prerequisites_visible(make_napari_viewer):
     truth1 = viewer.add_labels(np.zeros((8, 8), dtype=np.uint8), name="truth one")
     truth2 = viewer.add_labels(np.zeros((8, 8), dtype=np.uint8), name="truth two")
     page = label_assistant_widget(viewer)
-    training = page._tool_tabs.widget(2)
+    training = page.training
     training.image_combo.setCurrentIndex(training.image_combo.findData(image1))
     training.truth_combo.setCurrentIndex(training.truth_combo.findData(truth1))
     training.image_combo.setCurrentIndex(training.image_combo.findData(image2))

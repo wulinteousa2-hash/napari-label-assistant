@@ -1,4 +1,4 @@
-"""Simple/Advanced shell sharing one existing editor and training widget."""
+"""Simple/Advanced curation shell connected to an independent training dock."""
 import napari
 import weakref
 from qtpy.QtCore import QEvent
@@ -9,7 +9,7 @@ from qtpy.QtWidgets import (
 
 from ._widget import _LayerActivityIndicator, component_operations_widget
 from ._workspace_widget import WorkspaceManagerWidget
-from ._quick_train_widget import QuickTrainWidget
+from ._quick_train_widget import quick_train_widget, open_training
 
 
 class _ModeStack(QStackedWidget):
@@ -51,12 +51,14 @@ class LabelAssistantWidget(QWidget):
                         if isinstance(layer, napari.layers.Labels) and 'label_assistant_grid' not in layer.metadata}
         self.components = component_operations_widget(viewer, activity_indicator=self._activity_header)
         self._tool_tabs.addTab(self.components, 'Labels')
-        self.training = QuickTrainWidget(viewer)
+        self.training = quick_train_widget(viewer)
+        if self.training.parentWidget() is None:
+            self.training.setParent(self)
+            self.training.hide()
         self.training.attach_annotation_widgets(self.components)
         from ._annotation_batches import events as batch_events
         self._batch_events = batch_events(viewer)
         self._batch_events.changed.connect(self.workspace.mark_changed)
-        self._tool_tabs.addTab(self.training, 'Training')
         for panel in (self.components, self.training):
             for control in panel.findChildren(QComboBox):
                 control.currentIndexChanged.connect(self.workspace.mark_changed)
@@ -65,8 +67,7 @@ class LabelAssistantWidget(QWidget):
             for control in panel.findChildren(QCheckBox):
                 control.toggled.connect(self.workspace.mark_changed)
         for index, tip in enumerate(('Create, open, save, and transfer workspaces.',
-                                     'Edit Labels and inspect connected components.',
-                                     'Prepare datasets, train models, and predict.')):
+                                     'Edit Labels and inspect connected components.')):
             self._tool_tabs.setTabToolTip(index, tip)
         advanced_layout.addWidget(self._tool_tabs)
         from ._simple_curation import SimpleCurationPanel
@@ -133,6 +134,9 @@ QWidget#labelAssistantShell QPushButton#simplePrimaryAction {{
         self._tool_tabs.setCurrentIndex(tab)
         if tab == 1:
             self.components._workflow_tabs.setCurrentIndex(1 if qc else 0)
+
+    def show_training(self):
+        return open_training(self.viewer)
 
     def eventFilter(self, obj, event):
         if obj is self._window() and event.type() == QEvent.Close:

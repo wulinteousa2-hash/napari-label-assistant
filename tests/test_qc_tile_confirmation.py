@@ -112,7 +112,7 @@ def confirm(qc_editor, qtbot):
     widget._confirm_tile_button.click()
     coverage = associated_mask(viewer, image, truth)
     assert coverage is not None, widget._status_label.text()
-    training = page._tool_tabs.widget(2)
+    training = page.training
     qtbot.waitUntil(lambda: training.reviewed_combo.currentData() is coverage, timeout=5000)
     return coverage, training
 
@@ -275,10 +275,12 @@ def tile_click(viewer, layer, point, button=1):
 @pytest.mark.parametrize('unused_pending_library', [False, True])
 def test_dataset_select_additive_tiles_confirm_and_prepare_with_default_patch_sizes(qc_editor, qtbot, tmp_path, unused_pending_library):
     viewer, image, truth, _, page, widget = qc_editor
-    training = page._tool_tabs.widget(2)
+    training = page.training
     widget._workflow_tabs.setCurrentIndex(0)
     truth.mode = 'paint'
-    page._tool_tabs.setCurrentIndex(2)
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    page.show_training()
     assert training.training_tile_actions.isVisible()
     training.select_training_tiles_button.click()
     assert page._tool_tabs.currentWidget() is widget
@@ -297,7 +299,9 @@ def test_dataset_select_additive_tiles_confirm_and_prepare_with_default_patch_si
     assert '2 checked training tiles' in widget._tile_selection_summary.text()
     # Navigating to an unselected third tile must not include it on confirmation.
     manager_for(viewer).go(0, 2)
-    page._tool_tabs.setCurrentIndex(2)
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    page.show_training()
     training.confirm_training_tiles_button.click()
     coverage = associated_mask(viewer, image, truth)
     assert coverage is not None, training.dataset_feedback.text()
@@ -341,9 +345,11 @@ def test_tile_picker_replaces_clears_and_rejects_overview_clicks(qc_editor):
 
 
 def test_prepare_without_confirmed_tiles_explains_the_next_action_in_dataset(qc_editor):
-    _, _, _, _, page, _ = qc_editor
-    training = page._tool_tabs.widget(2)
-    page._tool_tabs.setCurrentIndex(2)
+    viewer, _, _, _, page, _ = qc_editor
+    training = page.training
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    page.show_training()
     training.prepare_button.click()
     assert training.worker is None
     assert 'No checked tiles are confirmed' in training.dataset_feedback.text()
@@ -354,8 +360,10 @@ def test_prepare_without_confirmed_tiles_explains_the_next_action_in_dataset(qc_
 
 def test_edit_confirm_happy_path_keeps_training_and_cleanup_separate(qc_editor, qtbot):
     viewer, image, truth, _, page, widget = qc_editor
-    training = page._tool_tabs.widget(2)
-    page._tool_tabs.setCurrentIndex(2)
+    training = page.training
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    page.show_training()
     training.edit_confirm_button.click()
     assert page._tool_tabs.currentWidget() is widget
     assert widget._workflow_tabs.currentIndex() == 0
@@ -378,7 +386,8 @@ def test_edit_confirm_happy_path_keeps_training_and_cleanup_separate(qc_editor, 
     review.advanced_check.setChecked(False)
     assert not review.mouse_review_check.isChecked()
     review.prepare_dataset_button.click()
-    assert page._tool_tabs.currentWidget() is training
+    assert training.isVisible()
+    assert page._tool_tabs.indexOf(training) == -1
     assert '2 confirmed tiles available' in training.annotation_sources_label.text()
     assert training.workflow_combo.isHidden()
     training.dataset_advanced_toggle.setChecked(True)
@@ -402,8 +411,10 @@ def test_too_few_spatial_groups_offers_smaller_patches_without_changing_approval
 
 def test_dataset_cleanup_shortcut_indexes_current_area_before_any_removal(qc_editor):
     viewer, image, truth, _, page, widget = qc_editor
-    training = page._tool_tabs.widget(2)
-    page._tool_tabs.setCurrentIndex(2)
+    training = page.training
+    viewer.window._qt_viewer.hide()  # Dock visibility without offscreen OpenGL rendering.
+    viewer.window._qt_window.show()
+    page.show_training()
     original = truth.data.copy()
     training.cleanup_masks_button.click()
     assert page._tool_tabs.currentWidget() is widget

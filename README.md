@@ -31,7 +31,9 @@ source-module responsibilities, and data flow
 
 Open **Plugins → napari-label-assistant → Label Curation — Simple** for a
 compact tile workflow. **Label Curation — Advanced** opens the same dock with
-all existing controls. Switching modes preserves masks and pending selections.
+**Workspace** and **Labels** tabs. **Plugins → napari-label-assistant → Model
+Training** opens the independent training dock. Switching modes preserves masks
+and pending selections; training shortcuts reuse the same model and dataset.
 
 1. **Workspace:** open a project, or save a new one once to establish durable
    mask storage and tile-progress recovery.
@@ -98,7 +100,15 @@ matching source stores; incompatible records are reported and left unapplied.
 Keep the JSON project and its data folder together. Existing workspaces remain
 compatible; editing alone never confirms background.
 
-## Version 7.0.1: Continue across sessions and optional two-node training
+## Version 7.0.2: Independent Model Training dock
+
+- Advanced Label Curation focuses on **Workspace** and **Labels**.
+- Open **Model Training** from the plugin submenu or curation shortcuts as its
+  own dock, sharing the current model, dataset, and annotation batches.
+- Opening Training from Simple mode keeps Simple mode selected. **Edit & Confirm**
+  returns to Labels; dataset and Model Library shortcuts reveal the same trainer.
+
+### Earlier: Continue across sessions and optional two-node training (7.0.1)
 
 - Reopening a saved workspace reloads the previously active model checkpoint,
   making continuation on the next annotation batch available after preparation.
@@ -519,8 +529,11 @@ unconditional hardware-independent limit.
 
 ## Interface
 
-The dock widget has three main tabs: **Workspace**, **Labels**, and **Training**.
+Advanced curation has two main tabs: **Workspace** and **Labels**.
 Labels contains **Edit & Confirm** and **Mask Analysis & Cleanup**.
+**Model Training** opens as an independent dock from the plugin submenu or
+**Open Training** in Simple mode. Both entry points share the same dataset,
+annotation batches, and loaded model.
 
 ### Workspace
 
@@ -1005,7 +1018,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (7.0.1):
+Install the current GitHub version (7.0.2):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"
