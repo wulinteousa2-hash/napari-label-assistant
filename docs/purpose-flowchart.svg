@@ -1,69 +1,68 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="950" viewBox="0 0 1560 950" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1090" viewBox="0 0 1560 1090" role="img" aria-labelledby="title desc">
 <title id="title">napari-label-assistant: purpose and workflow</title>
-<desc id="desc">Open microscopy images and candidate masks, edit and curate, review and confirm, then use curated labels for measurement or optional dataset preparation, training, and prediction. Predictions return to human editing. Workspace saving supports every stage.</desc>
+<desc id="desc">An end-to-end visual segmentation workflow in napari: open an image, create or import masks, curate and confirm annotations, prepare reviewed training data, train and validate a model locally or with distributed compute, and predict new masks. Predictions return to human editing and review. Bounded memory use supports large 2D images approaching 100,000 by 100,000 pixels. Curated annotations can also be measured or exported, and the workspace can be saved and resumed throughout.</desc>
 <defs>
 <marker id="main" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#324b5b"/></marker>
 <marker id="learn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#6a55a1"/></marker>
 <marker id="feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#bd7024"/></marker>
 </defs>
-<rect width="1560" height="950" fill="#f8fafc"/>
+<rect width="1560" height="1090" fill="#f8fafc"/>
 <g font-family="DejaVu Sans, Arial, sans-serif">
 <text x="60" y="59" font-size="24" fill="#206b65" font-weight="700" text-anchor="start">napari-label-assistant</text>
-<text x="60" y="111" font-size="36" fill="#182f40" font-weight="700" text-anchor="start">Turn candidate masks into curated annotations</text>
-<text x="60" y="148" font-size="21" fill="#425466" font-weight="400" text-anchor="start">Human-guided editing, object cleanup and spatial review — with optional model training.</text>
-<rect x="60" y="210" width="300" height="150" rx="14" fill="#edf3f9" stroke="#a4bad1" stroke-width="1.7"/>
-<text x="82" y="247" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Images + masks</text>
-<text x="82" y="280" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Microscopy images</text>
-<text x="82" y="305" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Manual / SAM3 / other tools</text>
-<text x="82" y="330" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Start or resume a workspace</text>
-<rect x="430" y="210" width="300" height="150" rx="14" fill="#eaf5ef" stroke="#8ab89a" stroke-width="1.7"/>
-<text x="452" y="247" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Edit &amp; curate</text>
-<text x="452" y="280" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Paint, erase and inspect</text>
-<text x="452" y="305" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Clean up connected objects</text>
-<text x="452" y="330" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Combine and correct labels</text>
-<rect x="800" y="210" width="300" height="150" rx="14" fill="#eaf5ef" stroke="#8ab89a" stroke-width="1.7"/>
-<text x="822" y="247" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Review &amp; confirm</text>
-<text x="822" y="280" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Check targets + background</text>
-<text x="822" y="305" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Confirm complete regions</text>
-<text x="822" y="330" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Locate findings by grid cell</text>
-<rect x="1170" y="210" width="300" height="150" rx="14" fill="#def0ed" stroke="#5e9e95" stroke-width="1.7"/>
-<text x="1192" y="247" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Curated Labels</text>
-<text x="1192" y="280" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Reusable annotations</text>
-<text x="1192" y="305" font-size="17" fill="#425466" font-weight="400" text-anchor="start">For measurement, export</text>
-<text x="1192" y="330" font-size="17" fill="#425466" font-weight="400" text-anchor="start">and optional model training</text>
-<path d="M360 285 H425" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
-<path d="M730 285 H795" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
-<path d="M1100 285 H1165" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
-<rect x="1150" y="405" width="320" height="80" rx="14" fill="#edf3f9" stroke="#a4bad1" stroke-width="1.7"/>
-<text x="1172" y="442" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Measure / quantify</text>
-<text x="1172" y="475" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Inspect components or export</text>
-<path d="M1470 285 H1505 V445 H1475" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
-<text x="280" y="425" font-size="18" fill="#6a55a1" font-weight="400" text-anchor="start">Optional: learn from confirmed annotations</text>
-<rect x="45" y="495" width="1440" height="190" rx="20" fill="#f2eff8" stroke="#c9bedf" stroke-dasharray="6 6"/>
-<rect x="65" y="515" width="385" height="150" rx="14" fill="#ffffff" stroke="#b1a1ce" stroke-width="1.7"/>
-<text x="87" y="552" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Prepare dataset</text>
-<text x="87" y="585" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Use confirmed annotation pixels</text>
-<text x="87" y="610" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Exclude unknown / unreviewed pixels</text>
-<text x="87" y="635" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Reserve spatial or specimen holdouts</text>
-<rect x="565" y="515" width="385" height="150" rx="14" fill="#ffffff" stroke="#b1a1ce" stroke-width="1.7"/>
-<text x="587" y="552" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Train &amp; validate</text>
-<text x="587" y="585" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Train a model for the biological task</text>
-<text x="587" y="610" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Evaluate on held-out annotations</text>
-<text x="587" y="635" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Save checkpoints and run history</text>
-<rect x="1065" y="515" width="385" height="150" rx="14" fill="#ffffff" stroke="#b1a1ce" stroke-width="1.7"/>
-<text x="1087" y="552" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Predict new masks</text>
-<text x="1087" y="585" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Apply a selected model</text>
-<text x="1087" y="610" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Predict an area or an entire image</text>
-<text x="1087" y="635" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Inspect and correct the results</text>
-<path d="M1320 360 V395 H257 V510" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
-<path d="M450 590 H560" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
-<path d="M950 590 H1060" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
-<path d="M1450 590 H1525 V735 H30 V170 H580 V205" fill="none" stroke="#bd7024" stroke-width="2.4" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#feedback)"/>
-<text x="780" y="767" font-size="20" fill="#a45d19" font-weight="500" text-anchor="middle">Predictions return to human editing and review before reuse.</text>
-<text x="780" y="813" font-size="16" fill="#425466" font-weight="400" text-anchor="middle">Training validity: reviewed regions = foreground + background · selected objects = foreground only · unknown = excluded</text>
-<rect x="60" y="850" width="1410" height="64" rx="12" fill="#e7edf3"/>
-<text x="80" y="889" font-size="21" fill="#182f40" font-weight="700" text-anchor="start">Across all stages: save &amp; reopen the workspace</text>
-<text x="700" y="889" font-size="19" fill="#425466" font-weight="400" text-anchor="start">Images · annotations · review status · model records</text>
-<text x="60" y="939" font-size="16" fill="#425466" font-weight="400" text-anchor="start">Full-resolution editing and analysis; bounded views and chunked processing for large images.</text>
+<text x="60" y="111" font-size="34" fill="#182f40" font-weight="700" text-anchor="start">From large images to masks, models, and predictions</text>
+<text x="60" y="146" font-size="20" fill="#425466" font-weight="400" text-anchor="start">Create training annotations, build models, and refine predictions in one visual workspace.</text>
+<rect x="60" y="165" width="1440" height="82" rx="12" fill="#def0ed"/>
+<text x="80" y="197" font-size="22" fill="#206b65" font-weight="700" text-anchor="start">Built for large 2D images approaching 100k × 100k pixels</text>
+<text x="80" y="226" font-size="18" fill="#425466" font-weight="400" text-anchor="start">Bounded memory use · full-resolution local editing · streamed component analysis</text>
+<rect x="60" y="290" width="440" height="185" rx="14" fill="#edf3f9" stroke="#a4bad1" stroke-width="1.7"/>
+<text x="82" y="327" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">1  Open image</text>
+<text x="82" y="369" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Start from a microscopy image</text>
+<text x="82" y="394" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Create a new mask or import candidates</text>
+<text x="82" y="419" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Start or resume a workspace</text>
+<rect x="560" y="290" width="440" height="185" rx="14" fill="#eaf5ef" stroke="#8ab89a" stroke-width="1.7"/>
+<text x="582" y="327" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">2  Create &amp; curate masks</text>
+<text x="582" y="369" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Paint, erase and correct labels</text>
+<text x="582" y="394" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Inspect connected components</text>
+<text x="582" y="419" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Clean up and combine objects</text>
+<rect x="1060" y="290" width="440" height="185" rx="14" fill="#eaf5ef" stroke="#8ab89a" stroke-width="1.7"/>
+<text x="1082" y="327" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">3  Review &amp; confirm</text>
+<text x="1082" y="369" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Check objects AND background</text>
+<text x="1082" y="394" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Track regions in annotation batches</text>
+<text x="1082" y="419" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Locate findings by reproducible grid cell</text>
+<path d="M500 382 H555" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
+<path d="M1000 382 H1055" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
+<path d="M1280 475 V520 H280 V570" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
+<text x="780" y="550" font-size="18" fill="#6a55a1" font-weight="400" text-anchor="middle">Confirmed annotations become training supervision</text>
+<rect x="60" y="575" width="440" height="185" rx="14" fill="#f2eff8" stroke="#b1a1ce" stroke-width="1.7"/>
+<text x="82" y="612" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">4  Prepare dataset</text>
+<text x="82" y="654" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Use confirmed annotation pixels</text>
+<text x="82" y="679" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Exclude unknown or unreviewed pixels</text>
+<text x="82" y="704" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Reserve spatial or specimen holdouts</text>
+<rect x="560" y="575" width="440" height="185" rx="14" fill="#f2eff8" stroke="#b1a1ce" stroke-width="1.7"/>
+<text x="582" y="612" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">5  Build &amp; validate model</text>
+<text x="582" y="654" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Choose a task and model architecture</text>
+<text x="582" y="679" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Train locally or with distributed compute</text>
+<text x="582" y="704" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Validate on reserved regions or specimens</text>
+<text x="582" y="729" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Save checkpoints and learning history</text>
+<rect x="1060" y="575" width="440" height="185" rx="14" fill="#f2eff8" stroke="#b1a1ce" stroke-width="1.7"/>
+<text x="1082" y="612" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">6  Predict &amp; inspect</text>
+<text x="1082" y="654" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Apply a selected model to images</text>
+<text x="1082" y="679" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Predict an area or an entire image</text>
+<text x="1082" y="704" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Inspect results in the same viewer</text>
+<text x="1082" y="729" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Return to editing, review, and refinement</text>
+<path d="M500 667 H555" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
+<path d="M1000 667 H1055" fill="none" stroke="#6a55a1" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#learn)"/>
+<path d="M1280 760 V805 H30 V265 H780 V285" fill="none" stroke="#bd7024" stroke-width="2.4" stroke-linejoin="round" stroke-dasharray="9 7" marker-end="url(#feedback)"/>
+<text x="60" y="845" font-size="20" fill="#a45d19" font-weight="500" text-anchor="start">Review and correct predictions before reusing them for training.</text>
+<text x="60" y="879" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Repeat the loop with new annotation batches and model revisions.</text>
+<rect x="1060" y="815" width="440" height="90" rx="14" fill="#edf3f9" stroke="#a4bad1" stroke-width="1.7"/>
+<text x="1082" y="851" font-size="23" fill="#182f40" font-weight="700" text-anchor="start">Measure or export</text>
+<text x="1082" y="882" font-size="17" fill="#425466" font-weight="400" text-anchor="start">Use curated masks for downstream analysis</text>
+<path d="M1500 382 H1530 V860 H1505" fill="none" stroke="#324b5b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#main)"/>
+<text x="780" y="935" font-size="15" fill="#425466" font-weight="400" text-anchor="middle">Training validity: reviewed regions = foreground + background · selected objects = foreground only · unknown = excluded</text>
+<rect x="60" y="960" width="1440" height="92" rx="12" fill="#e7edf3"/>
+<text x="80" y="995" font-size="22" fill="#182f40" font-weight="700" text-anchor="start">Save and resume at every stage</text>
+<text x="80" y="1026" font-size="18" fill="#425466" font-weight="400" text-anchor="start">Images · masks · review and batch state · dataset settings · model records and checkpoints</text>
+<text x="60" y="1078" font-size="16" fill="#425466" font-weight="400" text-anchor="start">Training and prediction are optional; curated masks can also be used directly for measurement or export.</text>
 </g>
 </svg>

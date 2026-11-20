@@ -13,13 +13,14 @@ The plugin is model-agnostic. Candidate masks can come from manual annotation,
 SAM3, or another segmentation workflow. The final curated layer can then be
 used for training, measurement, quantification, or export.
 
-![Simple mode showing a microscopy image, curated mask, reviewed regions, annotation batches, and the fixed progress summary](docs/simple-mode-gui.png)
+![Model Training showing validation curves and distributed training progress beside a microscopy image and Label Curation with reviewed annotation batches](docs/simple-mode-gui.png)
 
-**Simple mode in napari:** the fixed top summary keeps task progress, confirmed
-tiles, and batch counts visible without scrolling. Purple outlines show the
-active batch's approved regions. [View full-size screenshot](docs/simple-mode-gui.png).
+**Annotation and model training in napari:** follow validation curves and
+distributed training progress alongside the image, reviewed regions, and
+annotation batches. The fixed top summary keeps task progress and review counts
+visible without scrolling. [View full-size screenshot](docs/simple-mode-gui.png).
 
-![Plugin purpose: curate and review masks, then measure or optionally train models](docs/purpose-flowchart.png)
+![End-to-end segmentation workflow: large images, mask creation and curation, reviewed training data, local or distributed model training, and prediction refinement in one resumable napari workspace](docs/purpose-flowchart.png)
 
 [Open the editable purpose flowchart](docs/purpose-flowchart.svg).
 
