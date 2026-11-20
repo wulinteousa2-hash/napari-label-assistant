@@ -44,11 +44,17 @@ The fixed top summary stays visible in both modes:
 
 Its height stays stable during updates. Section 3 retains batch controls and dataset details.
 
-1. **Workspace:** open a project, or save a new one once to establish durable
+1. **Workspace:** use **New**, **Open**, or **Save**. New asks before clearing
+   existing layers. Open a project, or save a new one once to establish durable
    mask storage and tile-progress recovery.
 2. **Annotate & Review:** choose an aligned image and mask, set the review-tile
    size, and paint or erase in **Edit** mode. Camera follow loads bounded
    full-resolution areas when zoomed in; zooming out provides a read-only overview.
+   For an image without a mask, select it and click **Create annotation mask**.
+   This creates an empty mask using sparse disk storage. Zoom in to paint, then
+   save the workspace. Grid text and Points overlays are not annotation masks.
+   Review-tile presets range from **256 to 8192 px**. Existing custom grids are
+   preserved; editing-buffer and training-patch sizes are configured separately.
    **Reviewed & Next** approves the current tile and visits the next unreviewed
    tile. Approve only after checking every target and the remaining background.
 3. To select several checked tiles, choose **Review — select tiles** and click
@@ -109,7 +115,14 @@ matching source stores; incompatible records are reported and left unapplied.
 Keep the JSON project and its data folder together. Existing workspaces remain
 compatible; editing alone never confirms background.
 
-## Version 7.0.3: Progress always in view
+## Version 7.0.4: Start from an image and choose your review size
+
+- Use **New**, **Open**, and **Save** directly in Simple mode.
+- Select a new image and click **Create annotation mask** to start painting.
+- Choose review tiles from **256 to 8192 px**, with no duplicate menu entries.
+- Existing custom grids and saved review regions remain supported.
+
+### Earlier: Progress always in view (7.0.3)
 
 - Keep task progress and annotation counts in the fixed top summary, without scrolling.
 - Follow active work without routine viewer updates replacing its message.
@@ -1034,7 +1047,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (7.0.3):
+Install the current GitHub version (7.0.4):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"

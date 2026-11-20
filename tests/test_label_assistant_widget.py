@@ -237,10 +237,11 @@ def test_layer_activity_indicator_tracks_source_selector(
     labels._target_combo.setCurrentText("reference image")
 
     qtbot.waitUntil(
-        lambda: labels._layer_activity_indicator.state == "ready"
-        and "reference image"
-        in labels._layer_activity_indicator.message.text()
+        lambda: widget.activity.records.get('view', {}).get('state') == 'ready'
+        and 'reference image' in widget.activity.records['view']['message']
     )
+    assert 'reference image' in widget._activity_header.batch_label.toolTip()
+    assert widget._activity_header._full_message == 'Create an annotation mask to start'
 
 
 

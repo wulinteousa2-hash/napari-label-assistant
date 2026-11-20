@@ -30,6 +30,68 @@ def full_data(layer):
     return full_source(layer).data
 
 
+def create_empty_mask(viewer, image, *, manifest=None, name='Curated'):
+    """Start annotation from an image without allocating a full-size mask."""
+    import napari
+    import zarr
+    from tempfile import TemporaryDirectory
+    from ._quick_train import array_2d
+    from ._coordinates import mask_world_affine
+    from ._copy_destination import unique_name
+    from .workspace.service import _common_record, _new_mask_path, workspace_data_root, _ensure_no_training
+
+    _ensure_no_training(viewer)
+    if not isinstance(image, napari.layers.Image) or image.rgb:
+        raise ValueError('Choose a single-channel 2D image to create an annotation mask.')
+    if not any(layer is image for layer in viewer.layers):
+        raise ValueError('The selected image is no longer open.')
+    shape = tuple(array_2d(image.data).shape)
+    mask_world_affine(image)  # Validate registration before creating any assets.
+    name = unique_name(viewer, name)
+    temporary = None
+    if manifest is not None:
+        data_root = workspace_data_root(Path(manifest))
+        data_root.mkdir(parents=True, exist_ok=True)
+        path = _new_mask_path(data_root, len(viewer.layers), name)
+    else:
+        temporary = TemporaryDirectory(prefix='label-assistant-annotation-')
+        path = Path(temporary.name) / 'mask.ome.zarr'
+    manager = manager_for(viewer)
+    if manager is None or not manager.entries:
+        if manager is not None:
+            manager.dispose()
+        manager = MaskTileManager(viewer)
+    record = _common_record(image, 'Labels')
+    record = {key: value for key, value in record.items()
+              if key in ('layer_type', 'name', 'visible', 'opacity', 'blending',
+                         'scale', 'translate', 'rotate', 'shear', 'affine')}
+    record.update(name=name, visible=True, opacity=.7, blending='translucent')
+    try:
+        root = zarr.open_group(str(path), mode='w-')
+        from .workspace.service import _create_zarr_array
+        array = _create_zarr_array(root, 's0', shape=shape,
+                                   chunks=tuple(min(n, 1024) for n in shape),
+                                   dtype=np.uint32, fill_value=0)
+        root.attrs['ome'] = dict(version='0.5', multiscales=[dict(
+            name=name, axes=[dict(name=axis, type='space') for axis in ('y', 'x')],
+            datasets=[dict(path='s0', coordinateTransformations=[dict(type='scale', scale=list(image.scale))])])])
+        layer = manager.add(record, array, dict(path=path, array_path='s0'))
+    except Exception:
+        if temporary is not None:
+            temporary.cleanup()
+        raise
+    if temporary is not None:
+        manager._temporary_stores.append(temporary)
+        full_source(layer)._label_assistant_mask_temporary = True
+    else:
+        full_source(layer)._label_assistant_mask_temporary = False
+    # Associate by stable ID, without copying image review/training metadata.
+    from ._reviewed_regions import identity
+    image.metadata = {**image.metadata, 'label_assistant_annotation_id': identity(layer)}
+    viewer.layers.selection.active = layer
+    return layer
+
+
 class Labels(SimpleNamespace):
     """Serialization/geometry adapter; deliberately not a napari Layer."""
     def __init__(self, **values):

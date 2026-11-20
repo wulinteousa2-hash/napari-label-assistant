@@ -5,6 +5,33 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.4] - 2026-11-20
+
+### Added
+
+- **New**, **Open**, and **Save** in Simple's Workspace section. New uses the
+  existing confirmation and project reset and is disabled during active tasks.
+- **Create annotation mask** for starting from a new image without an existing
+  mask. Empty masks use sparse Zarr storage, preserve image registration, and
+  connect directly to editing, review, training, and workspace save/reopen.
+- Review-tile presets of **256, 512, 1024, 2048, 4096, and 8192 px**, independent
+  of the editing buffer and training patch size.
+
+### Fixed
+
+- List supported 2D images before a mask exists, including after removing the
+  previous project's layers. Preserve image selections and avoid associating an
+  incompatible previous mask with the new image.
+- Stop repeated review-tile entries from accumulating during refresh. Keep an
+  existing custom or rectangular grid once, preserving saved approval regions.
+- Show setup guidance for an image without a mask instead of stale batch/dataset
+  information or a previous training cancellation message.
+
+### Validation
+
+- Passed 93 regression tests covering new-project setup, sparse mask creation,
+  review sizes, custom-grid restoration, tile confirmation, and status feedback.
+
 ## [7.0.3] - 2026-11-20
 
 ### Changed

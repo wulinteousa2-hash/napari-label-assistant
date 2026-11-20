@@ -819,7 +819,7 @@ def test_sparse_100k_mask_can_be_reviewed_from_overview(make_napari_viewer,qtbot
     qtbot.addWidget(shell)
     shell.set_mode('simple')
     panel = shell.simple
-    panel.grid_combo.setCurrentIndex(panel.grid_combo.findData((1024,1024)))
+    panel.grid_combo.setCurrentIndex(panel.grid_combo.findData([1024,1024]))
     shell.components._display_grid_check.setChecked(False)
     panel.local.follow.pause_for_operation()
     panel.local.backend.suspend_follow(manager_for(viewer))

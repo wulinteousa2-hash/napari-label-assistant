@@ -17,6 +17,8 @@ from ._quick_train import array_2d
 from ._reviewed_regions import KEY as REVIEW_KEY, associated_mask, effective_areas, identity
 from ._tile_progress import KEY, ProgressJournal, active_path
 
+REVIEW_TILE_SIZES = (256, 512, 1024, 2048, 4096, 8192)
+
 
 def _shape_2d(layer):
     try:
@@ -63,6 +65,7 @@ class SimpleCurationPanel(QScrollArea):
         self._syncing = False
         self._writing = False
         self._pair = None
+        self._image_choice = None
         self._focus_cell = None
         self.pending = []
         self._undo = None
@@ -84,9 +87,11 @@ class SimpleCurationPanel(QScrollArea):
         self.project_label = QLabel()
         self.project_label.setWordWrap(True)
         self.workspace_section.content.addWidget(self.project_label)
-        row, buttons = self._buttons(('Open', workspace.open_workspace), ('Save', workspace.save))
+        row, buttons = self._buttons(('New', workspace.new_workspace),
+                                     ('Open', workspace.open_workspace), ('Save', workspace.save))
         self.workspace_section.content.addWidget(row)
-        self.open_button, self.save_button = buttons
+        self.new_button, self.open_button, self.save_button = buttons
+        self.new_button.setToolTip('Start a new workspace. Confirm before clearing the current layers.')
         layout.addWidget(self.workspace_section)
 
         self.edit_section = StepSection('2  Annotate & Review')
@@ -97,13 +102,17 @@ class SimpleCurationPanel(QScrollArea):
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(12)
         self.grid_combo = QComboBox()
-        for size in (512, 1024, 2048, 4096):
-            self.grid_combo.addItem(f'{size} × {size} px', (size, size))
+        for size in REVIEW_TILE_SIZES:
+            self.grid_combo.addItem(f'{size} × {size} px', [size, size])
         self.grid_combo.setToolTip('Review area size. The camera-follow buffer and training patch size are managed separately.')
         form.addRow('Image', self.image_combo)
         form.addRow('Mask', self.mask_combo)
         form.addRow('Review tile', self.grid_combo)
         self.edit_section.content.addLayout(form)
+        self.create_mask_button = QPushButton('Create annotation mask')
+        self.create_mask_button.setToolTip('Create an empty full-resolution mask aligned to the image using sparse disk storage.')
+        self.create_mask_button.clicked.connect(lambda: self.run(self._create_mask))
+        self.edit_section.content.addWidget(self.create_mask_button)
         self.canvas_mode = QComboBox()
         self.canvas_mode.addItem('Edit — paint / erase', 'edit')
         self.canvas_mode.addItem('Review — select tiles', 'review')
@@ -281,6 +290,18 @@ class SimpleCurationPanel(QScrollArea):
         self._syncing = True
         try:
             source = self.truth
+            previous_image = self.image
+            images = [layer for layer in self.viewer.layers
+                      if isinstance(layer, napari.layers.Image) and not layer.rgb
+                      and not is_internal_layer(layer) and _shape_2d(layer) is not None]
+            if self._image_choice not in images:
+                self._image_choice = None
+            def matches(image, mask):
+                return (_shape_2d(image) == _shape_2d(mask)
+                        and matching_mask_transforms(image, full_source(mask)))
+            if source is not None and self._image_choice is not None and not matches(self._image_choice, source):
+                source = None
+                self.c._target_combo.setCurrentIndex(-1)
             masks = [layer for layer in self.viewer.layers if isinstance(layer, napari.layers.Labels)
                      and not is_internal_layer(layer)
                      and _shape_2d(layer) is not None
@@ -291,25 +312,24 @@ class SimpleCurationPanel(QScrollArea):
                 self.mask_combo.addItem(layer.name, layer)
             if source in masks:
                 self.mask_combo.setCurrentIndex(self.mask_combo.findData(source))
-            elif len(masks) == 1 and self.active:
-                source = masks[0]
+            elif self.active and len(compatible := [mask for mask in masks if self._image_choice is None or matches(self._image_choice, mask)]) == 1:
+                source = compatible[0]
                 self.c._target_combo.setCurrentText(source.name)
-                self.mask_combo.setCurrentIndex(1)
+                self.mask_combo.setCurrentIndex(self.mask_combo.findData(source))
             else:
                 source = None
-            images = []
-            if source is not None:
-                for layer in self.viewer.layers:
-                    if isinstance(layer, napari.layers.Image) and not layer.rgb and not is_internal_layer(layer):
-                        if (_shape_2d(layer) == _shape_2d(source)
-                                and matching_mask_transforms(layer, full_source(source))):
-                            images.append(layer)
+            matching_images = [image for image in images if source is None or matches(image, source)]
             session = full_source(source).metadata.get(KEY, {}) if source is not None else {}
-            chosen = next((image for image in images if image.metadata.get(REVIEW_KEY, {}).get('id') == session.get('image_id')), None)
-            if chosen is None and len(images) == 1:
-                chosen = images[0]
+            chosen = self._image_choice
+            if chosen is None:
+                chosen = next((image for image in matching_images if session.get('image_id')
+                               and image.metadata.get(REVIEW_KEY, {}).get('id') == session['image_id']), None)
+            if chosen is None and previous_image in matching_images:
+                chosen = previous_image
+            if chosen is None and len(matching_images) == 1:
+                chosen = matching_images[0]
             self.image_combo.clear()
-            self.image_combo.addItem('Choose matching image…', None)
+            self.image_combo.addItem('Choose image…', None)
             for image in images:
                 self.image_combo.addItem(image.name, image)
             if chosen is not None:
@@ -340,11 +360,7 @@ class SimpleCurationPanel(QScrollArea):
                     self.review.clear_cell()
                 self.c._set_pending_training_tiles(self.pending)
             grid = (self.c._grid_y_spin.value(), self.c._grid_x_spin.value())
-            index = self.grid_combo.findData(grid)
-            if index < 0:
-                self.grid_combo.addItem(f'{grid[0]} × {grid[1]} px', grid)
-                index = self.grid_combo.count() - 1
-            self.grid_combo.setCurrentIndex(index)
+            self._sync_grid_choices(grid)
             for layer in self.viewer.layers:
                 if is_internal_layer(layer) or layer in self._watched:
                     continue
@@ -365,17 +381,53 @@ class SimpleCurationPanel(QScrollArea):
 
     def _choose_mask(self):
         if not self._syncing and self.mask_combo.currentData() is not None:
+            self._image_choice = None
             self.c._target_combo.setCurrentText(self.mask_combo.currentData().name)
             self.refresh_sources()
 
     def _choose_image(self):
         if not self._syncing and self.image is not None:
-            self.review.image_combo.setCurrentIndex(self.review.image_combo.findData(self.image))
+            self._image_choice = self.image
+            # Clear incompatible training/editor masks before the shared image
+            # selector can propagate a new association into the old mask.
+            training_truth = self.training.truth_combo.currentData()
+            if training_truth is not None and (
+                    _shape_2d(training_truth) != _shape_2d(self.image)
+                    or not matching_mask_transforms(self.image, full_source(training_truth))):
+                self.training.truth_combo.setCurrentIndex(-1)
+                self.c._target_combo.setCurrentIndex(-1)
             self.pending = []
-            self._pair = (self.truth, self.image)
             self.review.clear_cell()
+            self.refresh_sources()
             self._persist()
             self.run(self._apply_canvas_mode)
+
+    def _create_mask(self):
+        if self.busy or self.training.worker is not None or self.c._large_controller.busy:
+            raise ValueError('Wait for the current operation to finish before creating a mask.')
+        image = self.image
+        if image is None or not any(layer is image for layer in self.viewer.layers):
+            raise ValueError('Choose a 2D image before creating an annotation mask.')
+        from ._mask_tiles import create_empty_mask
+        self.shell.activity.report('new-mask', 'busy', 'Creating annotation mask…', priority=65)
+        try:
+            layer = create_empty_mask(self.viewer, image, manifest=active_path(self.viewer))
+            self.c._refresh_layers_button.click()
+            self.c._target_combo.setCurrentText(layer.name)
+            self._image_choice = image
+            self.refresh_sources()
+            self.training.refresh_layers()
+            self.training.image_combo.setCurrentIndex(self.training.image_combo.findData(image))
+            self.training.truth_combo.setCurrentIndex(self.training.truth_combo.findData(layer))
+            self._persist()
+            self.local.refresh(manager_for(self.viewer))
+            self.run(self._apply_canvas_mode)
+            self.workspace.mark_changed()
+            self.message.setText('Empty annotation mask created. Zoom in to paint, then save the workspace.')
+            self.shell.activity.report('new-mask', 'ready', 'Mask created · zoom in to paint, then save', priority=65)
+        except Exception as error:
+            self.shell.activity.report('new-mask', 'error', f'Could not create mask: {error}', priority=65)
+            raise
 
     def _grid_changed(self):
         if not self._syncing and self.grid_combo.currentData():
@@ -384,6 +436,23 @@ class SimpleCurationPanel(QScrollArea):
             self.c._grid_x_spin.setValue(sx)
             self._persist()
             self.refresh_status()
+
+    def _sync_grid_choices(self, grid):
+        """Use Qt value lists, not Python-object tuples, for reliable matching."""
+        choices = [(size, size) for size in REVIEW_TILE_SIZES]
+        if grid not in choices:
+            choices.append(grid)
+        current = [tuple(self.grid_combo.itemData(i)) for i in range(self.grid_combo.count())]
+        blocked = self.grid_combo.blockSignals(True)
+        try:
+            if current != choices:
+                self.grid_combo.clear()
+                for height, width in choices:
+                    custom = ' (custom)' if (height, width) not in [(size, size) for size in REVIEW_TILE_SIZES] else ''
+                    self.grid_combo.addItem(f'{height} × {width} px{custom}', [height, width])
+            self.grid_combo.setCurrentIndex(self.grid_combo.findData(list(grid)))
+        finally:
+            self.grid_combo.blockSignals(blocked)
 
     def _metadata_changed(self, *_args):
         if not self._writing and not getattr(self.viewer, '_label_assistant_workspace_loading', False):
@@ -794,6 +863,10 @@ class SimpleCurationPanel(QScrollArea):
         batch_error = (self.training.batch_preparation_error() if self.training._multiple_pairs() or self.training._is_multilabel()
                        else preparation_error(self.image, self.truth))
         self.dataset_label.setText(scope + (batch_error or self.training.dataset_state_label.text()) + ('\n' + detail if detail else ''))
+        if self.truth is None:
+            self.progress_label.setText('Create an annotation mask to start reviewing tiles.')
+            self.dataset_label.setText('Create a mask, annotate, then confirm reviewed tiles before preparing training data.')
+        self.batch_widget.setVisible(self.truth is not None and self.image is not None)
         review_mode = self.canvas_mode.currentData() == 'review'
         if review_mode:
             self.follow_label.setText('Review selection active · click tiles on the image, then approve.'
@@ -807,6 +880,8 @@ class SimpleCurationPanel(QScrollArea):
         available = self.truth is not None and self.image is not None and active_path(self.viewer) is not None
         workspace_busy = self.shell.activity.records.get('workspace', {}).get('state') == 'busy'
         busy = self.busy or self.training.worker is not None or self.c._large_controller.busy or workspace_busy
+        self.create_mask_button.setVisible(self.truth is None)
+        self.create_mask_button.setEnabled(self.image is not None and not busy)
         self.batch_widget.set_busy(busy)
         reason = ('Wait for the current operation to finish.' if busy else
                   'Choose an aligned 2D image and mask.' if self.truth is None or self.image is None else
@@ -824,6 +899,7 @@ class SimpleCurationPanel(QScrollArea):
             self.prepare_button.setToolTip(batch_error)
         self.save_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
+        self.new_button.setEnabled(not busy)
         self.open_training_button.setEnabled(not self.busy)
         self.patch_selection_button.setEnabled(not busy)
         self.shell.simple_radio.setEnabled(not self.busy and not workspace_busy)
@@ -844,6 +920,16 @@ class SimpleCurationPanel(QScrollArea):
 
     def _update_header_summary(self):
         """Use cached review/batch summaries; never read mask pixels on a poll."""
+        if self.truth is None:
+            self.shell.activity.set_summary('No annotation mask yet',
+                                           f'Image: {self.image.name}' if self.image is not None else 'No image selected')
+            record = self.shell.activity.records.get('training', {})
+            if self.training.worker is None and record.get('state') == 'warning' and 'cancel' in record.get('message', '').lower():
+                self.shell.activity.clear('training')
+            self.shell.activity.report('context', 'idle',
+                                       'Create an annotation mask to start' if self.image is not None else 'Open a 2D image to start',
+                                       priority=0, transient=False, log=False)
+            return
         counts = self.review.progress_label.text().replace('Confirmed grid tiles:', 'Confirmed').strip()
         pending = self.c._pending_training_tiles()
         if pending:
