@@ -5,6 +5,37 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [7.0.5] - 2026-11-20
+
+### Changed
+
+- Open **Label Curation** directly in the main workflow; remove the Simple / Advanced
+  mode choice. Put **Advanced label tools…** in the collapsed Tools section and add
+  **← Label Curation** to return. The plugin menu now has three destinations:
+  **Label Curation**, **Model Training**, and **Model Library**.
+
+### Added
+
+- **Add Images…** in Workspace controls, using napari's file
+  picker and readers to add images without clearing existing layers. Rename
+  **Open** to **Open Workspace…** to distinguish saved projects from image imports.
+- Lock Simple's review-tile size after selection or when painting/review begins,
+  and persist the lock with the image/mask pair. Use **Change…** for an explicit
+  Apply/Cancel dialog; applying commits pending edits and clears pending tile
+  selections while preserving pixels and approved regions.
+- Show review-grid and loaded editing-area dimensions separately, with an orange
+  outline around the actual painting area. Add detailed tooltips on Review tile
+  explaining the lock, safe grid changes, and independent editing/training sizes.
+- Add short visible definitions for the review tile, editable area, training patch,
+  and annotation batch.
+- Add an **Editable area** size selector to the main annotation controls, separate
+  from **Review tile**; retain the orange outline and live dimensions.
+
+### Fixed
+
+- Support napari 0.10 canvas-to-world mapping while retaining compatibility with
+  napari 0.9.1 and preserving Qt pixel coordinate order.
+
 ## [7.0.4] - 2026-11-20
 
 ### Added

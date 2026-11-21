@@ -56,11 +56,14 @@ def test_window_planner_honors_selected_size():
     assert plan_window(bounds, shape, 1, requested_size=4090).size == 4090
 
 
-def test_native_canvas_mapping_round_trip(make_napari_viewer):
+@pytest.mark.parametrize('center, zoom', [((0, 0, 0), 1), ((0, 75, 190), 2.5)])
+def test_native_canvas_mapping_round_trip(make_napari_viewer, center, zoom):
     from napari_label_assistant_tools._editing_canvas import CanvasAdapter
     viewer = make_napari_viewer()
     viewer.add_labels(np.zeros((128, 256), dtype='uint8'),
                       scale=(2, 3), translate=(11, 17))
+    viewer.camera.center = center
+    viewer.camera.zoom = zoom
     adapter = CanvasAdapter(viewer)
     assert adapter.supported_view()
     pixels = [(0, 0), (100, 150), (250, 300)]

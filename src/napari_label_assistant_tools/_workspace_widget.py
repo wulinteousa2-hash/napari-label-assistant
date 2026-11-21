@@ -137,7 +137,12 @@ class WorkspaceManagerWidget(QWidget):
         )
 
         new_button = QPushButton("New")
-        open_button = QPushButton("Open")
+        open_button = QPushButton("Open Workspace…")
+        self.add_images_button = QPushButton("Add Images…")
+        self.add_images_button.setToolTip(
+            "Add TIFFs or other supported image files to the current workspace without clearing layers."
+        )
+        self.add_images_button.clicked.connect(self.add_images)
         save_button = QPushButton("Save")
         save_as_button = QPushButton("Save As")
         recent_button = QPushButton("Open Recent")
@@ -186,6 +191,7 @@ class WorkspaceManagerWidget(QWidget):
         layout.addWidget(self.storage_state_label)
         layout.addWidget(self.save_state_label)
         layout.addLayout(first_row)
+        layout.addWidget(self.add_images_button)
         model_row = QHBoxLayout()
         model_row.addWidget(self.model_catalog_label, 1)
         model_row.addWidget(self.model_library_button)
@@ -311,6 +317,13 @@ class WorkspaceManagerWidget(QWidget):
         self._disassociate_workspace()
         self._refresh_current_label()
         self._set_status("Started a new empty workspace.")
+
+    def add_images(self) -> None:
+        if self.viewer is None:
+            self._set_status("No napari viewer is available.")
+            return
+        # Reuse napari's file history, reader selection, and import error handling.
+        self.viewer.window._qt_viewer._open_files_dialog(stack=False)
 
     def open_workspace(self) -> None:
         reference = self.workspace_path or self._last_workspace_path
@@ -568,7 +581,7 @@ class WorkspaceManagerWidget(QWidget):
         shell = getattr(self.viewer, '_label_assistant_curation_widget', None)
         widgets = [self, self.viewer.window._qt_viewer, self.viewer.window._qt_window.menuBar()]
         if shell is not None:
-            widgets.extend((shell.stack, shell.simple_radio, shell.advanced_radio))
+            widgets.append(shell.stack)
         trainer = getattr(self.viewer, '_label_assistant_training_widget', None)
         if trainer is not None:
             widgets.append(trainer)

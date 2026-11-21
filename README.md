@@ -28,15 +28,16 @@ See the [system design map](docs/system-design.md) for the architecture,
 source-module responsibilities, and data flow
 ([PNG](docs/system-design.png) · [editable SVG](docs/system-design.svg)).
 
-## Simple annotation workflow
+## Label Curation workflow
 
-Open **Plugins → napari-label-assistant → Label Curation — Simple** for a
-compact tile workflow. **Label Curation — Advanced** opens the same dock with
-**Workspace** and **Labels** tabs. **Plugins → napari-label-assistant → Model
-Training** opens the independent training dock. Switching modes preserves masks
-and pending selections; training shortcuts reuse the same model and dataset.
+Open **Plugins → napari-label-assistant → Label Curation** for the main
+workspace, annotation, review, and dataset workflow. Advanced label tools are
+available under the collapsed **Tools → Advanced label tools…** section; use
+**← Label Curation** to return. The plugin menu also opens **Model Training**
+and **Model Library** as separate docks. Training shortcuts share the current
+model, dataset, and annotation batches.
 
-The fixed top summary stays visible in both modes:
+The fixed top summary stays visible while you work:
 
 - **Annotation:** confirmed tiles, pending selections, and the active batch's reviewed count.
 - **Current task:** progress for loading, saving, analysis, mask edits, and model work; **Stop** when supported.
@@ -44,7 +45,9 @@ The fixed top summary stays visible in both modes:
 
 Its height stays stable during updates. Section 3 retains batch controls and dataset details.
 
-1. **Workspace:** use **New**, **Open**, or **Save**. New asks before clearing
+1. **Workspace:** use **Add Images…** to import TIFFs or other supported image
+   files into the current workspace. **Open Workspace…**
+   restores a saved workspace JSON file. Use **New** or **Save** as needed. New asks before clearing
    existing layers. Open a project, or save a new one once to establish durable
    mask storage and tile-progress recovery.
 2. **Annotate & Review:** choose an aligned image and mask, set the review-tile
@@ -55,6 +58,13 @@ Its height stays stable during updates. Section 3 retains batch controls and dat
    save the workspace. Grid text and Points overlays are not annotation masks.
    Review-tile presets range from **256 to 8192 px**. Existing custom grids are
    preserved; editing-buffer and training-patch sizes are configured separately.
+   The review size locks after selection or when painting/review starts. Use
+   **Change…** beside it to apply a different grid after finishing the current
+   stroke. The change clears pending selections and keeps approved regions.
+   Set **Review tile** for the area to inspect and confirm, and **Editable area**
+   for the full-resolution painting crop. Pan or zoom to move the editable area;
+   the orange outline shows what is loaded. Training patches are separate model
+   input crops. Hover over **Review tile** or **Editable area** for details.
    **Reviewed & Next** approves the current tile and visits the next unreviewed
    tile. Approve only after checking every target and the remaining background.
 3. To select several checked tiles, choose **Review — select tiles** and click
@@ -67,7 +77,7 @@ Its height stays stable during updates. Section 3 retains batch controls and dat
    of review-tile size and the camera-follow edit buffer.
    **Training amount…** opens the percentage/count controls for quick trials.
 
-**Annotation batch buttons** live in Simple **3. Progress & Dataset**, Advanced
+**Annotation batch buttons** live in **3. Progress & Dataset**, Advanced
 **Labels → Local Editing → Confirm tiles for dataset**, and **Training → Dataset**.
 They share batch settings per image/mask pair. Click **+ New batch** before starting
 the next annotation stage: the new batch starts empty and is selected for training.
@@ -104,7 +114,7 @@ Collapsed **Tools** includes clearing pending selection, revoking selected/curre
 or all reviewed areas for the chosen image/mask pair, and undoing the last review
 action. Painting invalidates affected approval and review undo; recorded past
 training use remains visible. Existing comparison, composition, component screening,
-and workspace options remain accessible in Advanced.
+and workspace options are available through **Tools → Advanced label tools…**.
 
 After the first workspace save, pending selections and review metadata are
 recorded automatically in a small `tile-progress.json` inside the workspace data
@@ -115,7 +125,14 @@ matching source stores; incompatible records are reported and left unapplied.
 Keep the JSON project and its data folder together. Existing workspaces remain
 compatible; editing alone never confirms background.
 
-## Version 7.0.4: Start from an image and choose your review size
+## Version 7.0.5: Clearer image import and annotation controls
+
+- Add images directly from Workspace; **Open Workspace…** restores saved JSON projects.
+- Open Label Curation directly, with advanced tools available from Tools.
+- Configure review tiles and editable areas separately, with visible painting bounds.
+- Support napari 0.10.1rc0 alongside napari 0.9.1.
+
+### Earlier: Start from an image and choose your review size (7.0.4)
 
 - Use **New**, **Open**, and **Save** directly in Simple mode.
 - Select a new image and click **Create annotation mask** to start painting.
@@ -282,10 +299,10 @@ the complete workflow.
 
 ## Model Library and workspace file management
 
-The plugin menu provides:
+The plugin menu provides three direct destinations:
 
-- **Label Curation — Simple / Advanced** — two presentations of one shared
-  annotation dock, for tile review or the full editing and analysis controls.
+- **Label Curation** — the main workspace, annotation, review, and dataset path.
+  Additional label operations are under its **Tools** section.
 - **Model Training** (formerly Quick Train) — prepare datasets, configure models,
   train, validate, and predict.
 - **Model Library** — organize models and checkpoints, document training runs,
@@ -558,10 +575,12 @@ unconditional hardware-independent limit.
 
 ## Interface
 
-Advanced curation has two main tabs: **Workspace** and **Labels**.
+Label Curation opens in the main annotation workflow. **Tools → Advanced label
+tools…** opens the additional **Workspace** and **Labels** controls; use
+**← Label Curation** to return.
 Labels contains **Edit & Confirm** and **Mask Analysis & Cleanup**.
 **Model Training** opens as an independent dock from the plugin submenu or
-**Open Training** in Simple mode. Both entry points share the same dataset,
+**Open Training** in Label Curation. Both entry points share the same dataset,
 annotation batches, and loaded model.
 
 ### Workspace
@@ -1047,7 +1066,7 @@ masks. Legacy direct editing and size-based Automatic remain under Advanced.
 
 ## Installation
 
-Install the current GitHub version (7.0.4):
+Install the current GitHub version (7.0.5):
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/wulinteousa2-hash/napari-label-assistant.git@main"

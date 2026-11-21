@@ -3,8 +3,8 @@ import napari
 import weakref
 from qtpy.QtCore import QEvent
 from qtpy.QtWidgets import (
-    QAbstractSpinBox, QCheckBox, QComboBox, QHBoxLayout, QRadioButton,
-    QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QCheckBox, QComboBox, QPushButton, QStackedWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ._widget import _LayerActivityIndicator, component_operations_widget
@@ -25,19 +25,11 @@ class LabelAssistantWidget(QWidget):
     def __init__(self, viewer):
         super().__init__()
         self.viewer = viewer
-        self.mode = 'advanced'
+        self.mode = 'simple'
         self._closed = False
         self.setObjectName('labelAssistantShell')
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
-        mode_bar = QHBoxLayout()
-        self.simple_radio = QRadioButton('Simple')
-        self.advanced_radio = QRadioButton('Advanced')
-        self.advanced_radio.setChecked(True)
-        mode_bar.addWidget(self.simple_radio)
-        mode_bar.addWidget(self.advanced_radio)
-        mode_bar.addStretch(1)
-        layout.addLayout(mode_bar)
         self.activity = activity_for(viewer)
         self._activity_header = _LayerActivityIndicator(self, hub=self.activity)
         self._activity_header.set_context_tooltip('Current task, confirmed tiles, and active annotation batch. Details opens recent activity.')
@@ -46,6 +38,10 @@ class LabelAssistantWidget(QWidget):
         self.advanced = QWidget()
         advanced_layout = QVBoxLayout(self.advanced)
         advanced_layout.setContentsMargins(0, 0, 0, 0)
+        self.back_button = QPushButton('← Label Curation')
+        self.back_button.setToolTip('Return to the main annotation and review workflow.')
+        self.back_button.clicked.connect(lambda: self.set_mode('simple'))
+        advanced_layout.addWidget(self.back_button)
         self._tool_tabs = QTabWidget()
         self.workspace = WorkspaceManagerWidget(napari_viewer=viewer)
         self._tool_tabs.addTab(self.workspace, 'Workspace')
@@ -82,8 +78,6 @@ class LabelAssistantWidget(QWidget):
         local = self.components._local_editing_controls
         local.active_view = lambda: self.isVisible() and (
             self.mode == 'simple' or self._tool_tabs.currentWidget() is self.components)
-        self.simple_radio.toggled.connect(lambda checked: self.set_mode('simple') if checked else None)
-        self.advanced_radio.toggled.connect(lambda checked: self.set_mode('advanced') if checked else None)
         self._apply_theme()
         viewer.events.theme.connect(self._apply_theme)
         window = viewer.window._qt_window
@@ -91,7 +85,7 @@ class LabelAssistantWidget(QWidget):
         window.installEventFilter(self)
         window.destroyed.connect(lambda *_: self._shutdown())
         self.destroyed.connect(lambda *_: self._shutdown())
-        self.set_mode('advanced')
+        self.set_mode('simple')
 
     def _apply_theme(self, *_args):
         from napari.utils.theme import get_theme
@@ -119,11 +113,6 @@ QWidget#labelAssistantShell QPushButton#simplePrimaryAction {{
         if self.simple.busy:
             return
         self.mode = 'simple' if mode == 'simple' else 'advanced'
-        for radio, checked in ((self.simple_radio, self.mode == 'simple'),
-                               (self.advanced_radio, self.mode == 'advanced')):
-            radio.blockSignals(True)
-            radio.setChecked(checked)
-            radio.blockSignals(False)
         self.stack.setCurrentWidget(self.simple if self.mode == 'simple' else self.advanced)
         self.simple.set_active(self.mode == 'simple')
         self.setMinimumWidth(360 if self.mode == 'simple' else 420)
@@ -136,6 +125,9 @@ QWidget#labelAssistantShell QPushButton#simplePrimaryAction {{
         self._tool_tabs.setCurrentIndex(tab)
         if tab == 1:
             self.components._workflow_tabs.setCurrentIndex(1 if qc else 0)
+
+    def show_simple(self):
+        self.set_mode('simple')
 
     def show_training(self):
         return open_training(self.viewer)

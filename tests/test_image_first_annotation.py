@@ -31,6 +31,43 @@ def open_simple(viewer, qtbot):
     return shell
 
 
+@pytest.mark.parametrize('mode', ['simple', 'advanced'])
+@pytest.mark.parametrize('cancel', [False, True])
+def test_add_images_imports_tiffs_without_clearing_workspace(
+    make_napari_viewer, qtbot, tmp_path, monkeypatch, mode, cancel
+):
+    import tifffile
+
+    viewer = make_napari_viewer()
+    existing = viewer.add_labels(np.zeros((8, 8), dtype='uint8'), name='Existing mask')
+    shell = open_simple(viewer, qtbot)
+    shell.set_mode(mode)
+    previous_layers = list(viewer.layers)
+    pixels = np.arange(80, dtype='uint8').reshape(8, 10)
+    paths = [tmp_path / 'first image.tiff', tmp_path / 'second image.tiff']
+    for path in paths:
+        tifffile.imwrite(path, pixels)
+    qt_viewer = viewer.window._qt_viewer
+    monkeypatch.setattr(type(qt_viewer), '_open_file_dialog_uni',
+                        lambda self, caption: [] if cancel else [str(path) for path in paths])
+    panel = shell.simple if mode == 'simple' else shell.workspace
+    assert panel.add_images_button.text() == 'Add Images…'
+    assert panel.add_images_button.isVisible()
+    panel.add_images_button.click()
+
+    assert viewer.layers[0] is existing
+    assert shell.workspace.workspace_path is None
+    assert all(layer in viewer.layers for layer in previous_layers)
+    assert len(viewer.layers) == len(previous_layers) + (0 if cancel else 2)
+    if not cancel:
+        for layer, path in zip(list(viewer.layers)[len(previous_layers):], paths):
+            assert layer.name == path.stem
+            np.testing.assert_array_equal(layer.data, pixels)
+        if mode == 'simple':
+            qtbot.waitUntil(lambda: shell.simple.image_combo.count() == 3)
+    assert shell.simple.open_button.text() == 'Open Workspace…'
+
+
 def test_image_and_grid_can_start_annotation_without_an_existing_mask(make_napari_viewer, qtbot, tmp_path):
     viewer = make_napari_viewer()
     pixels = np.arange(48 * 64, dtype=np.float32).reshape(48, 64)
@@ -177,7 +214,7 @@ def test_simple_workspace_new_confirms_and_preserves_saved_project(make_napari_v
     shell = open_simple(viewer, qtbot)
     shell.workspace._associate_workspace(manifest)
     panel = shell.simple
-    assert [button.text() for button in (panel.new_button, panel.open_button, panel.save_button)] == ['New', 'Open', 'Save']
+    assert [button.text() for button in (panel.new_button, panel.open_button, panel.save_button)] == ['New', 'Open Workspace…', 'Save']
     previous_layers = tuple(viewer.layers)
     prompts = []
     monkeypatch.setattr(shell.workspace, '_confirm_clear', lambda message: prompts.append(message) or confirm)

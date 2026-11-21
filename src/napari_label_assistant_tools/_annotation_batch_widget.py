@@ -28,7 +28,14 @@ class AnnotationBatchWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         self.title = QLabel('Annotation batches')
+        self.title.setToolTip(
+            'A batch groups reviewed regions. The Training menu independently selects which '
+            'reviewed regions to use for training.'
+        )
         layout.addWidget(self.title)
+        self.batch_help = QLabel('Each batch groups reviewed regions. Choose which batch to train on below.')
+        self.batch_help.setWordWrap(True)
+        layout.addWidget(self.batch_help)
         self.grid = QGridLayout()
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(4)

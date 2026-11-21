@@ -6,7 +6,7 @@ import napari
 import numpy as np
 from qtpy.QtCore import QTimer, Qt
 from qtpy.QtWidgets import (
-    QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -18,6 +18,15 @@ from ._reviewed_regions import KEY as REVIEW_KEY, associated_mask, effective_are
 from ._tile_progress import KEY, ProgressJournal, active_path
 
 REVIEW_TILE_SIZES = (256, 512, 1024, 2048, 4096, 8192)
+REVIEW_TILE_HELP = (
+    'A review tile is the area you inspect and confirm for training. Its size sets the review grid; '
+    'it does not set the orange outlined editing area or the training patch size.\n\n'
+    'Choose 256–8192 px; an existing custom grid is kept. The size locks after you select a tile '
+    'or start painting/reviewing. To change it, finish the current stroke and use Change review grid…. '
+    'Applying a change clears pending tile selections but keeps mask pixels and approved regions.\n\n'
+    'The orange outline marks the area currently loaded for painting. Pan or zoom to load another '
+    'area. Training patches are the image crops used as model inputs.'
+)
 
 
 def _shape_2d(layer):
@@ -67,6 +76,9 @@ class SimpleCurationPanel(QScrollArea):
         self._pair = None
         self._image_choice = None
         self._focus_cell = None
+        self._edit_bounds_stamp = None
+        self._edit_edge_stamp = None
+        self._grid_locked = False
         self.pending = []
         self._undo = None
         self._revision = 0
@@ -88,9 +100,14 @@ class SimpleCurationPanel(QScrollArea):
         self.project_label.setWordWrap(True)
         self.workspace_section.content.addWidget(self.project_label)
         row, buttons = self._buttons(('New', workspace.new_workspace),
-                                     ('Open', workspace.open_workspace), ('Save', workspace.save))
+                                     ('Open Workspace…', workspace.open_workspace), ('Save', workspace.save))
         self.workspace_section.content.addWidget(row)
         self.new_button, self.open_button, self.save_button = buttons
+        row, buttons = self._buttons(('Add Images…', workspace.add_images))
+        self.add_images_button = buttons[0]
+        self.add_images_button.setToolTip(workspace.add_images_button.toolTip())
+        self.open_button.setToolTip('Restore a saved workspace JSON file. Use Add Images… to import TIFFs or other images.')
+        self.workspace_section.content.addWidget(row)
         self.new_button.setToolTip('Start a new workspace. Confirm before clearing the current layers.')
         layout.addWidget(self.workspace_section)
 
@@ -104,11 +121,47 @@ class SimpleCurationPanel(QScrollArea):
         self.grid_combo = QComboBox()
         for size in REVIEW_TILE_SIZES:
             self.grid_combo.addItem(f'{size} × {size} px', [size, size])
-        self.grid_combo.setToolTip('Review area size. The camera-follow buffer and training patch size are managed separately.')
+        self.grid_combo.setToolTip(REVIEW_TILE_HELP)
+        self.grid_label = QLabel('Review tile')
+        self.grid_label.setToolTip(REVIEW_TILE_HELP)
+        grid_row = QWidget()
+        grid_layout = QHBoxLayout(grid_row)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.grid_combo.setMinimumWidth(0)
+        self.grid_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.grid_combo.setMinimumContentsLength(9)
+        self.change_grid_button = QPushButton('Lock size')
+        self.change_grid_button.clicked.connect(lambda: self.run(self._grid_action))
+        grid_layout.addWidget(self.grid_combo, 1)
+        grid_layout.addWidget(self.change_grid_button)
+        self.editable_size_combo = QComboBox()
+        for size in (512, 1024, 2048, 4096):
+            self.editable_size_combo.addItem(f'{size} × {size} px', size)
+        self.editable_size_combo.setCurrentIndex(self.editable_size_combo.findData(1024))
+        self.editable_size_combo.setToolTip(
+            'Size of the full-resolution area loaded for painting. Pan or zoom to move it. '
+            'Larger areas use more memory. This does not change the review tile or training patch size.'
+        )
+        self.editable_size_combo.currentIndexChanged.connect(self._editable_area_changed)
         form.addRow('Image', self.image_combo)
         form.addRow('Mask', self.mask_combo)
-        form.addRow('Review tile', self.grid_combo)
+        form.addRow(self.grid_label, grid_row)
+        form.addRow('Editable area', self.editable_size_combo)
         self.edit_section.content.addLayout(form)
+        self.area_label = QLabel()
+        self.area_label.setWordWrap(True)
+        self.area_label.setFixedHeight(self.area_label.fontMetrics().lineSpacing() * 2 + 4)
+        self.area_label.setToolTip(REVIEW_TILE_HELP)
+        self.edit_section.content.addWidget(self.area_label)
+        self.size_guide_label = QLabel(
+            'Review tile: area to confirm\n'
+            'Editable area: orange outline for painting\n'
+            'Training patch: crop used as model input'
+        )
+        self.size_guide_label.setWordWrap(True)
+        self.size_guide_label.setFixedHeight(self.size_guide_label.fontMetrics().lineSpacing() * 3 + 4)
+        self.size_guide_label.setToolTip(REVIEW_TILE_HELP)
+        self.edit_section.content.addWidget(self.size_guide_label)
         self.create_mask_button = QPushButton('Create annotation mask')
         self.create_mask_button.setToolTip('Create an empty full-resolution mask aligned to the image using sparse disk storage.')
         self.create_mask_button.clicked.connect(lambda: self.run(self._create_mask))
@@ -165,6 +218,7 @@ class SimpleCurationPanel(QScrollArea):
 
         self.tools_section = StepSection('Tools', expanded=False)
         actions = (
+            ('Advanced label tools…', lambda: shell.show_advanced(1)),
             ('Clear pending selection', self.clear_selection),
             ('Revoke selected / current tile', self.revoke),
             ('Revoke all reviewed areas…', self.revoke_all),
@@ -338,6 +392,13 @@ class SimpleCurationPanel(QScrollArea):
             pair = (source, chosen)
             if self.active and pair != self._pair:
                 self._pair = pair
+                saved_pair = (source is not None and chosen is not None
+                              and session.get('image_id') == identity(chosen)
+                              and session.get('shape') == list(_shape_2d(source)))
+                legacy_locked = bool(session.get('pending') or (
+                    source is not None and chosen is not None and associated_mask(self.viewer, chosen, source) is not None))
+                self._grid_locked = bool(session.get('review_grid_locked', legacy_locked)) if saved_pair else False
+                self._edit_bounds_stamp = None
                 self._tile_progress = None
                 self._undo = None
                 self.pending = []
@@ -431,11 +492,150 @@ class SimpleCurationPanel(QScrollArea):
 
     def _grid_changed(self):
         if not self._syncing and self.grid_combo.currentData():
-            sy, sx = self.grid_combo.currentData()
-            self.c._grid_y_spin.setValue(sy)
-            self.c._grid_x_spin.setValue(sx)
-            self._persist()
+            grid = tuple(self.grid_combo.currentData())
+            if self._grid_locked or self._stroke_active() or self._grid_busy():
+                self._sync_grid_choices((self.c._grid_y_spin.value(), self.c._grid_x_spin.value()))
+                self.message.setText('Review size is locked. Use Change review grid… after finishing the current stroke.')
+                return
+            self.run(lambda: self._apply_review_grid(grid))
             self.refresh_status()
+
+    def _stroke_active(self):
+        manager = manager_for(self.viewer)
+        return bool((manager is not None and manager.stroke_active) or self.c._dynamic_edit_controller.stroke_active)
+
+    def _grid_busy(self):
+        return (self.busy or self.training.worker is not None or self.c._large_controller.busy
+                or self.shell.activity.records.get('workspace', {}).get('state') == 'busy')
+
+    def _editable_area_size(self):
+        truth = self.truth
+        manager = manager_for(self.viewer)
+        if truth is not None and getattr(truth, '_label_assistant_mask_entry', None) is not None and manager is not None:
+            return int(manager.edit_size)
+        controller = self.c._dynamic_edit_controller
+        if truth is not None and controller.source is truth:
+            return int(controller.selected_tile_size())
+        value = self.c._edit_tile_size_combo.currentData()
+        return int(value or 4096)
+
+    def _set_editable_area_choice(self, size):
+        size = max(1, min(4096, int(size)))
+        index = self.editable_size_combo.findData(size)
+        if index < 0:
+            self.editable_size_combo.addItem(f'{size} × {size} px (custom)', size)
+            index = self.editable_size_combo.count() - 1
+        if index != self.editable_size_combo.currentIndex():
+            blocked = self.editable_size_combo.blockSignals(True)
+            self.editable_size_combo.setCurrentIndex(index)
+            self.editable_size_combo.blockSignals(blocked)
+
+    def _editable_area_changed(self, _index):
+        if self._syncing or self.editable_size_combo.currentData() is None:
+            return
+        if self._stroke_active() or self._grid_busy():
+            self._set_editable_area_choice(self._editable_area_size())
+            self.message.setText('Finish the current stroke or task before changing the editable area size.')
+            return
+        size = int(self.editable_size_combo.currentData())
+        truth = self.truth
+        entry = getattr(truth, '_label_assistant_mask_entry', None)
+        manager = manager_for(self.viewer)
+        if entry is not None and manager is not None:
+            control = self.local._size_control
+            index = control.findData(size)
+            if index < 0:
+                control.addItem(f'{size} px', size)
+                index = control.count() - 1
+            control.setCurrentIndex(index)
+            manager.edit_size = size
+            self.local.follow.schedule()
+        else:
+            control = self.c._edit_tile_size_combo
+            value = 0 if size == 4096 else size
+            index = control.findData(value)
+            if index < 0:
+                control.addItem(f'{size} × {size} px', value)
+                index = control.count() - 1
+            control.setCurrentIndex(index)
+        self.message.setText(
+            f'Editable area set to {size} × {size} px. Review tile size is unchanged.'
+        )
+        self.refresh_status()
+
+    def _lock_review_grid(self):
+        if not self._grid_locked and self.truth is not None and self.image is not None:
+            self._grid_locked = True
+            self._persist()
+
+    def _grid_action(self):
+        if self._stroke_active():
+            raise ValueError('Finish the current paint or erase stroke before changing the review grid.')
+        if self._grid_busy():
+            raise ValueError('Wait for the current operation before changing the review grid.')
+        if self.truth is None or self.image is None:
+            raise ValueError('Choose an image and annotation mask first.')
+        if not self._grid_locked:
+            self._lock_review_grid()
+            self.refresh_status()
+            return
+        pair = (self.truth, self.image)
+        current = (self.c._grid_y_spin.value(), self.c._grid_x_spin.value())
+        chosen = self._choose_review_grid(current)
+        if chosen is not None and tuple(chosen) != current:
+            if pair != (self.truth, self.image):
+                raise ValueError('The image or mask changed. Open review-grid settings again.')
+            self._apply_review_grid(tuple(chosen))
+
+    def _choose_review_grid(self, current):
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Change review grid')
+        layout = QVBoxLayout(dialog)
+        explanation = QLabel('Choose a new review size. Applying clears pending tile selections; '
+                             'existing mask pixels and approved regions are kept. The editable painting area is managed separately.')
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        combo = QComboBox()
+        values = [(size, size) for size in REVIEW_TILE_SIZES]
+        if current not in values:
+            values.append(current)
+        for height, width in values:
+            combo.addItem(f'{width} × {height} px', [height, width])
+        combo.setCurrentIndex(combo.findData(list(current)))
+        combo.setToolTip(REVIEW_TILE_HELP)
+        layout.addWidget(combo)
+        layout.addWidget(QLabel('Current: ' + self.area_label.text()))
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText('Apply review grid')
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(440, dialog.sizeHint().height())
+        chosen = tuple(combo.currentData()) if dialog.exec() == QDialog.Accepted else None
+        dialog.deleteLater()
+        return chosen
+
+    def _apply_review_grid(self, grid):
+        if self._stroke_active():
+            raise ValueError('Finish the current stroke before changing the review grid.')
+        if self._grid_busy():
+            raise ValueError('Wait for the current operation before changing the review grid.')
+        from .workspace.service import _commit_pending_local_edits
+        _commit_pending_local_edits(self.viewer)
+        self.pending = []
+        self.c._set_pending_training_tiles([])
+        self.review.clear_cell()
+        self._focus_cell = self._edit_bounds_stamp = None
+        self._undo = None
+        self.c._grid_y_spin.setValue(grid[0])
+        self.c._grid_x_spin.setValue(grid[1])
+        self._grid_locked = True
+        self._persist()
+        self._draw_pending()
+        self._sync_grid_choices(grid)
+        self.local.follow.resume_from_review()
+        self.message.setText('Review grid locked. The orange outline shows the area available for painting.')
+        self.refresh_status()
 
     def _sync_grid_choices(self, grid):
         """Use Qt value lists, not Python-object tuples, for reliable matching."""
@@ -449,7 +649,7 @@ class SimpleCurationPanel(QScrollArea):
                 self.grid_combo.clear()
                 for height, width in choices:
                     custom = ' (custom)' if (height, width) not in [(size, size) for size in REVIEW_TILE_SIZES] else ''
-                    self.grid_combo.addItem(f'{height} × {width} px{custom}', [height, width])
+                    self.grid_combo.addItem(f'{width} × {height} px{custom}', [height, width])
             self.grid_combo.setCurrentIndex(self.grid_combo.findData(list(grid)))
         finally:
             self.grid_combo.blockSignals(blocked)
@@ -464,6 +664,7 @@ class SimpleCurationPanel(QScrollArea):
         entry = getattr(self.truth, '_label_assistant_mask_entry', None)
         if (entry is not None and entry.manager.loading) or self.local.follow.updating:
             return
+        self._lock_review_grid()
         self._revision += 1
         if not self.busy:
             self._tile_progress = None
@@ -477,6 +678,7 @@ class SimpleCurationPanel(QScrollArea):
         self.c._set_pending_training_tiles(self.pending)
         session = dict(image_id=identity(image), shape=list(array_2d(full_data(truth)).shape),
                        grid=[self.c._grid_y_spin.value(), self.c._grid_x_spin.value()],
+                       review_grid_locked=self._grid_locked,
                        pending=[list(rect) for rect in self.pending])
         self._writing = True
         try:
@@ -502,7 +704,7 @@ class SimpleCurationPanel(QScrollArea):
             self.refresh_sources()
         else:
             self.review.mouse_review_check.setChecked(False)
-            for attr in ('simple_focus_overlay', 'selection_overlay'):
+            for attr in ('simple_focus_overlay', 'selection_overlay', 'simple_edit_overlay'):
                 layer = getattr(self.review, attr, None)
                 if layer is not None:
                     layer.visible = False
@@ -538,6 +740,7 @@ class SimpleCurationPanel(QScrollArea):
         self.refresh_status()
 
     def _tool(self, mode):
+        self._lock_review_grid()
         self.canvas_mode.setCurrentIndex(self.canvas_mode.findData('edit'))
         self._apply_canvas_mode()
         if self.truth is not None and self.truth.editable:
@@ -575,6 +778,7 @@ class SimpleCurationPanel(QScrollArea):
     def _picked(self):
         if not self.active or self.busy or self.canvas_mode.currentData() != 'review' or self.review.selected_cell is None:
             return
+        self._lock_review_grid()
         _, b, _, _ = self.review.selected_cell
         self._tile_progress = None
         rect = (b.y0,b.x0,b.y1,b.x1)
@@ -680,6 +884,7 @@ class SimpleCurationPanel(QScrollArea):
         from ._annotation_batches import ensure_pair, restore_membership
         before_batches = deepcopy(ensure_pair(self.viewer, image, truth))
         self.review.context(current_tile=True, review_bounds=rectangles[0])
+        self._lock_review_grid()
         mask = associated_mask(self.viewer, self.image, self.truth)
         before = deepcopy(mask.metadata.get(REVIEW_KEY, {})) if mask is not None else {}
         self._cancelled = False
@@ -855,6 +1060,7 @@ class SimpleCurationPanel(QScrollArea):
         if not self.busy and self.canvas_mode.currentData() == 'edit':
             with suppress(ValueError, RuntimeError, np.linalg.LinAlgError):
                 self._current_from_view()
+        self._update_review_size_feedback()
         self.current_label.setText(self.review.cell_label.text())
         self.progress_label.setText(self.review.progress_label.text())
         detail = self.training.status_label.text() if getattr(self, '_preparing', False) else ''
@@ -886,8 +1092,18 @@ class SimpleCurationPanel(QScrollArea):
         reason = ('Wait for the current operation to finish.' if busy else
                   'Choose an aligned 2D image and mask.' if self.truth is None or self.image is None else
                   'Save the workspace once to enable durable tile review.' if active_path(self.viewer) is None else '')
-        for control in (self.mask_combo,self.image_combo,self.grid_combo,self.canvas_mode):
+        for control in (self.mask_combo,self.image_combo,self.canvas_mode):
             control.setEnabled(not busy)
+        pair_available = self.truth is not None and self.image is not None
+        self.grid_combo.setEnabled(pair_available and not busy and not self._grid_locked and not self._stroke_active())
+        self.change_grid_button.setEnabled(pair_available and not busy and not self._stroke_active())
+        self.editable_size_combo.setEnabled(pair_available and not busy and not self._stroke_active())
+        self.editable_size_combo.setToolTip(
+            'Size of the full-resolution area loaded for painting. Pan or zoom to move it. '
+            'Larger areas use more memory. This does not change the review tile or training patch size.'
+        )
+        self.change_grid_button.setText('Change…' if self._grid_locked else 'Lock size')
+        self.change_grid_button.setToolTip('Change review grid…\n' + REVIEW_TILE_HELP if self._grid_locked else 'Lock the current review size for this image/mask pair.\n' + REVIEW_TILE_HELP)
         for control in (self.approve_button,self.skip_button,self.coverage_button,self.prepare_button):
             control.setEnabled(available and not busy)
             control.setToolTip(reason)
@@ -900,13 +1116,12 @@ class SimpleCurationPanel(QScrollArea):
         self.save_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
         self.new_button.setEnabled(not busy)
+        self.add_images_button.setEnabled(not busy)
         self.open_training_button.setEnabled(not self.busy)
         self.patch_selection_button.setEnabled(not busy)
-        self.shell.simple_radio.setEnabled(not self.busy and not workspace_busy)
-        self.shell.advanced_radio.setEnabled(not self.busy and not workspace_busy)
         for button in self.tool_buttons:
             button.setEnabled(not busy)
-        self.tool_buttons[3].setEnabled(not busy and self._undo is not None)
+        self.tool_buttons[4].setEnabled(not busy and self._undo is not None)
         editable = self.truth is not None and self.truth.editable and self.canvas_mode.currentData() == 'edit'
         self.paint_button.setEnabled(editable and not busy)
         self.erase_button.setEnabled(editable and not busy)
@@ -917,6 +1132,65 @@ class SimpleCurationPanel(QScrollArea):
         except Exception as error:
             self.message.setText(str(error))
             self.shell.activity.report('curation', 'error', str(error))
+
+    def _update_review_size_feedback(self):
+        height, width = self.c._grid_y_spin.value(), self.c._grid_x_spin.value()
+        truth = self.truth
+        self._set_editable_area_choice(self._editable_area_size())
+        bounds = None
+        entry = getattr(truth, '_label_assistant_mask_entry', None)
+        if entry is not None and entry.bounds is not None:
+            bounds = tuple((part.start, part.stop) for part in entry.bounds)
+        elif entry is None and truth is not None:
+            controller = self.c._dynamic_edit_controller
+            if controller.source is truth and controller.tile is not None and controller.bounds is not None:
+                area = controller.bounds
+                bounds = ((area.y0, area.y1), (area.x0, area.x1))
+            elif truth.editable:
+                shape = _shape_2d(truth)
+                bounds = ((0, shape[0]), (0, shape[1])) if shape is not None else None
+        editable = f'{bounds[1][1] - bounds[1][0]} × {bounds[0][1] - bounds[0][0]} px' if bounds is not None else 'none loaded — zoom in'
+        self.area_label.setText(
+            f'Review tile: {width} × {height} px · Editable area: {editable}'
+            if truth is not None else 'Create or select an annotation mask to set the review tile size.'
+        )
+        state = ('Choose an image and annotation mask first' if truth is None or self.image is None else
+                 'Locked' if self._grid_locked else 'Choose a review size or click Lock size')
+        tooltip = f'{state}.\n{self.area_label.text()}\n\n{REVIEW_TILE_HELP}'
+        self.grid_label.setToolTip(tooltip)
+        self.grid_combo.setToolTip(tooltip)
+        self.area_label.setToolTip(tooltip)
+        outline = getattr(self.review, 'simple_edit_overlay', None)
+        show = truth is not None and bounds is not None and self.canvas_mode.currentData() == 'edit'
+        if not show:
+            if outline is not None:
+                outline.visible = False
+            self._edit_bounds_stamp = None
+            return
+        stamp = (id(truth), bounds, mask_world_affine(full_source(truth)).tobytes())
+        if stamp != self._edit_bounds_stamp or outline is None or not any(outline is layer for layer in self.viewer.layers):
+            active = self.viewer.layers.selection.active
+            try:
+                self.review.make_outline(truth, [(bounds[0][0], bounds[1][0], bounds[0][1], bounds[1][1])],
+                                         'Editable area — orange outline', '#ff922b', 'simple_edit_overlay')
+            finally:
+                if active is not None and any(active is layer for layer in self.viewer.layers):
+                    self.viewer.layers.selection.active = active
+            self._edit_bounds_stamp = stamp
+        else:
+            outline.visible = True
+        self.review.simple_edit_overlay.editable = False
+        outline = self.review.simple_edit_overlay
+        matrix = mask_world_affine(outline)
+        native = self.local.adapter.native
+        edge_stamp = (id(outline), float(self.viewer.camera.zoom), native.width(), native.height(), tuple(matrix.ravel()))
+        if edge_stamp != self._edit_edge_stamp:
+            points = np.asarray([[0, 0], [1, 0], [0, 1]]) @ matrix[:2, :2].T + matrix[:2, 2]
+            projected = self.local.adapter.canvas_points(points)
+            scale = np.linalg.svd((projected[1:] - projected[0]).T, compute_uv=False)[-1]
+            if np.isfinite(scale) and scale > 0:
+                outline.edge_width = 2.0 / scale
+                self._edit_edge_stamp = edge_stamp
 
     def _update_header_summary(self):
         """Use cached review/batch summaries; never read mask pixels on a poll."""

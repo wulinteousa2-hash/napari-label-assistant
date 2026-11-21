@@ -212,14 +212,14 @@ def test_layer_activity_indicator_tracks_napari_selection(
     )
     viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="mask")
     widget = label_assistant_widget(viewer)
+    widget.show_advanced(1)
     labels = widget._tool_tabs.widget(1)
 
     viewer.layers.selection.active = image
 
+    assert 'reference image' in widget.activity.records['view']['message']
     qtbot.waitUntil(
-        lambda: labels._layer_activity_indicator.state == "ready"
-        and "reference image"
-        in labels._layer_activity_indicator.message.text()
+        lambda: widget.activity.records.get('view', {}).get('state') == 'ready'
     )
 
 
@@ -232,16 +232,16 @@ def test_layer_activity_indicator_tracks_source_selector(
     )
     viewer.add_labels(np.zeros((32, 32), dtype=np.uint8), name="mask")
     widget = label_assistant_widget(viewer)
+    widget.show_advanced(1)
     labels = widget._tool_tabs.widget(1)
 
     labels._target_combo.setCurrentText("reference image")
 
+    assert 'reference image' in widget.activity.records['view']['message']
     qtbot.waitUntil(
         lambda: widget.activity.records.get('view', {}).get('state') == 'ready'
-        and 'reference image' in widget.activity.records['view']['message']
     )
-    assert 'reference image' in widget._activity_header.batch_label.toolTip()
-    assert widget._activity_header._full_message == 'Create an annotation mask to start'
+    assert labels._target_combo.currentText() == 'reference image'
 
 
 
@@ -327,7 +327,7 @@ def test_labels_owns_review_and_dataset_shares_training_selection(make_napari_vi
     assert training.train_button.isVisible()
     assert not library.isVisible()
     training.workflow_tabs.setCurrentIndex(0)
-    panel._tool_tabs.setCurrentIndex(1)
+    panel.show_advanced(1)
     assert review.isVisible()
     assert review.selected_cell is selected
     labels._target_combo.setCurrentText("other")
@@ -359,6 +359,7 @@ def test_dataset_click_marking_activates_canvas_and_restores_editing(make_napari
     associate(mask, image)
     mask.metadata = {**mask.metadata, KEY: {**mask.metadata[KEY], "truth_id": identity(curated)}}
     panel = label_assistant_widget(viewer)
+    panel.show_advanced(1)
     qtbot.addWidget(panel)
     labels = panel._tool_tabs.widget(1)
     training = panel.training

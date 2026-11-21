@@ -52,6 +52,9 @@ def finish(panel, qtbot):
 def test_simple_and_advanced_share_pending_tiles_and_controllers(setup_simple):
     viewer, shell, _ = setup_simple
     panel = shell.simple
+    tools = {button.text(): button for button in panel.tool_buttons}
+    assert tools['Revoke all reviewed areas…'].isEnabled()
+    assert not tools['Undo last review action'].isEnabled()
     assert label_assistant_widget(viewer) is shell
     assert shell._tool_tabs.count() == 2
     pick(panel, 10, 10)
@@ -763,26 +766,27 @@ def test_progress_snapshot_never_reads_source_pixels(setup_simple, monkeypatch):
         assert write_progress(viewer,path) == progress_path(path)
 
 
-def test_simple_and_advanced_menu_reuse_one_dock(make_napari_viewer):
-    from napari_label_assistant_tools._label_assistant import _open_mode
+def test_curation_menu_and_advanced_tools_reuse_one_dock(make_napari_viewer):
     from npe2 import PluginManifest
     from pathlib import Path
     import napari_label_assistant_tools
     manifest = PluginManifest.from_file(Path(napari_label_assistant_tools.__file__).with_name('napari.yaml'))
     assert [item.command for item in manifest.contributions.menus['napari-label-assistant.main']] == [
-        'napari-label-assistant.simple_curation', 'napari-label-assistant.advanced_curation',
+        'napari-label-assistant.label_assistant',
         'napari-label-assistant.quick_train', 'napari-label-assistant.model_library']
     viewer = make_napari_viewer()
-    simple = _open_mode(viewer,'simple')
+    dock, simple = viewer.window.add_plugin_dock_widget('napari-label-assistant', 'Label Curation')
     assert simple.mode == 'simple'
-    advanced = _open_mode(viewer,'advanced')
-    assert advanced is simple and simple.mode == 'advanced'
+    simple.simple.tool_buttons[0].click()
+    assert simple.mode == 'advanced'
+    assert simple._tool_tabs.currentWidget() is simple.components
+    simple.back_button.click()
+    assert simple.mode == 'simple'
     assert len(viewer.window.dock_widgets) == 1
     from napari._app_model import get_app_model
-    get_app_model().commands.execute_command('napari-label-assistant.simple_curation').result()
-    assert simple.mode == 'simple'
-    get_app_model().commands.execute_command('napari-label-assistant.advanced_curation').result()
-    assert simple.mode == 'advanced' and len(viewer.window.dock_widgets) == 1
+    get_app_model().commands.execute_command('napari-label-assistant.label_assistant').result()
+    assert label_assistant_widget(viewer) is simple
+    assert simple.mode == 'simple' and len(viewer.window.dock_widgets) == 1
 
 
 def test_unrelated_volume_does_not_break_simple_view(make_napari_viewer,qtbot):
